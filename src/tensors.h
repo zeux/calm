@@ -18,7 +18,7 @@ struct Tensors {
 	size_t size;
 
 	struct Tensor tensors[1024];
-	size_t n_tensors;
+	int n_tensors;
 };
 
 int tensors_open(struct Tensors* tensors, const char* filename);

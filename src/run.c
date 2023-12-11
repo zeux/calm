@@ -30,21 +30,23 @@ typedef struct {
 	int seq_len;    // max sequence length
 } Config;
 
+#define MAX_LAYERS 128
+
 typedef struct {
 	// token embedding table
 	float* token_embedding_table; // (vocab_size, dim)
 	// weights for rmsnorms
-	float* rms_att_weight; // (layer, dim) rmsnorm weights
-	float* rms_ffn_weight; // (layer, dim)
+	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
+	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
 	// weights for matmuls. note dim == n_heads * head_size
-	float* wq; // (layer, dim, n_heads * head_size)
-	float* wk; // (layer, dim, n_kv_heads * head_size)
-	float* wv; // (layer, dim, n_kv_heads * head_size)
-	float* wo; // (layer, n_heads * head_size, dim)
+	float* wq[MAX_LAYERS]; // (dim, n_heads * head_size)
+	float* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
+	float* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
+	float* wo[MAX_LAYERS]; // (n_heads * head_size, dim)
 	// weights for ffn
-	float* w1; // (layer, hidden_dim, dim)
-	float* w2; // (layer, dim, hidden_dim)
-	float* w3; // (layer, hidden_dim, dim)
+	float* w1[MAX_LAYERS]; // (hidden_dim, dim)
+	float* w2[MAX_LAYERS]; // (dim, hidden_dim)
+	float* w3[MAX_LAYERS]; // (hidden_dim, dim)
 	// final rmsnorm
 	float* rms_final_weight; // (dim,)
 	// (optional) classifier weights for the logits, on the last layer
@@ -113,28 +115,44 @@ void free_run_state(RunState* s) {
 
 void memory_map_weights(TransformerWeights* w, Config* p, float* ptr, int shared_weights) {
 	int head_size = p->dim / p->n_heads;
-	// make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
-	unsigned long long n_layers = p->n_layers;
 	w->token_embedding_table = ptr;
 	ptr += p->vocab_size * p->dim;
-	w->rms_att_weight = ptr;
-	ptr += n_layers * p->dim;
-	w->wq = ptr;
-	ptr += n_layers * p->dim * (p->n_heads * head_size);
-	w->wk = ptr;
-	ptr += n_layers * p->dim * (p->n_kv_heads * head_size);
-	w->wv = ptr;
-	ptr += n_layers * p->dim * (p->n_kv_heads * head_size);
-	w->wo = ptr;
-	ptr += n_layers * (p->n_heads * head_size) * p->dim;
-	w->rms_ffn_weight = ptr;
-	ptr += n_layers * p->dim;
-	w->w1 = ptr;
-	ptr += n_layers * p->dim * p->hidden_dim;
-	w->w2 = ptr;
-	ptr += n_layers * p->hidden_dim * p->dim;
-	w->w3 = ptr;
-	ptr += n_layers * p->dim * p->hidden_dim;
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->rms_att_weight[l] = ptr;
+		ptr += p->dim;
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->wq[l] = ptr;
+		ptr += p->dim * (p->n_heads * head_size);
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->wk[l] = ptr;
+		ptr += p->dim * (p->n_kv_heads * head_size);
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->wv[l] = ptr;
+		ptr += p->dim * (p->n_kv_heads * head_size);
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->wo[l] = ptr;
+		ptr += (p->n_heads * head_size) * p->dim;
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->rms_ffn_weight[l] = ptr;
+		ptr += p->dim;
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->w1[l] = ptr;
+		ptr += p->dim * p->hidden_dim;
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->w2[l] = ptr;
+		ptr += p->hidden_dim * p->dim;
+	}
+	for (int l = 0; l < p->n_layers; ++l) {
+		w->w3[l] = ptr;
+		ptr += p->dim * p->hidden_dim;
+	}
 	w->rms_final_weight = ptr;
 	ptr += p->dim;
 	ptr += p->seq_len * head_size / 2; // skip what used to be freq_cis_real (for RoPE)
@@ -183,6 +201,20 @@ void build_transformer(Transformer* t, char* checkpoint_path) {
 }
 
 void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
+	// create config that matches llama2-7b
+	// TODO: make this configurable
+	t->config.dim = 4096;
+	t->config.hidden_dim = 11008;
+	t->config.n_layers = 32;
+	t->config.n_heads = 32;
+	t->config.n_kv_heads = 32;
+	t->config.vocab_size = 32000;
+	t->config.seq_len = 4096;
+
+	for (int i = 0; i < tensors->n_tensors; ++i) {
+		printf("%s\n", tensors->tensors[i].name);
+	}
+
 	// TODO
 	fprintf(stderr, "not implemented yet\n");
 	exit(EXIT_FAILURE);
@@ -275,7 +307,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 	for (unsigned long long l = 0; l < p->n_layers; l++) {
 
 		// attention rmsnorm
-		rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
+		rmsnorm(s->xb, x, w->rms_att_weight[l], dim);
 
 		// key and value point to the kv cache
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
@@ -283,9 +315,9 @@ float* forward(Transformer* transformer, int token, int pos) {
 		s->v = s->value_cache + loff + pos * kv_dim;
 
 		// qkv matmuls for this position
-		matmul(s->q, s->xb, w->wq + l * dim * dim, dim, dim);
-		matmul(s->k, s->xb, w->wk + l * dim * kv_dim, dim, kv_dim);
-		matmul(s->v, s->xb, w->wv + l * dim * kv_dim, dim, kv_dim);
+		matmul(s->q, s->xb, w->wq[l], dim, dim);
+		matmul(s->k, s->xb, w->wk[l], dim, kv_dim);
+		matmul(s->v, s->xb, w->wv[l], dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		for (int i = 0; i < dim; i += 2) {
@@ -345,7 +377,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 		}
 
 		// final matmul to get the output of the attention
-		matmul(s->xb2, s->xb, w->wo + l * dim * dim, dim, dim);
+		matmul(s->xb2, s->xb, w->wo[l], dim, dim);
 
 		// residual connection back into x
 		for (int i = 0; i < dim; i++) {
@@ -353,12 +385,12 @@ float* forward(Transformer* transformer, int token, int pos) {
 		}
 
 		// ffn rmsnorm
-		rmsnorm(s->xb, x, w->rms_ffn_weight + l * dim, dim);
+		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
 
 		// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
 		// first calculate self.w1(x) and self.w3(x)
-		matmul(s->hb, s->xb, w->w1 + l * dim * hidden_dim, dim, hidden_dim);
-		matmul(s->hb2, s->xb, w->w3 + l * dim * hidden_dim, dim, hidden_dim);
+		matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
+		matmul(s->hb2, s->xb, w->w3[l], dim, hidden_dim);
 
 		// SwiGLU non-linearity
 		for (int i = 0; i < hidden_dim; i++) {
@@ -371,7 +403,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 		}
 
 		// final matmul to get the output of the ffn
-		matmul(s->xb, s->hb, w->w2 + l * dim * hidden_dim, hidden_dim, dim);
+		matmul(s->xb, s->hb, w->w2[l], hidden_dim, dim);
 
 		// residual connection
 		for (int i = 0; i < dim; i++) {
@@ -879,8 +911,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler,
 	int8_t user_turn = 1; // user starts
 	int next;             // will store the next token in the sequence
 	int token;            // stores the current token to feed into the transformer
-	int prev_token;
-	int pos = 0; // position in the sequence
+	int pos = 0;          // position in the sequence
 	while (pos < steps) {
 
 		// when it is the user's turn to contribute tokens to the dialog...
