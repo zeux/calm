@@ -14,6 +14,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+
+#include "tensors.h"
+
 // ----------------------------------------------------------------------------
 // Transformer model
 
@@ -175,6 +178,14 @@ void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weigh
 void build_transformer(Transformer* t, char* checkpoint_path) {
 	// read in the Config and the Weights from the checkpoint
 	read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
+	// allocate the RunState buffers
+	malloc_run_state(&t->state, &t->config);
+}
+
+void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
+	// TODO
+	fprintf(stderr, "not implemented yet\n");
+	exit(EXIT_FAILURE);
 	// allocate the RunState buffers
 	malloc_run_state(&t->state, &t->config);
 }
@@ -1021,9 +1032,18 @@ int main(int argc, char* argv[]) {
 	if (steps < 0)
 		steps = 0;
 
-	// build the Transformer via the model .bin file
+	// build the Transformer via the model .bin / .safetensors file
+	struct Tensors tensors = {};
 	Transformer transformer;
-	build_transformer(&transformer, checkpoint_path);
+	if (strstr(checkpoint_path, ".safetensors")) {
+		if (tensors_open(&tensors, checkpoint_path) != 0) {
+			fprintf(stderr, "failed to open tensors\n");
+			exit(EXIT_FAILURE);
+		}
+		build_transformer_tensors(&transformer, &tensors);
+	} else {
+		build_transformer(&transformer, checkpoint_path);
+	}
 	if (steps == 0 || steps > transformer.config.seq_len)
 		steps = transformer.config.seq_len; // ovrerride to ~max length
 
@@ -1049,6 +1069,7 @@ int main(int argc, char* argv[]) {
 	free_sampler(&sampler);
 	free_tokenizer(&tokenizer);
 	free_transformer(&transformer);
+	tensors_close(&tensors);
 	return 0;
 }
 #endif
