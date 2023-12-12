@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -143,4 +144,38 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 
 void tensors_close(struct Tensors* tensors) {
 	munmap(tensors->data, tensors->size);
+}
+
+struct Tensor* tensors_find(struct Tensors* tensors, const char* name, int layer) {
+	char key[128];
+	snprintf(key, sizeof(key), name, layer);
+
+	for (int i = 0; i < tensors->n_tensors; ++i) {
+		if (strcmp(tensors->tensors[i].name, key) == 0) {
+			return &tensors->tensors[i];
+		}
+	}
+	return NULL;
+}
+
+void* tensors_get(struct Tensors* tensors, const char* name, int layer, enum DType dtype, int shape[4]) {
+	struct Tensor* tensor = tensors_find(tensors, name, layer);
+	if (tensor == NULL) {
+		assert(!"Tensor not found");
+		return NULL;
+	}
+
+	if (tensor->dtype != dtype) {
+		assert(!"Tensor dtype mismatch");
+		return NULL;
+	}
+
+	for (int i = 0; i < 4; ++i) {
+		if (tensor->shape[i] != shape[i]) {
+			assert(!"Tensor shape mismatch");
+			return NULL;
+		}
+	}
+
+	return tensor->data;
 }

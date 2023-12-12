@@ -211,13 +211,24 @@ void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
 	t->config.vocab_size = 32000;
 	t->config.seq_len = 4096;
 
-	for (int i = 0; i < tensors->n_tensors; ++i) {
-		printf("%s\n", tensors->tensors[i].name);
-	}
+	int head_size = t->config.dim / t->config.n_heads;
 
-	// TODO
-	fprintf(stderr, "not implemented yet\n");
-	exit(EXIT_FAILURE);
+	// get tensor data
+	t->weights.token_embedding_table = (float*)tensors_get(tensors, "model.embed_tokens.weight", 0, dt_f32, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
+	for (int l = 0; l < t->config.n_layers; ++l) {
+		t->weights.rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.input_layernorm.weight", l, dt_f32, (int[]){t->config.dim, 0, 0, 0});
+		t->weights.wq[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.q_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_heads * head_size, 0, 0});
+		t->weights.wk[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.k_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_kv_heads * head_size, 0, 0});
+		t->weights.wv[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.v_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_kv_heads * head_size, 0, 0});
+		t->weights.wo[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.o_proj.weight", l, dt_f32, (int[]){t->config.n_heads * head_size, t->config.dim, 0, 0});
+		t->weights.rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.post_attention_layernorm.weight", l, dt_f32, (int[]){t->config.dim, 0, 0, 0});
+		t->weights.w1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.gate_proj.weight", l, dt_f32, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
+		t->weights.w2[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.down_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.hidden_dim, 0, 0});
+		t->weights.w3[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.up_proj.weight", l, dt_f32, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
+	}
+	t->weights.rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){t->config.dim, 0, 0, 0});
+	t->weights.wcls = (float*)tensors_get(tensors, "lm_head.weight", 0, dt_f32, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
+
 	// allocate the RunState buffers
 	malloc_run_state(&t->state, &t->config);
 }

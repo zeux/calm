@@ -23,3 +23,6 @@ struct Tensors {
 
 int tensors_open(struct Tensors* tensors, const char* filename);
 void tensors_close(struct Tensors* tensors);
+
+struct Tensor* tensors_find(struct Tensors* tensors, const char* name, int layer);
+void* tensors_get(struct Tensors* tensors, const char* name, int layer, enum DType dtype, int shape[4]);
