@@ -7,7 +7,7 @@ OBJECTS=$(SOURCES:%=$(BUILD)/%.o)
 
 BINARY=$(BUILD)/run
 
-CFLAGS=-g -Wall -Wextra -O3 -ffast-math -Iextern -fopenmp
+CFLAGS=-g -Wall -Werror -O3 -ffast-math -Iextern -fopenmp
 LDFLAGS=-lm -fopenmp
 
 all: $(BINARY)

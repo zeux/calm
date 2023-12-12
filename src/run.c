@@ -920,7 +920,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler,
 
 	// start the main loop
 	int8_t user_turn = 1; // user starts
-	int next;             // will store the next token in the sequence
+	int next = -1;        // will store the next token in the sequence
 	int token;            // stores the current token to feed into the transformer
 	int pos = 0;          // position in the sequence
 	while (pos < steps) {
