@@ -758,8 +758,8 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 		}
 		pos++;
 
-		// data-dependent terminating condition: the BOS (=1) token delimits sequences
-		if (next == 1) {
+		// data-dependent terminating condition: the BOS (=1) token delimits sequences, EOS (=2) token ends the sequence
+		if (next == 1 || next == 2) {
 			break;
 		}
 
