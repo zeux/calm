@@ -8,12 +8,29 @@ import safetensors
 import safetensors.torch
 import torch
 
-args = argparse.ArgumentParser()
-args.add_argument("output", type=str)
-args.add_argument("--config", type=str, required=True)
-args.add_argument("--models", type=str, nargs="+", required=True)
-args.add_argument("--dtype", type=str, default="float16", choices=["bfloat16", "float16", "float32"])
-args = args.parse_args()
+argp = argparse.ArgumentParser()
+argp.add_argument("output", type=str)
+argp.add_argument("input", type=str, nargs="?")
+argp.add_argument("--config", type=str)
+argp.add_argument("--models", type=str, nargs="+")
+argp.add_argument("--dtype", type=str, default="float16", choices=["bfloat16", "float16", "float32"])
+args = argp.parse_args()
+
+if args.input is not None:
+    # assume input is a directory with HuggingFace layout
+    if args.config is None:
+        args.config = os.path.join(args.input, "config.json")
+        if not os.path.exists(args.config):
+            argp.error("no config.json found in {}".format(args.input))
+    if args.models is None:
+        files = os.listdir(args.input)
+        args.models = [os.path.join(args.input, fn) for fn in files if os.path.splitext(fn)[1] == ".safetensors"]
+        if len(args.models) == 0:
+            args.models = [os.path.join(args.input, fn) for fn in files if os.path.splitext(fn)[1] == ".bin"]
+        if len(args.models) == 0:
+            argp.error("no .safetensors or .bin files found in {}".format(args.input))
+elif args.config is None or args.models is None:
+    argp.error("arguments --config and --models are required unless argument input is specified")
 
 with open(args.config, "r") as f:
     config = json.load(f)
