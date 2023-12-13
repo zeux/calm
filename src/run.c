@@ -22,6 +22,7 @@ typedef struct {
 	int n_kv_heads; // number of key/value heads (can be < query heads because of multiquery)
 	int vocab_size; // vocabulary size, usually 256 (byte-level)
 	int seq_len;    // max sequence length
+	float rope_theta; // RoPE theta
 } Config;
 
 #define MAX_LAYERS 128
@@ -115,6 +116,9 @@ void build_transformer(Transformer* t, struct Tensors* tensors) {
 	t->config.n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
 	t->config.vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
 	t->config.seq_len = 4096;
+
+	const char* rope_theta = tensors_metadata_find(tensors, "rope_theta");
+	t->config.rope_theta = rope_theta ? atof(rope_theta) : 10000.f;
 
 	int head_size = t->config.dim / t->config.n_heads;
 
@@ -226,7 +230,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		for (int i = 0; i < dim; i += 2) {
 			int head_dim = i % head_size;
-			float freq = 1.0f / powf(10000.0f, head_dim / (float)head_size);
+			float freq = 1.0f / powf(p->rope_theta, head_dim / (float)head_size);
 			float val = pos * freq;
 			float fcr = cosf(val);
 			float fci = sinf(val);
