@@ -74,10 +74,6 @@ typedef struct {
 	Config config;              // the hyperparameters of the architecture (the blueprint)
 	TransformerWeights weights; // the weights of the model
 	RunState state;             // buffers for the "wave" of activations in the forward pass
-	// some more state needed to properly clean up the memory mapping (sigh)
-	int fd;            // file descriptor for memory mapping
-	float* data;       // memory mapped data pointer
-	ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
 void malloc_run_state(RunState* s, Config* p) {
@@ -113,94 +109,7 @@ void free_run_state(RunState* s) {
 	free(s->value_cache);
 }
 
-void memory_map_weights(TransformerWeights* w, Config* p, float* ptr, int shared_weights) {
-	int head_size = p->dim / p->n_heads;
-	w->token_embedding_table = ptr;
-	ptr += p->vocab_size * p->dim;
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->rms_att_weight[l] = ptr;
-		ptr += p->dim;
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->wq[l] = ptr;
-		ptr += p->dim * (p->n_heads * head_size);
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->wk[l] = ptr;
-		ptr += p->dim * (p->n_kv_heads * head_size);
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->wv[l] = ptr;
-		ptr += p->dim * (p->n_kv_heads * head_size);
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->wo[l] = ptr;
-		ptr += (p->n_heads * head_size) * p->dim;
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->rms_ffn_weight[l] = ptr;
-		ptr += p->dim;
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->w1[l] = ptr;
-		ptr += p->dim * p->hidden_dim;
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->w2[l] = ptr;
-		ptr += p->hidden_dim * p->dim;
-	}
-	for (int l = 0; l < p->n_layers; ++l) {
-		w->w3[l] = ptr;
-		ptr += p->dim * p->hidden_dim;
-	}
-	w->rms_final_weight = ptr;
-	ptr += p->dim;
-	ptr += p->seq_len * head_size / 2; // skip what used to be freq_cis_real (for RoPE)
-	ptr += p->seq_len * head_size / 2; // skip what used to be freq_cis_imag (for RoPE)
-	w->wcls = shared_weights ? w->token_embedding_table : ptr;
-}
-
-void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weights,
-                     int* fd, float** data, ssize_t* file_size) {
-	FILE* file = fopen(checkpoint, "rb");
-	if (!file) {
-		fprintf(stderr, "Couldn't open file %s\n", checkpoint);
-		exit(EXIT_FAILURE);
-	}
-	// read in the config header
-	if (fread(config, sizeof(Config), 1, file) != 1) {
-		exit(EXIT_FAILURE);
-	}
-	// negative vocab size is hacky way of signaling unshared weights. bit yikes.
-	int shared_weights = config->vocab_size > 0 ? 1 : 0;
-	config->vocab_size = abs(config->vocab_size);
-	// figure out the file size
-	fseek(file, 0, SEEK_END); // move file pointer to end of file
-	*file_size = ftell(file); // get the file size, in bytes
-	fclose(file);
-	// memory map the Transformer weights into the data pointer
-	*fd = open(checkpoint, O_RDONLY); // open in read only mode
-	if (*fd == -1) {
-		fprintf(stderr, "open failed!\n");
-		exit(EXIT_FAILURE);
-	}
-	*data = mmap(NULL, *file_size, PROT_READ, MAP_PRIVATE, *fd, 0);
-	if (*data == MAP_FAILED) {
-		fprintf(stderr, "mmap failed!\n");
-		exit(EXIT_FAILURE);
-	}
-	float* weights_ptr = *data + sizeof(Config) / sizeof(float);
-	memory_map_weights(weights, config, weights_ptr, shared_weights);
-}
-
-void build_transformer(Transformer* t, char* checkpoint_path) {
-	// read in the Config and the Weights from the checkpoint
-	read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
-	// allocate the RunState buffers
-	malloc_run_state(&t->state, &t->config);
-}
-
-void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
+void build_transformer(Transformer* t, struct Tensors* tensors) {
 	// create config that matches llama2-7b or mistral-7b
 	struct Tensor* config_embed = tensors_find(tensors, "model.embed_tokens.weight", 0);
 	struct Tensor* config_attnk = tensors_find(tensors, "model.layers.0.self_attn.k_proj.weight", 0);
@@ -231,21 +140,6 @@ void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
 	}
 	t->weights.rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){t->config.dim, 0, 0, 0});
 	t->weights.wcls = (float*)tensors_get(tensors, "lm_head.weight", 0, dt_f32, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
-
-	// allocate the RunState buffers
-	malloc_run_state(&t->state, &t->config);
-}
-
-void free_transformer(Transformer* t) {
-	// close the memory mapping
-	if (t->data != MAP_FAILED) {
-		munmap(t->data, t->file_size);
-	}
-	if (t->fd != -1) {
-		close(t->fd);
-	}
-	// free the RunState buffers
-	free_run_state(&t->state);
 }
 
 // ----------------------------------------------------------------------------
@@ -1077,18 +971,19 @@ int main(int argc, char* argv[]) {
 	if (steps < 0)
 		steps = 0;
 
-	// build the Transformer via the model .bin / .safetensors file
+	// read .safetensors model
 	struct Tensors tensors = {};
-	Transformer transformer;
-	if (strstr(checkpoint_path, ".safetensors")) {
-		if (tensors_open(&tensors, checkpoint_path) != 0) {
-			fprintf(stderr, "failed to open tensors\n");
-			exit(EXIT_FAILURE);
-		}
-		build_transformer_tensors(&transformer, &tensors);
-	} else {
-		build_transformer(&transformer, checkpoint_path);
+	if (tensors_open(&tensors, checkpoint_path) != 0) {
+		fprintf(stderr, "failed to open tensors\n");
+		exit(EXIT_FAILURE);
 	}
+	// build transformer using tensors from the input model file
+	// note: we will infer some parameters from the tensors, but others remain hardcoded
+	Transformer transformer;
+	build_transformer(&transformer, &tensors);
+	// allocate the RunState buffers
+	malloc_run_state(&transformer.state, &transformer.config);
+
 	if (steps == 0 || steps > transformer.config.seq_len)
 		steps = transformer.config.seq_len; // ovrerride to ~max length
 
@@ -1113,7 +1008,7 @@ int main(int argc, char* argv[]) {
 	// memory and file handles cleanup
 	free_sampler(&sampler);
 	free_tokenizer(&tokenizer);
-	free_transformer(&transformer);
+	free_run_state(&transformer.state);
 	tensors_close(&tensors);
 	return 0;
 }
