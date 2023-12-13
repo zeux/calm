@@ -6,20 +6,24 @@ If you need support for a wide range of models, computing devices or quantizatio
 
 This code is partially based on Andrej Karpathy's [llama2.c](https://github.com/karpathy/llama2.c).
 
+## Model format
+
+calm uses [Safetensors](https://huggingface.co/docs/safetensors/index) to store model files. Note that the models require conversion (see below), because calm stores model parameters in .safetensors metadata and may expect a particular set of tensor names or weight order within tensors that is not always compatible with the source.
+
 ## Running Llama-2-7B
 
 ```
 git clone https://huggingface.co/meta-llama/Llama-2-7b-chat-hf
-python tools/convert.py llama-2-7b-chat.safetensors --models Llama-2-7b-chat-hf/pytorch_model*.bin
+python tools/convert.py llama-2-7b-chat.calm Llama-2-7b-chat-hf/
 python tools/tokenizer.py llama-tokenizer.bin --model Llama-2-7b-chat-hf/tokenizer.model
-make && ./build/run ./llama-2-7b-chat.safetensors -z llama-tokenizer.bin -i "Q.E." -n 17 -t 0
+make && ./build/run ./llama-2-7b-chat.calm -z llama-tokenizer.bin -i "Q.E." -n 17 -t 0
 ```
 
 ## Running Mistral-7B
 
 ```
-git clone https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1
-python tools/convert.py mistral-7b-instruct.safetensors --models Mistral-7B-Instruct-v0.1/pytorch_model*.bin
-python tools/tokenizer.py mistral-tokenizer.bin --model Mistral-7B-Instruct-v0.1/tokenizer.model
-make && ./build/run ./mistral-7b-instruct.safetensors -z mistral-tokenizer.bin -i "Q: 2+2?" -t 0 -n 12
+git clone https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2
+python tools/convert.py mistral-7b-instruct.calm Mistral-7B-Instruct-v0.2/
+python tools/tokenizer.py mistral-tokenizer.bin --model Mistral-7B-Instruct-v0.2/tokenizer.model
+make && ./build/run ./mistral-7b-instruct.calm -z mistral-tokenizer.bin -i "Q: 2+2?" -t 0 -n 12
 ```
