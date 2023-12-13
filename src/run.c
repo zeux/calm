@@ -1,4 +1,5 @@
-/* Inference for Llama-2 Transformer model in pure C */
+// Inference for Llama-2 Transformer model in pure C
+// Based on llama2.c by Andrej Karpathy
 
 #include <ctype.h>
 #include <math.h>
