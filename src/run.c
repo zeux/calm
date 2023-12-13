@@ -107,17 +107,13 @@ void free_run_state(RunState* s) {
 }
 
 void build_transformer(Transformer* t, struct Tensors* tensors) {
-	// create config that matches llama2-7b or mistral-7b
-	struct Tensor* config_embed = tensors_find(tensors, "model.embed_tokens.weight", 0);
-	struct Tensor* config_attnk = tensors_find(tensors, "model.layers.0.self_attn.k_proj.weight", 0);
-	struct Tensor* config_ffn3 = tensors_find(tensors, "model.layers.0.mlp.up_proj.weight", 0);
-
-	t->config.dim = config_embed->shape[1];
-	t->config.hidden_dim = config_ffn3->shape[0];
-	t->config.n_layers = 32;
-	t->config.n_heads = 32;
-	t->config.n_kv_heads = t->config.n_heads / (config_attnk->shape[1] / config_attnk->shape[0]);
-	t->config.vocab_size = config_embed->shape[0];
+	// create config
+	t->config.dim = atoi(tensors_metadata(tensors, "dim"));
+	t->config.hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
+	t->config.n_layers = atoi(tensors_metadata(tensors, "n_layers"));
+	t->config.n_heads = atoi(tensors_metadata(tensors, "n_heads"));
+	t->config.n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
+	t->config.vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
 	t->config.seq_len = 4096;
 
 	int head_size = t->config.dim / t->config.n_heads;

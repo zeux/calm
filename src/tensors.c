@@ -123,8 +123,24 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 	int toki = 1;
 	while (toki < tokres) {
 		if (json_equal(header, &tokens[toki], "__metadata__") && tokens[toki + 1].type == JSMN_OBJECT) {
-			// TODO: validate
-			toki += 2 + tokens[toki + 1].size * 2; // skip metadata, assume string => string mapping
+            int n_keys = tokens[toki + 1].size;
+            toki += 2;
+
+            for (int k = 0; k < n_keys; ++k) {
+				assert(tokens[toki].type == JSMN_STRING);
+                if (tokens[toki + 1].type != JSMN_STRING) {
+                    munmap(data, size);
+                    return -3;
+                }
+                if (tensors->n_metadata >= sizeof(tensors->metadata) / sizeof(tensors->metadata[0])) {
+                    munmap(data, size);
+                    return -4;
+                }
+                struct Metadata* metadata = &tensors->metadata[tensors->n_metadata++];
+                strncpy(metadata->key, header + tokens[toki].start, tokens[toki].end - tokens[toki].start);
+                strncpy(metadata->value, header + tokens[toki + 1].start, tokens[toki + 1].end - tokens[toki + 1].start);
+                toki += 2;
+			}
 		} else {
 			struct Tensor tensor = {};
 			toki = parse_tensor(&tensor, bytes, bytes_size, header, tokens, toki);
@@ -177,4 +193,22 @@ void* tensors_get(struct Tensors* tensors, const char* name, int layer, enum DTy
 	}
 
 	return tensor->data;
+}
+
+const char* tensors_metadata_find(struct Tensors* tensors, const char* name) {
+    for (int i = 0; i < tensors->n_metadata; ++i) {
+        if (strcmp(tensors->metadata[i].key, name) == 0) {
+            return tensors->metadata[i].value;
+        }
+    }
+    return NULL;
+}
+
+const char* tensors_metadata(struct Tensors* tensors, const char* name) {
+    const char* res = tensors_metadata_find(tensors, name);
+    if (res == NULL) {
+        fprintf(stderr, "FATAL: Metadata not found: %s\n", name);
+        assert(false);
+    }
+    return res;
 }
