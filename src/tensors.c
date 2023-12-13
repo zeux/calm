@@ -161,20 +161,17 @@ struct Tensor* tensors_find(struct Tensors* tensors, const char* name, int layer
 void* tensors_get(struct Tensors* tensors, const char* name, int layer, enum DType dtype, int shape[4]) {
 	struct Tensor* tensor = tensors_find(tensors, name, layer);
 	if (tensor == NULL) {
-		assert(!"Tensor not found");
+		fprintf(stderr, "FATAL: Tensor not found: %s\n", name);
+		assert(false);
 		return NULL;
 	}
 
-	if (tensor->dtype != dtype) {
-		assert(!"Tensor dtype mismatch");
+	if (tensor->dtype != dtype || memcmp(tensor->shape, shape, sizeof(tensor->shape)) != 0) {
+		fprintf(stderr, "FATAL: Tensor mismatch: %s\n", name);
+		fprintf(stderr, "  Expected: dtype=%d shape=[%d,%d,%d,%d]\n", dtype, shape[0], shape[1], shape[2], shape[3]);
+		fprintf(stderr, "  Actual:   dtype=%d shape=[%d,%d,%d,%d]\n", tensor->dtype, tensor->shape[0], tensor->shape[1], tensor->shape[2], tensor->shape[3]);
+		assert(false);
 		return NULL;
-	}
-
-	for (int i = 0; i < 4; ++i) {
-		if (tensor->shape[i] != shape[i]) {
-			assert(!"Tensor shape mismatch");
-			return NULL;
-		}
 	}
 
 	return tensor->data;
