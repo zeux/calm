@@ -201,14 +201,17 @@ void build_transformer(Transformer* t, char* checkpoint_path) {
 }
 
 void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
-	// create config that matches llama2-7b
-	// TODO: make this configurable
-	t->config.dim = 4096;
-	t->config.hidden_dim = 11008;
+	// create config that matches llama2-7b or mistral-7b
+	struct Tensor* config_embed = tensors_find(tensors, "model.embed_tokens.weight", 0);
+	struct Tensor* config_attnk = tensors_find(tensors, "model.layers.0.self_attn.k_proj.weight", 0);
+	struct Tensor* config_ffn3 = tensors_find(tensors, "model.layers.0.mlp.up_proj.weight", 0);
+
+	t->config.dim = config_embed->shape[1];
+	t->config.hidden_dim = config_ffn3->shape[0];
 	t->config.n_layers = 32;
 	t->config.n_heads = 32;
-	t->config.n_kv_heads = 32;
-	t->config.vocab_size = 32000;
+	t->config.n_kv_heads = t->config.n_heads / (config_attnk->shape[1] / config_attnk->shape[0]);
+	t->config.vocab_size = config_embed->shape[0];
 	t->config.seq_len = 4096;
 
 	int head_size = t->config.dim / t->config.n_heads;
@@ -218,8 +221,8 @@ void build_transformer_tensors(Transformer* t, struct Tensors* tensors) {
 	for (int l = 0; l < t->config.n_layers; ++l) {
 		t->weights.rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.input_layernorm.weight", l, dt_f32, (int[]){t->config.dim, 0, 0, 0});
 		t->weights.wq[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.q_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_heads * head_size, 0, 0});
-		t->weights.wk[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.k_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_kv_heads * head_size, 0, 0});
-		t->weights.wv[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.v_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_kv_heads * head_size, 0, 0});
+		t->weights.wk[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.k_proj.weight", l, dt_f32, (int[]){t->config.n_kv_heads * head_size, t->config.dim, 0, 0});
+		t->weights.wv[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.v_proj.weight", l, dt_f32, (int[]){t->config.n_kv_heads * head_size, t->config.dim, 0, 0});
 		t->weights.wo[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.o_proj.weight", l, dt_f32, (int[]){t->config.n_heads * head_size, t->config.dim, 0, 0});
 		t->weights.rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.post_attention_layernorm.weight", l, dt_f32, (int[]){t->config.dim, 0, 0, 0});
 		t->weights.w1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.gate_proj.weight", l, dt_f32, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
