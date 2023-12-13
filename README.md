@@ -9,9 +9,9 @@ This code is partially based on Andrej Karpathy's [llama2.c](https://github.com/
 ## Running Llama-2-7B
 
 ```
-git clone https://huggingface.co/meta-llama/llama-2-7b-chat-hf
-python tools/convert.py llama-2-7b-chat.safetensors --models llama-2-7b-chat-hf/pytorch_model-00001-of-00002.bin llama-2-7b-chat-hf/pytorch_model-00002-of-00002.bin
-python tools/tokenizer.py llama-tokenizer.bin --model llama-2-7b-chat-hf/tokenizer.model
+git clone https://huggingface.co/meta-llama/Llama-2-7b-chat-hf
+python tools/convert.py llama-2-7b-chat.safetensors --models Llama-2-7b-chat-hf/pytorch_model*.bin
+python tools/tokenizer.py llama-tokenizer.bin --model Llama-2-7b-chat-hf/tokenizer.model
 make && ./build/run ./llama-2-7b-chat.safetensors -z llama-tokenizer.bin -i "Q.E." -n 17 -t 0
 ```
 
@@ -19,7 +19,7 @@ make && ./build/run ./llama-2-7b-chat.safetensors -z llama-tokenizer.bin -i "Q.E
 
 ```
 git clone https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1
-python tools/convert.py mistral-7b-instruct.safetensors --models Mistral-7B-Instruct-v0.1/pytorch_model-00001-of-00002.bin Mistral-7B-Instruct-v0.1/pytorch_model-00002-of-00002.bin
+python tools/convert.py mistral-7b-instruct.safetensors --models Mistral-7B-Instruct-v0.1/pytorch_model*.bin
 python tools/tokenizer.py mistral-tokenizer.bin --model Mistral-7B-Instruct-v0.1/tokenizer.model
 make && ./build/run ./mistral-7b-instruct.safetensors -z mistral-tokenizer.bin -i "Q: 2+2?" -t 0 -n 12
 ```
