@@ -1,19 +1,12 @@
 /* Inference for Llama-2 Transformer model in pure C */
 
 #include <ctype.h>
-#include <fcntl.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#if defined _WIN32
-#include "win.h"
-#else
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
 
 #include "tensors.h"
 
@@ -32,25 +25,28 @@ typedef struct {
 
 #define MAX_LAYERS 128
 
+// Can switch between float and _Float16 (model rebuild required)
+typedef _Float16 dtype_t;
+
 typedef struct {
 	// token embedding table
-	float* token_embedding_table; // (vocab_size, dim)
+	dtype_t* token_embedding_table; // (vocab_size, dim)
 	// weights for rmsnorms
-	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
-	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
+	dtype_t* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
+	dtype_t* rms_ffn_weight[MAX_LAYERS]; // (dim)
 	// weights for matmuls. note dim == n_heads * head_size
-	float* wq[MAX_LAYERS]; // (dim, n_heads * head_size)
-	float* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
-	float* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
-	float* wo[MAX_LAYERS]; // (n_heads * head_size, dim)
+	dtype_t* wq[MAX_LAYERS]; // (dim, n_heads * head_size)
+	dtype_t* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
+	dtype_t* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
+	dtype_t* wo[MAX_LAYERS]; // (n_heads * head_size, dim)
 	// weights for ffn
-	float* w1[MAX_LAYERS]; // (hidden_dim, dim)
-	float* w2[MAX_LAYERS]; // (dim, hidden_dim)
-	float* w3[MAX_LAYERS]; // (hidden_dim, dim)
+	dtype_t* w1[MAX_LAYERS]; // (hidden_dim, dim)
+	dtype_t* w2[MAX_LAYERS]; // (dim, hidden_dim)
+	dtype_t* w3[MAX_LAYERS]; // (hidden_dim, dim)
 	// final rmsnorm
-	float* rms_final_weight; // (dim,)
+	dtype_t* rms_final_weight; // (dim,)
 	// (optional) classifier weights for the logits, on the last layer
-	float* wcls;
+	dtype_t* wcls;
 } TransformerWeights;
 
 typedef struct {
@@ -126,26 +122,28 @@ void build_transformer(Transformer* t, struct Tensors* tensors) {
 	int head_size = t->config.dim / t->config.n_heads;
 
 	// get tensor data
-	t->weights.token_embedding_table = (float*)tensors_get(tensors, "model.embed_tokens.weight", 0, dt_f32, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
+	enum DType dtype = dt_f16;
+
+	t->weights.token_embedding_table = (dtype_t*)tensors_get(tensors, "model.embed_tokens.weight", 0, dtype, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
 	for (int l = 0; l < t->config.n_layers; ++l) {
-		t->weights.rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.input_layernorm.weight", l, dt_f32, (int[]){t->config.dim, 0, 0, 0});
-		t->weights.wq[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.q_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.n_heads * head_size, 0, 0});
-		t->weights.wk[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.k_proj.weight", l, dt_f32, (int[]){t->config.n_kv_heads * head_size, t->config.dim, 0, 0});
-		t->weights.wv[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.v_proj.weight", l, dt_f32, (int[]){t->config.n_kv_heads * head_size, t->config.dim, 0, 0});
-		t->weights.wo[l] = (float*)tensors_get(tensors, "model.layers.%d.self_attn.o_proj.weight", l, dt_f32, (int[]){t->config.n_heads * head_size, t->config.dim, 0, 0});
-		t->weights.rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.post_attention_layernorm.weight", l, dt_f32, (int[]){t->config.dim, 0, 0, 0});
-		t->weights.w1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.gate_proj.weight", l, dt_f32, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
-		t->weights.w2[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.down_proj.weight", l, dt_f32, (int[]){t->config.dim, t->config.hidden_dim, 0, 0});
-		t->weights.w3[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.up_proj.weight", l, dt_f32, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
+		t->weights.rms_att_weight[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.input_layernorm.weight", l, dtype, (int[]){t->config.dim, 0, 0, 0});
+		t->weights.wq[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.self_attn.q_proj.weight", l, dtype, (int[]){t->config.dim, t->config.n_heads * head_size, 0, 0});
+		t->weights.wk[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.self_attn.k_proj.weight", l, dtype, (int[]){t->config.n_kv_heads * head_size, t->config.dim, 0, 0});
+		t->weights.wv[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.self_attn.v_proj.weight", l, dtype, (int[]){t->config.n_kv_heads * head_size, t->config.dim, 0, 0});
+		t->weights.wo[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.self_attn.o_proj.weight", l, dtype, (int[]){t->config.n_heads * head_size, t->config.dim, 0, 0});
+		t->weights.rms_ffn_weight[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.post_attention_layernorm.weight", l, dtype, (int[]){t->config.dim, 0, 0, 0});
+		t->weights.w1[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.gate_proj.weight", l, dtype, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
+		t->weights.w2[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.down_proj.weight", l, dtype, (int[]){t->config.dim, t->config.hidden_dim, 0, 0});
+		t->weights.w3[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.up_proj.weight", l, dtype, (int[]){t->config.hidden_dim, t->config.dim, 0, 0});
 	}
-	t->weights.rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){t->config.dim, 0, 0, 0});
-	t->weights.wcls = (float*)tensors_get(tensors, "lm_head.weight", 0, dt_f32, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
+	t->weights.rms_final_weight = (dtype_t*)tensors_get(tensors, "model.norm.weight", 0, dtype, (int[]){t->config.dim, 0, 0, 0});
+	t->weights.wcls = (dtype_t*)tensors_get(tensors, "lm_head.weight", 0, dtype, (int[]){t->config.vocab_size, t->config.dim, 0, 0});
 }
 
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
 
-void rmsnorm(float* o, float* x, float* weight, int size) {
+void rmsnorm(float* o, float* x, dtype_t* weight, int size) {
 	// calculate sum of squares
 	float ss = 0.0f;
 	for (int j = 0; j < size; j++) {
@@ -180,7 +178,7 @@ void softmax(float* x, int size) {
 	}
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
+void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
 	// W (d,n) @ x (n,) -> xout (d,)
 	// by far the most amount of time is spent inside this little function
 	int i;
@@ -208,8 +206,9 @@ float* forward(Transformer* transformer, int token, int pos) {
 	int head_size = dim / p->n_heads;
 
 	// copy the token embedding into x
-	float* content_row = w->token_embedding_table + token * dim;
-	memcpy(x, content_row, dim * sizeof(*x));
+	dtype_t* content_row = w->token_embedding_table + token * dim;
+	for (int i = 0; i < dim; ++i)
+		x[i] = content_row[i];
 
 	// forward all the layers
 	for (unsigned long long l = 0; l < p->n_layers; l++) {

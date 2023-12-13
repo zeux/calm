@@ -10,6 +10,7 @@ import torch
 args = argparse.ArgumentParser()
 args.add_argument("output", type=str)
 args.add_argument("--models", type=str, nargs="+", required=True)
+args.add_argument("--dtype", type=str, default="float16", choices=["bfloat16", "float16", "float32"])
 args = args.parse_args()
 
 tensors = {}
@@ -33,6 +34,8 @@ for fn in args.models:
 def permute_reverse(w, heads, dim1, dim2):
     return w.view(heads, 2, dim1 // heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
+dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
+
 for k, v in tensors.items():
     if "self_attn.q_proj" in k or "self_attn.k_proj" in k:
         n_heads = 32
@@ -40,7 +43,6 @@ for k, v in tensors.items():
         dim2 = v.shape[1]
         v = permute_reverse(v, n_heads // (dim2 // dim1), dim1, dim2)
 
-    # convert to f32 for now
-    tensors[k] = v.float()
+    tensors[k] = v.to(dtype)
 
 safetensors.torch.save_file(tensors, args.output)

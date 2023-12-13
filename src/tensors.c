@@ -50,6 +50,8 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 		if (json_equal(json, key, "dtype") && tokens[toki + 1].type == JSMN_STRING) {
 			if (json_equal(json, &tokens[toki + 1], "F32")) {
 				tensor->dtype = dt_f32;
+			} else if (json_equal(json, &tokens[toki + 1], "F16")) {
+				tensor->dtype = dt_f16;
 			} else {
 				return -1;
 			}

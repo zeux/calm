@@ -3,7 +3,8 @@
 #include <stddef.h>
 
 enum DType {
-	dt_f32
+	dt_f32,
+	dt_f16,
 };
 
 struct Tensor {
