@@ -20,21 +20,27 @@ static bool json_equal(const char* json, const jsmntok_t* tok, const char* str) 
 	return len == strlen(str) && memcmp(json + tok->start, str, len) == 0;
 }
 
+static void json_copy(char* buf, size_t buf_size, const char* json, const jsmntok_t* tok) {
+	assert(tok->type == JSMN_STRING || tok->type == JSMN_PRIMITIVE);
+	size_t len = tok->end - tok->start;
+	size_t res = len < buf_size ? len : buf_size - 1;
+	memcpy(buf, json + tok->start, res);
+	buf[res] = 0;
+}
+
 static long long json_llong(const char* json, const jsmntok_t* tok) {
 	if (tok->type != JSMN_PRIMITIVE) {
-		return 0;
+		return -1;
 	}
 
 	char tmp[128];
-	int size = (size_t)(tok->end - tok->start) < sizeof(tmp) ? (int)(tok->end - tok->start) : (int)(sizeof(tmp) - 1);
-	strncpy(tmp, json + tok->start, size);
-	tmp[size] = 0;
+	json_copy(tmp, sizeof(tmp), json, tok);
 	return atoll(tmp);
 }
 
 static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, const char* json, const jsmntok_t* tokens, int toki) {
 	assert(tokens[toki].type == JSMN_STRING);
-	strncpy(tensor->name, json + tokens[toki].start, tokens[toki].end - tokens[toki].start);
+	json_copy(tensor->name, sizeof(tensor->name), json, &tokens[toki]);
 	toki++;
 
 	if (tokens[toki].type != JSMN_OBJECT) {
@@ -60,6 +66,9 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 			int shape_len = tokens[toki + 1].size;
 			for (int j = 0; j < shape_len; ++j) {
 				tensor->shape[j] = json_llong(json, &tokens[toki + 2 + j]);
+				if (tensor->shape[j] < 0) {
+					return -1;
+				}
 			}
 			toki += 2 + shape_len;
 		} else if (json_equal(json, key, "data_offsets") && tokens[toki + 1].type == JSMN_ARRAY && tokens[toki + 1].size == 2) {
@@ -78,6 +87,53 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 	}
 
 	return toki;
+}
+
+static int parse_tensors(struct Tensors* tensors, void* bytes, size_t bytes_size, const char* json, size_t json_size) {
+	jsmn_parser parser;
+	jsmntok_t tokens[16384];
+	int tokres = jsmn_parse(&parser, json, json_size, tokens, sizeof(tokens) / sizeof(tokens[0]));
+
+	if (tokres <= 0 || tokens[0].type != JSMN_OBJECT) {
+		return -1;
+	}
+
+	int toki = 1;
+	while (toki < tokres) {
+		if (json_equal(json, &tokens[toki], "__metadata__") && tokens[toki + 1].type == JSMN_OBJECT) {
+			int n_keys = tokens[toki + 1].size;
+			toki += 2;
+
+			for (int k = 0; k < n_keys; ++k) {
+				assert(tokens[toki].type == JSMN_STRING);
+				if (tokens[toki + 1].type != JSMN_STRING) {
+					return -1;
+				}
+
+				if (tensors->n_metadata >= sizeof(tensors->metadata) / sizeof(tensors->metadata[0])) {
+					return -1;
+				}
+				struct Metadata* metadata = &tensors->metadata[tensors->n_metadata++];
+
+				json_copy(metadata->key, sizeof(metadata->key), json, &tokens[toki]);
+				json_copy(metadata->value, sizeof(metadata->value), json, &tokens[toki + 1]);
+				toki += 2;
+			}
+		} else {
+			struct Tensor tensor = {};
+			toki = parse_tensor(&tensor, bytes, bytes_size, json, tokens, toki);
+			if (toki < 0) {
+				return -1;
+			}
+
+			if (tensors->n_tensors >= sizeof(tensors->tensors) / sizeof(tensors->tensors[0])) {
+				return -1;
+			}
+			tensors->tensors[tensors->n_tensors++] = tensor;
+		}
+	}
+
+	return 0;
 }
 
 int tensors_open(struct Tensors* tensors, const char* filename) {
@@ -111,50 +167,9 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 	void* bytes = (char*)data + sizeof(uint64_t) + header_size;
 	size_t bytes_size = size - sizeof(uint64_t) - header_size;
 
-	jsmn_parser parser;
-	jsmntok_t tokens[16384];
-	int tokres = jsmn_parse(&parser, header, header_size, tokens, sizeof(tokens) / sizeof(tokens[0]));
-
-	if (tokres <= 0 || tokens[0].type != JSMN_OBJECT) {
+	if (parse_tensors(tensors, bytes, bytes_size, header, header_size) != 0) {
 		munmap(data, size);
 		return -3;
-	}
-
-	int toki = 1;
-	while (toki < tokres) {
-		if (json_equal(header, &tokens[toki], "__metadata__") && tokens[toki + 1].type == JSMN_OBJECT) {
-            int n_keys = tokens[toki + 1].size;
-            toki += 2;
-
-            for (int k = 0; k < n_keys; ++k) {
-				assert(tokens[toki].type == JSMN_STRING);
-                if (tokens[toki + 1].type != JSMN_STRING) {
-                    munmap(data, size);
-                    return -3;
-                }
-                if (tensors->n_metadata >= sizeof(tensors->metadata) / sizeof(tensors->metadata[0])) {
-                    munmap(data, size);
-                    return -4;
-                }
-                struct Metadata* metadata = &tensors->metadata[tensors->n_metadata++];
-                strncpy(metadata->key, header + tokens[toki].start, tokens[toki].end - tokens[toki].start);
-                strncpy(metadata->value, header + tokens[toki + 1].start, tokens[toki + 1].end - tokens[toki + 1].start);
-                toki += 2;
-			}
-		} else {
-			struct Tensor tensor = {};
-			toki = parse_tensor(&tensor, bytes, bytes_size, header, tokens, toki);
-			if (toki < 0) {
-				munmap(data, size);
-				return -3;
-			}
-
-			if (tensors->n_tensors >= sizeof(tensors->tensors) / sizeof(tensors->tensors[0])) {
-				munmap(data, size);
-				return -4;
-			}
-			tensors->tensors[tensors->n_tensors++] = tensor;
-		}
 	}
 
 	return 0;
@@ -196,19 +211,19 @@ void* tensors_get(struct Tensors* tensors, const char* name, int layer, enum DTy
 }
 
 const char* tensors_metadata_find(struct Tensors* tensors, const char* name) {
-    for (int i = 0; i < tensors->n_metadata; ++i) {
-        if (strcmp(tensors->metadata[i].key, name) == 0) {
-            return tensors->metadata[i].value;
-        }
-    }
-    return NULL;
+	for (int i = 0; i < tensors->n_metadata; ++i) {
+		if (strcmp(tensors->metadata[i].key, name) == 0) {
+			return tensors->metadata[i].value;
+		}
+	}
+	return NULL;
 }
 
 const char* tensors_metadata(struct Tensors* tensors, const char* name) {
-    const char* res = tensors_metadata_find(tensors, name);
-    if (res == NULL) {
-        fprintf(stderr, "FATAL: Metadata not found: %s\n", name);
-        assert(false);
-    }
-    return res;
+	const char* res = tensors_metadata_find(tensors, name);
+	if (res == NULL) {
+		fprintf(stderr, "FATAL: Metadata not found: %s\n", name);
+		assert(false);
+	}
+	return res;
 }

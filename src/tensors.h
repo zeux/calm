@@ -15,16 +15,16 @@ struct Tensor {
 };
 
 struct Metadata {
-    char key[64];
-    char value[64];
+	char key[64];
+	char value[64];
 };
 
 struct Tensors {
 	void* data;
 	size_t size;
 
-    struct Metadata metadata[128];
-    int n_metadata;
+	struct Metadata metadata[128];
+	int n_metadata;
 
 	struct Tensor tensors[1024];
 	int n_tensors;
