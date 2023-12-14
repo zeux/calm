@@ -1,6 +1,7 @@
 // Inference for Llama-2 Transformer model in pure C
 // Based on llama2.c by Andrej Karpathy
 
+#include <assert.h>
 #include <ctype.h>
 #include <math.h>
 #include <stdint.h>
@@ -721,6 +722,44 @@ long time_in_ms() {
 	return time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }
 
+size_t model_bandwidth(Config* config) {
+	int head_size = config->dim / config->n_heads;
+
+	size_t res = 0;
+
+	// token embedding table (vocab_size, dim)
+	res += sizeof(dtype_t) * config->vocab_size * config->dim;
+	// weights for rmsnorms (dim) x 2 x layers
+	res += sizeof(dtype_t) * config->dim * 2 * config->n_layers;
+	// weights for matmuls
+	res += sizeof(dtype_t) * config->dim * config->n_heads * head_size * config->n_layers;
+	res += sizeof(dtype_t) * config->dim * config->n_kv_heads * head_size * config->n_layers;
+	res += sizeof(dtype_t) * config->dim * config->n_kv_heads * head_size * config->n_layers;
+	res += sizeof(dtype_t) * config->dim * config->n_heads * head_size * config->n_layers;
+	// weights for ffn
+	res += sizeof(dtype_t) * config->hidden_dim * config->dim * config->n_layers;
+	res += sizeof(dtype_t) * config->dim * config->hidden_dim * config->n_layers;
+	res += sizeof(dtype_t) * config->hidden_dim * config->dim * config->n_layers;
+	// final rmsnorm
+	res += sizeof(dtype_t) * config->dim;
+	// classifier weights for the logits, on the last layer
+	res += sizeof(dtype_t) * config->vocab_size * config->dim;
+
+	return res;
+}
+
+size_t kvcache_bandwidth(Config* config, int pos) {
+	assert(pos < config->seq_len);
+	int head_size = config->dim / config->n_heads;
+
+	size_t res = 0;
+
+	res += sizeof(dtype_t) * config->n_kv_heads * head_size * (pos + 1);
+	res += sizeof(dtype_t) * config->n_kv_heads * head_size * (pos + 1);
+
+	return res;
+}
+
 // ----------------------------------------------------------------------------
 // generation loop
 
@@ -740,6 +779,7 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 	}
 
 	// start the main loop
+	size_t read_bytes = 0;
 	long start = 0;               // used to time our code, only initialized after first iteration
 	int next;                     // will store the next token in the sequence
 	int token = prompt_tokens[0]; // kick off with the first token in the prompt
@@ -748,6 +788,9 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 
 		// forward the transformer to get logits for the next token
 		float* logits = forward(transformer, token, pos);
+
+		read_bytes += model_bandwidth(&transformer->config);
+		read_bytes += kvcache_bandwidth(&transformer->config, pos);
 
 		// advance the state machine
 		if (pos < num_prompt_tokens - 1) {
@@ -780,7 +823,9 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 	// report achieved tok/s (pos-1 because the timer starts after first iteration)
 	if (pos > 1) {
 		long end = time_in_ms();
-		fprintf(stderr, "achieved tok/s: %f\n", (pos - 1) / (double)(end - start) * 1000);
+		fprintf(stderr, "throughput: %.2f tok/s; bandwidth: %.2f GB/s\n",
+			(pos - 1) / (double)(end - start) * 1000,
+			((double)read_bytes / 1024 / 1024 / 1024) / ((double)(end - start) / 1000));
 	}
 
 	free(prompt_tokens);
