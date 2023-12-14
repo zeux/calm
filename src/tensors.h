@@ -5,6 +5,7 @@
 enum DType {
 	dt_f32,
 	dt_f16,
+	dt_u8,
 };
 
 struct Tensor {

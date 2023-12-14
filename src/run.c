@@ -331,6 +331,8 @@ float* forward(Transformer* transformer, int token, int pos) {
 // ----------------------------------------------------------------------------
 // The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
 
+#define MAX_TOKEN_LENGTH 128
+
 typedef struct {
 	char* str;
 	int id;
@@ -341,7 +343,6 @@ typedef struct {
 	float* vocab_scores;
 	TokenIndex* sorted_vocab;
 	int vocab_size;
-	unsigned int max_token_length;
 	unsigned char byte_pieces[512]; // stores all single-byte strings
 } Tokenizer;
 
@@ -349,53 +350,41 @@ int compare_tokens(const void* a, const void* b) {
 	return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
-	// i should have written the vocab_size into the tokenizer file... sigh
+void build_tokenizer(Tokenizer* t, struct Tensors* tensors, int vocab_size) {
 	t->vocab_size = vocab_size;
-	// malloc space to hold the scores and the strings
-	t->vocab = (char**)malloc(vocab_size * sizeof(char*));
-	t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
-	t->sorted_vocab = NULL; // initialized lazily
+
+	struct Tensor* tensor = tensors_find(tensors, "tokenizer.tokens", 0);
+
+	char* tokens = (char*)tensors_get(tensors, "tokenizer.tokens", 0, dt_u8, (int[]){tensor->shape[0], 0, 0, 0});
+	float* scores = (float*)tensors_get(tensors, "tokenizer.scores", 0, dt_f32, (int[]){vocab_size, 0, 0, 0});
+
+	// TODO: this is likely redundant
 	for (int i = 0; i < 256; i++) {
 		t->byte_pieces[i * 2] = (unsigned char)i;
 		t->byte_pieces[i * 2 + 1] = '\0';
 	}
-	// read in the file
-	FILE* file = fopen(tokenizer_path, "rb");
-	if (!file) {
-		fprintf(stderr, "couldn't load %s\n", tokenizer_path);
-		exit(EXIT_FAILURE);
+
+	// malloc space to hold the scores and the strings
+	t->vocab = (char**)malloc(vocab_size * sizeof(char*));
+	t->sorted_vocab = (TokenIndex*)malloc(vocab_size * sizeof(TokenIndex));
+
+	// TODO: validate tokens are null terminated
+	for (int i = 0; i < vocab_size; ++i) {
+		t->vocab[i] = tokens;
+		t->sorted_vocab[i].str = tokens;
+		t->sorted_vocab[i].id = i;
+
+		assert(strlen(tokens) < MAX_TOKEN_LENGTH);
+		tokens += strlen(tokens) + 1;
 	}
-	if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) {
-		fprintf(stderr, "failed read\n");
-		exit(EXIT_FAILURE);
-	}
-	int len;
-	for (int i = 0; i < vocab_size; i++) {
-		if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) {
-			fprintf(stderr, "failed read\n");
-			exit(EXIT_FAILURE);
-		}
-		if (fread(&len, sizeof(int), 1, file) != 1) {
-			fprintf(stderr, "failed read\n");
-			exit(EXIT_FAILURE);
-		}
-		t->vocab[i] = (char*)malloc(len + 1);
-		if (fread(t->vocab[i], len, 1, file) != 1) {
-			fprintf(stderr, "failed read\n");
-			exit(EXIT_FAILURE);
-		}
-		t->vocab[i][len] = '\0'; // add the string terminating token
-	}
-	fclose(file);
+
+	t->vocab_scores = scores;
+
+	qsort(t->sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
 }
 
 void free_tokenizer(Tokenizer* t) {
-	for (int i = 0; i < t->vocab_size; i++) {
-		free(t->vocab[i]);
-	}
 	free(t->vocab);
-	free(t->vocab_scores);
 	free(t->sorted_vocab);
 }
 
@@ -447,19 +436,9 @@ void encode(Tokenizer* t, char* text, int8_t bos, int8_t eos, int* tokens, int* 
 		exit(EXIT_FAILURE);
 	}
 
-	if (t->sorted_vocab == NULL) {
-		// lazily malloc and sort the vocabulary
-		t->sorted_vocab = malloc(t->vocab_size * sizeof(TokenIndex));
-		for (int i = 0; i < t->vocab_size; i++) {
-			t->sorted_vocab[i].str = t->vocab[i];
-			t->sorted_vocab[i].id = i;
-		}
-		qsort(t->sorted_vocab, t->vocab_size, sizeof(TokenIndex), compare_tokens);
-	}
-
 	// create a temporary buffer that will store merge candidates of always two consecutive tokens
 	// *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-	char* str_buffer = malloc((t->max_token_length * 2 + 1 + 2) * sizeof(char));
+	char* str_buffer = malloc((MAX_TOKEN_LENGTH * 2 + 1 + 2) * sizeof(char));
 	size_t str_len = 0;
 
 	// start at 0 tokens
@@ -824,8 +803,8 @@ void generate(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, 
 	if (pos > 1) {
 		long end = time_in_ms();
 		fprintf(stderr, "throughput: %.2f tok/s; bandwidth: %.2f GB/s\n",
-			(pos - 1) / (double)(end - start) * 1000,
-			((double)read_bytes / 1024 / 1024 / 1024) / ((double)(end - start) / 1000));
+		        (pos - 1) / (double)(end - start) * 1000,
+		        ((double)read_bytes / 1024 / 1024 / 1024) / ((double)(end - start) / 1000));
 	}
 
 	free(prompt_tokens);
@@ -957,8 +936,7 @@ void error_usage() {
 int main(int argc, char* argv[]) {
 
 	// default parameters
-	char* checkpoint_path = NULL; // e.g. out/model.bin
-	char* tokenizer_path = "tokenizer.bin";
+	char* checkpoint_path = NULL;    // e.g. out/model.bin
 	float temperature = 1.0f;        // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 	float topp = 0.9f;               // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
 	int steps = 256;                 // number of steps to run for
@@ -995,8 +973,6 @@ int main(int argc, char* argv[]) {
 			steps = atoi(argv[i + 1]);
 		} else if (argv[i][1] == 'i') {
 			prompt = argv[i + 1];
-		} else if (argv[i][1] == 'z') {
-			tokenizer_path = argv[i + 1];
 		} else if (argv[i][1] == 'm') {
 			mode = argv[i + 1];
 		} else if (argv[i][1] == 'y') {
@@ -1034,7 +1010,7 @@ int main(int argc, char* argv[]) {
 
 	// build the Tokenizer via the tokenizer .bin file
 	Tokenizer tokenizer;
-	build_tokenizer(&tokenizer, tokenizer_path, transformer.config.vocab_size);
+	build_tokenizer(&tokenizer, &tensors, transformer.config.vocab_size);
 
 	// build the Sampler
 	Sampler sampler;

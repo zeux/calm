@@ -54,7 +54,8 @@ static bool validate_shape(enum DType dtype, int shape[4], size_t length) {
 		max_elements /= dim;
 	}
 
-	size_t element_size = (dtype == dt_f32) ? sizeof(float) : sizeof(uint16_t);
+	size_t element_size = (dtype == dt_f32) ? sizeof(float) : (dtype == dt_f16) ? sizeof(uint16_t)
+	                                                                            : sizeof(uint8_t);
 
 	return expected_length * element_size == length;
 }
@@ -81,6 +82,8 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 				tensor->dtype = dt_f32;
 			} else if (json_equal(json, &tokens[toki + 1], "F16")) {
 				tensor->dtype = dt_f16;
+			} else if (json_equal(json, &tokens[toki + 1], "U8")) {
+				tensor->dtype = dt_u8;
 			} else {
 				return -1;
 			}
