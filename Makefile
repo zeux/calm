@@ -15,6 +15,9 @@ all: $(BINARY)
 format:
 	clang-format -i src/*.c src/*.h
 
+$(BUILD)/fuzz-tensors: src/tensors.c
+	clang $(CFLAGS) -DFUZZING -O1 -fsanitize=address,fuzzer -o $@ $^
+
 $(BINARY): $(OBJECTS)
 	$(CC) $^ $(LDFLAGS) -o $@
 

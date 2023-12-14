@@ -117,7 +117,20 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 	return toki;
 }
 
-static int parse_tensors(struct Tensors* tensors, void* bytes, size_t bytes_size, const char* json, size_t json_size) {
+int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
+	if (size < sizeof(uint64_t)) {
+		return -1;
+	}
+
+	uint64_t json_size = *(uint64_t*)data;
+	if (json_size == 0 || json_size > size - sizeof(uint64_t)) {
+		return -1;
+	}
+
+	char* json = (char*)data + sizeof(uint64_t);
+	void* bytes = (char*)data + sizeof(uint64_t) + json_size;
+	size_t bytes_size = size - sizeof(uint64_t) - json_size;
+
 	jsmn_parser parser;
 	jsmntok_t tokens[16384];
 	int tokres = jsmn_parse(&parser, json, json_size, tokens, sizeof(tokens) / sizeof(tokens[0]));
@@ -171,7 +184,7 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 	}
 
 	struct stat st;
-	if (fstat(fd, &st) != 0 || st.st_size < (int)sizeof(uint64_t)) {
+	if (fstat(fd, &st) != 0) {
 		close(fd);
 		return -1;
 	}
@@ -185,20 +198,13 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 
 	close(fd); // fd can be closed after mmap returns without invalidating the mapping
 
-	uint64_t header_size = *(uint64_t*)data;
-	if (header_size == 0 || header_size > size - sizeof(uint64_t)) {
+	if (tensors_parse(tensors, data, size) != 0) {
 		munmap(data, size);
 		return -2;
 	}
 
-	char* header = (char*)data + sizeof(uint64_t);
-	void* bytes = (char*)data + sizeof(uint64_t) + header_size;
-	size_t bytes_size = size - sizeof(uint64_t) - header_size;
-
-	if (parse_tensors(tensors, bytes, bytes_size, header, header_size) != 0) {
-		munmap(data, size);
-		return -3;
-	}
+	tensors->data = data;
+	tensors->size = size;
 
 	return 0;
 }
@@ -255,3 +261,11 @@ const char* tensors_metadata(struct Tensors* tensors, const char* name) {
 	}
 	return res;
 }
+
+#ifdef FUZZING
+int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+	struct Tensors tensors = {};
+	tensors_parse(&tensors, (void*)data, size);
+	return 0;
+}
+#endif

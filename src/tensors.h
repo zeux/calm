@@ -30,6 +30,8 @@ struct Tensors {
 	int n_tensors;
 };
 
+int tensors_parse(struct Tensors* tensors, void* data, size_t size);
+
 int tensors_open(struct Tensors* tensors, const char* filename);
 void tensors_close(struct Tensors* tensors);
 
