@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -38,6 +39,26 @@ static long long json_llong(const char* json, const jsmntok_t* tok) {
 	return atoll(tmp);
 }
 
+static bool validate_shape(enum DType dtype, int shape[4], size_t length) {
+	size_t expected_length = 1;
+	int max_elements = INT_MAX;
+
+	for (int i = 0; i < 4; ++i) {
+		int dim = shape[i] == 0 ? 1 : shape[i];
+
+		if (dim < 0 || dim > max_elements) {
+			return false;
+		}
+
+		expected_length *= dim;
+		max_elements /= dim;
+	}
+
+	size_t element_size = (dtype == dt_f32) ? sizeof(float) : sizeof(uint16_t);
+
+	return expected_length * element_size == length;
+}
+
 static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, const char* json, const jsmntok_t* tokens, int toki) {
 	assert(tokens[toki].type == JSMN_STRING);
 	json_copy(tensor->name, sizeof(tensor->name), json, &tokens[toki]);
@@ -49,6 +70,8 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 
 	int n_keys = tokens[toki].size;
 	toki++;
+
+	size_t length = 0;
 
 	for (int i = 0; i < n_keys; ++i) {
 		const jsmntok_t* key = &tokens[toki];
@@ -76,14 +99,19 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 			long long end = json_llong(json, &tokens[toki + 3]);
 			toki += 4;
 
-			if (start < 0 || end <= start || (size_t)end > bytes_size) {
+			if (start < 0 || end <= start || end > bytes_size) {
 				return -1;
 			}
 
 			tensor->data = (char*)bytes + start;
+			length = end - start;
 		} else {
 			return -1;
 		}
+	}
+
+	if (!validate_shape(tensor->dtype, tensor->shape, length)) {
+		return -1;
 	}
 
 	return toki;
