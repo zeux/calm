@@ -6,12 +6,14 @@ import json
 import os.path
 import safetensors
 import safetensors.torch
+import sentencepiece
 import torch
 
 argp = argparse.ArgumentParser()
 argp.add_argument("output", type=str)
 argp.add_argument("input", type=str, nargs="?")
 argp.add_argument("--config", type=str)
+argp.add_argument("--tokenizer", type=str)
 argp.add_argument("--models", type=str, nargs="+")
 argp.add_argument("--dtype", type=str, default="float16", choices=["bfloat16", "float16", "float32"])
 args = argp.parse_args()
@@ -22,6 +24,10 @@ if args.input is not None:
         args.config = os.path.join(args.input, "config.json")
         if not os.path.exists(args.config):
             argp.error("no config.json found in {}".format(args.input))
+    if args.tokenizer is None:
+        args.tokenizer = os.path.join(args.input, "tokenizer.model")
+        if not os.path.exists(args.tokenizer):
+            argp.error("no tokenizer.model found in {}".format(args.input))
     if args.models is None:
         files = os.listdir(args.input)
         args.models = [os.path.join(args.input, fn) for fn in files if os.path.splitext(fn)[1] == ".safetensors"]
@@ -30,7 +36,7 @@ if args.input is not None:
         if len(args.models) == 0:
             argp.error("no .safetensors or .bin files found in {}".format(args.input))
 elif args.config is None or args.models is None:
-    argp.error("arguments --config and --models are required unless argument input is specified")
+    argp.error("arguments --config, --tokenizer and --models are required unless argument input is specified")
 
 with open(args.config, "r") as f:
     config = json.load(f)
@@ -52,6 +58,30 @@ metadata["n_kv_heads"] = config["num_key_value_heads"]
 metadata["vocab_size"] = config["vocab_size"]
 if "rope_theta" in config:
     metadata["rope_theta"] = config["rope_theta"]
+
+# load tokenizer model
+sp_model = sentencepiece.SentencePieceProcessor(model_file=args.tokenizer)
+assert sp_model.vocab_size() == sp_model.get_piece_size()
+assert sp_model.vocab_size() == config["vocab_size"]
+assert sp_model.bos_id() == config["bos_token_id"]
+assert sp_model.eos_id() == config["eos_token_id"]
+
+# get all the tokens (postprocessed) and their scores as floats
+tokens, scores = [], []
+for i in range(sp_model.vocab_size()):
+    # decode the token and light postprocessing
+    t = sp_model.id_to_piece(i)
+    s = sp_model.get_score(i)
+    if i == sp_model.bos_id():
+        t = '\n<s>\n'
+    elif i == sp_model.eos_id():
+        t = '\n</s>\n'
+    t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
+    b = t.encode('utf-8') # bytes of this token, utf-8 encoded
+    assert b.count(0) == 0 # no null bytes allowed
+
+    tokens.append(b)
+    scores.append(s)
 
 # load model files
 tensors = {}
@@ -86,6 +116,11 @@ for k, v in tensors.items():
         v = permute_reverse(v, n_heads // (dim2 // dim1), dim1, dim2)
 
     tensors[k] = v.to(dtype)
+
+# add tokenizer tensors
+# note: we concatenate all bytes of all tokens into a single tensor
+tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
+tensors["tokenizer.scores"] = torch.tensor(scores, dtype=torch.float32)
 
 # metadata values must be strings in safetensors
 safetensors.torch.save_file(tensors, args.output, {k: str(v) for k, v in metadata.items()})
