@@ -1,4 +1,4 @@
-# calm
+# 😌 calm
 
 This is an experimental implementation of language model inference, aiming to get maximum single-GPU hardware utilization for LLM architectures with a minimal implementation. It is heavily work in progress (for example, it doesn't run on GPU yet!).
 
