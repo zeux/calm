@@ -927,7 +927,6 @@ void error_usage() {
 	fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
 	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
 	fprintf(stderr, "  -i <string> input prompt\n");
-	fprintf(stderr, "  -z <string> optional path to custom tokenizer\n");
 	fprintf(stderr, "  -m <string> mode: generate|chat, default: generate\n");
 	fprintf(stderr, "  -y <string> (optional) system prompt in chat mode\n");
 	exit(EXIT_FAILURE);
