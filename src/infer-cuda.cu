@@ -7,6 +7,8 @@
 
 #include <cuda_fp16.h>
 
+typedef __half cudtype_t;
+
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -83,7 +85,7 @@ static void softmax(float* x, int size) {
 	}
 }
 
-__global__ static void matmul_kernel(float* xout, float* x, __half* w, int n, int d) {
+__global__ static void kernel_matmul(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < d);
 
@@ -95,10 +97,43 @@ __global__ static void matmul_kernel(float* xout, float* x, __half* w, int n, in
 	xout[i] = val;
 }
 
+__global__ static void kernel_matmuladd(float* xout, float* x, cudtype_t* w, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float val = 0.0f;
+	for (int j = 0; j < n; j++) {
+		val += float(w[i * n + j]) * x[j];
+	}
+	val += xout[i];
+
+	xout[i] = val;
+}
+
+// F.silu(self.w1(x)) * self.w3(x)
+__global__ static void kernel_ffn13(float* xout, float* x, cudtype_t* w1, cudtype_t* w3, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float v1 = 0.0f;
+	float v3 = 0.0f;
+	for (int j = 0; j < n; j++) {
+		v1 += float(w1[i * n + j]) * x[j];
+		v3 += float(w3[i * n + j]) * x[j];
+	}
+
+	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+	float val = v1;
+	val *= 1.0f / (1.0f + expf(-v1));
+	val *= v3;
+
+	xout[i] = val;
+}
+
 static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
 	// W (d,n) @ x (n,) -> xout (d,)
 	assert(d % 32 == 0);
-	matmul_kernel<<<d / 32, 32>>>(xout, x, (__half*)w, n, d);
+	kernel_matmul<<<d / 32, 32>>>(xout, x, (cudtype_t*)w, n, d);
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
@@ -195,44 +230,20 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		}
 
 		// final matmul to get the output of the attention
-		matmul(s->xb2, s->xb, w->wo[l], dim, dim);
+		assert(dim % 32 == 0);
+		kernel_matmuladd<<<dim / 32, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);
 
 		CUDA_SYNC();
-
-		// residual connection back into x
-		for (int i = 0; i < dim; i++) {
-			x[i] += s->xb2[i];
-		}
 
 		// ffn rmsnorm
 		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
 
-		// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-		// first calculate self.w1(x) and self.w3(x)
-		matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
-		matmul(s->hb2, s->xb, w->w3[l], dim, hidden_dim);
+		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
+		assert(hidden_dim % 32 == 0 && dim % 32 == 0);
+		kernel_ffn13<<<hidden_dim / 32, 32>>>(s->hb, s->xb, (cudtype_t*)w->w1[l], (cudtype_t*)w->w3[l], dim, hidden_dim);
+		kernel_matmuladd<<<dim / 32, 32>>>(x, s->hb, (cudtype_t*)w->w2[l], hidden_dim, dim);
 
 		CUDA_SYNC();
-
-		// SwiGLU non-linearity
-		for (int i = 0; i < hidden_dim; i++) {
-			float val = s->hb[i];
-			// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-			val *= (1.0f / (1.0f + expf(-val)));
-			// elementwise multiply with w3(x)
-			val *= s->hb2[i];
-			s->hb[i] = val;
-		}
-
-		// final matmul to get the output of the ffn
-		matmul(s->xb, s->hb, w->w2[l], hidden_dim, dim);
-
-		CUDA_SYNC();
-
-		// residual connection
-		for (int i = 0; i < dim; i++) {
-			x[i] += s->xb[i];
-		}
 	}
 
 	// final rmsnorm
