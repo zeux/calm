@@ -17,6 +17,8 @@
 		}                                                                                                \
 	} while (0)
 
+#define CUDA_SYNC() CUDA_CHECK(cudaDeviceSynchronize())
+
 static void* cuda_devicecopy(void* host, size_t size) {
 	void* device = NULL;
 	CUDA_CHECK(cudaMalloc(&device, size));
@@ -97,7 +99,6 @@ static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
 	// W (d,n) @ x (n,) -> xout (d,)
 	assert(d % 32 == 0);
 	matmul_kernel<<<d / 32, 32>>>(xout, x, (__half*)w, n, d);
-	CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
@@ -133,6 +134,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		matmul(s->q, s->xb, w->wq[l], dim, dim);
 		matmul(s->k, s->xb, w->wk[l], dim, kv_dim);
 		matmul(s->v, s->xb, w->wv[l], dim, kv_dim);
+
+		CUDA_SYNC();
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		for (int i = 0; i < dim; i += 2) {
@@ -194,6 +197,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		// final matmul to get the output of the attention
 		matmul(s->xb2, s->xb, w->wo[l], dim, dim);
 
+		CUDA_SYNC();
+
 		// residual connection back into x
 		for (int i = 0; i < dim; i++) {
 			x[i] += s->xb2[i];
@@ -206,6 +211,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		// first calculate self.w1(x) and self.w3(x)
 		matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
 		matmul(s->hb2, s->xb, w->w3[l], dim, hidden_dim);
+
+		CUDA_SYNC();
 
 		// SwiGLU non-linearity
 		for (int i = 0; i < hidden_dim; i++) {
@@ -220,6 +227,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		// final matmul to get the output of the ffn
 		matmul(s->xb, s->hb, w->w2[l], hidden_dim, dim);
 
+		CUDA_SYNC();
+
 		// residual connection
 		for (int i = 0; i < dim; i++) {
 			x[i] += s->xb[i];
@@ -231,5 +240,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	// classifier into logits
 	matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+
+	CUDA_SYNC();
+
 	return s->logits;
 }
