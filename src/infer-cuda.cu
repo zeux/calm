@@ -1,9 +1,9 @@
 #include "model.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 #include <cuda_fp16.h>
 
@@ -16,6 +16,35 @@
 			abort();                                                                                     \
 		}                                                                                                \
 	} while (0)
+
+static void* cuda_devicecopy(void* host, size_t size) {
+	void* device = NULL;
+	CUDA_CHECK(cudaMalloc(&device, size));
+	CUDA_CHECK(cudaMemcpy(device, host, size, cudaMemcpyHostToDevice));
+	return device;
+}
+
+extern "C" void prepare_cuda(struct Transformer* transformer) {
+	struct Config* config = &transformer->config;
+	struct Weights* weights = &transformer->weights;
+
+	int dim = config->dim;
+	int hidden_dim = config->hidden_dim;
+	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
+
+	for (int l = 0; l < config->n_layers; ++l) {
+		weights->wq[l] = (dtype_t*)cuda_devicecopy(weights->wq[l], dim * dim * sizeof(dtype_t));
+		weights->wk[l] = (dtype_t*)cuda_devicecopy(weights->wk[l], dim * kv_dim * sizeof(dtype_t));
+		weights->wv[l] = (dtype_t*)cuda_devicecopy(weights->wv[l], dim * kv_dim * sizeof(dtype_t));
+		weights->wo[l] = (dtype_t*)cuda_devicecopy(weights->wo[l], dim * dim * sizeof(dtype_t));
+
+		weights->w1[l] = (dtype_t*)cuda_devicecopy(weights->w1[l], dim * hidden_dim * sizeof(dtype_t));
+		weights->w2[l] = (dtype_t*)cuda_devicecopy(weights->w2[l], dim * hidden_dim * sizeof(dtype_t));
+		weights->w3[l] = (dtype_t*)cuda_devicecopy(weights->w3[l], dim * hidden_dim * sizeof(dtype_t));
+	}
+
+	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
+}
 
 static void rmsnorm(float* o, float* x, dtype_t* weight, int size) {
 	// calculate sum of squares
@@ -52,21 +81,23 @@ static void softmax(float* x, int size) {
 	}
 }
 
-static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
-	// W (d,n) @ x (n,) -> xout (d,)
-	// by far the most amount of time is spent inside this little function
-	int i;
-#pragma omp parallel for private(i)
-	for (i = 0; i < d; i++) {
-		float val = 0.0f;
-		for (int j = 0; j < n; j++) {
-			val += w[i * n + j] * x[j];
-		}
-		xout[i] = val;
+__global__ static void matmul_kernel(float* xout, float* x, __half* w, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float val = 0.0f;
+	for (int j = 0; j < n; j++) {
+		val += float(w[i * n + j]) * x[j];
 	}
+
+	xout[i] = val;
 }
 
-extern "C" void prepare_cuda(struct Transformer* transformer) {
+static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
+	// W (d,n) @ x (n,) -> xout (d,)
+	assert(d % 32 == 0);
+	matmul_kernel<<<d / 32, 32>>>(xout, x, (__half*)w, n, d);
+	CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {

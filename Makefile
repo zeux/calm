@@ -16,7 +16,7 @@ LDFLAGS=-lm -fopenmp -lcudart
 all: $(BINARY)
 
 format:
-	clang-format -i src/*.c src/*.h
+	clang-format -i src/*.c src/*.h src/*.cu
 
 $(BUILD)/fuzz-tensors: src/tensors.c
 	clang $(CFLAGS) -DFUZZING -O1 -fsanitize=address,fuzzer -o $@ $^

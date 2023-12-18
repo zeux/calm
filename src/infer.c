@@ -1,7 +1,7 @@
 #include "model.h"
 
-#include <string.h>
 #include <math.h>
+#include <string.h>
 
 static void rmsnorm(float* o, float* x, dtype_t* weight, int size) {
 	// calculate sum of squares
