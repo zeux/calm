@@ -18,6 +18,9 @@
 
 float* forward(struct Transformer* transformer, int token, int pos);
 
+void prepare_cuda(struct Transformer* transformer);
+float* forward_cuda(struct Transformer* transformer, int token, int pos);
+
 void malloc_run_state(struct RunState* s, struct Config* p) {
 	// we calloc instead of malloc to keep valgrind happy
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
@@ -706,6 +709,7 @@ void error_usage() {
 	fprintf(stderr, "  -i <string> input prompt\n");
 	fprintf(stderr, "  -m <string> mode: generate|chat, default: generate\n");
 	fprintf(stderr, "  -y <string> (optional) system prompt in chat mode\n");
+	fprintf(stderr, "  -a <string> use accelerator (cpu, cuda)\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -720,6 +724,7 @@ int main(int argc, char* argv[]) {
 	unsigned long long rng_seed = 0; // seed rng with time by default
 	char* mode = "generate";         // generate|chat
 	char* system_prompt = NULL;      // the (optional) system prompt to use in chat mode
+	char* accelerator = "cpu";       // cpu|cuda
 
 	// poor man's C argparse so we can override the defaults above from the command line
 	if (argc >= 2) {
@@ -753,6 +758,8 @@ int main(int argc, char* argv[]) {
 			mode = argv[i + 1];
 		} else if (argv[i][1] == 'y') {
 			system_prompt = argv[i + 1];
+		} else if (argv[i][1] == 'a') {
+			accelerator = argv[i + 1];
 		} else {
 			error_usage();
 		}
@@ -776,10 +783,19 @@ int main(int argc, char* argv[]) {
 	}
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
-	transformer.forward = forward;
 	build_transformer(&transformer.config, &transformer.weights, &tensors);
 	// allocate the RunState buffers
 	malloc_run_state(&transformer.state, &transformer.config);
+
+	if (strcmp(accelerator, "cuda") == 0) {
+		prepare_cuda(&transformer);
+		transformer.forward = forward_cuda;
+	} else if (strcmp(accelerator, "cpu") == 0) {
+		transformer.forward = forward;
+	} else {
+		fprintf(stderr, "unknown accelerator: %s\n", accelerator);
+		exit(EXIT_FAILURE);
+	}
 
 	if (steps == 0 || steps > transformer.config.seq_len)
 		steps = transformer.config.seq_len; // ovrerride to ~max length
