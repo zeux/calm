@@ -37,6 +37,9 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
 
 	for (int l = 0; l < config->n_layers; ++l) {
+		weights->rms_att_weight[l] = (dtype_t*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(dtype_t));
+		weights->rms_ffn_weight[l] = (dtype_t*)cuda_devicecopy(weights->rms_ffn_weight[l], dim * sizeof(dtype_t));
+
 		weights->wq[l] = (dtype_t*)cuda_devicecopy(weights->wq[l], dim * dim * sizeof(dtype_t));
 		weights->wk[l] = (dtype_t*)cuda_devicecopy(weights->wk[l], dim * kv_dim * sizeof(dtype_t));
 		weights->wv[l] = (dtype_t*)cuda_devicecopy(weights->wv[l], dim * kv_dim * sizeof(dtype_t));
@@ -47,22 +50,9 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		weights->w3[l] = (dtype_t*)cuda_devicecopy(weights->w3[l], dim * hidden_dim * sizeof(dtype_t));
 	}
 
-	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
-}
+	weights->rms_final_weight = (dtype_t*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(dtype_t));
 
-static void rmsnorm(float* o, float* x, dtype_t* weight, int size) {
-	// calculate sum of squares
-	float ss = 0.0f;
-	for (int j = 0; j < size; j++) {
-		ss += x[j] * x[j];
-	}
-	ss /= size;
-	ss += 1e-5f;
-	ss = 1.0f / sqrtf(ss);
-	// normalize and scale
-	for (int j = 0; j < size; j++) {
-		o[j] = weight[j] * (ss * x[j]);
-	}
+	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
 }
 
 static void softmax(float* x, int size) {
@@ -82,6 +72,27 @@ static void softmax(float* x, int size) {
 	// normalize
 	for (int i = 0; i < size; i++) {
 		x[i] /= sum;
+	}
+}
+
+__global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int size) {
+	// calculate sum of squares (per thread)
+	float ss = 0.0f;
+	for (int j = threadIdx.x; j < size; j += 32) {
+		ss += x[j] * x[j];
+	}
+	// sum across threads
+	#pragma unroll
+	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
+		ss += __shfl_xor_sync(0xffffffff, ss, mask);
+	}
+	// compute scale
+	ss /= size;
+	ss += 1e-5f;
+	ss = 1.0f / sqrtf(ss);
+	// normalize and scale
+	for (int j = threadIdx.x; j < size; j += 32) {
+		o[j] = float(weight[j]) * (ss * x[j]);
 	}
 }
 
@@ -130,12 +141,6 @@ __global__ static void kernel_ffn13(float* xout, float* x, cudtype_t* w1, cudtyp
 	xout[i] = val;
 }
 
-static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
-	// W (d,n) @ x (n,) -> xout (d,)
-	assert(d % 32 == 0);
-	kernel_matmul<<<d / 32, 32>>>(xout, x, (cudtype_t*)w, n, d);
-}
-
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
 
 	// a few convenience variables
@@ -149,6 +154,10 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
 
+	// ensure all dimensions are warp-aligned
+	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
+	assert(p->vocab_size % 32 == 0);
+
 	// copy the token embedding into x
 	dtype_t* content_row = w->token_embedding_table + token * dim;
 	for (int i = 0; i < dim; ++i)
@@ -158,7 +167,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	for (unsigned long long l = 0; l < p->n_layers; l++) {
 
 		// attention rmsnorm
-		rmsnorm(s->xb, x, w->rms_att_weight[l], dim);
+		kernel_rmsnorm<<<1, 32>>>(s->xb, x, (cudtype_t*)w->rms_att_weight[l], dim);
 
 		// key and value point to the kv cache
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
@@ -166,9 +175,9 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		s->v = s->value_cache + loff + pos * kv_dim;
 
 		// qkv matmuls for this position
-		matmul(s->q, s->xb, w->wq[l], dim, dim);
-		matmul(s->k, s->xb, w->wk[l], dim, kv_dim);
-		matmul(s->v, s->xb, w->wv[l], dim, kv_dim);
+		kernel_matmul<<<dim / 32, 32>>>(s->q, s->xb, (cudtype_t*)w->wq[l], dim, dim);
+		kernel_matmul<<<kv_dim / 32, 32>>>(s->k, s->xb, (cudtype_t*)w->wk[l], dim, kv_dim);
+		kernel_matmul<<<kv_dim / 32, 32>>>(s->v, s->xb, (cudtype_t*)w->wv[l], dim, kv_dim);
 
 		CUDA_SYNC();
 
@@ -230,27 +239,21 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		}
 
 		// final matmul to get the output of the attention
-		assert(dim % 32 == 0);
 		kernel_matmuladd<<<dim / 32, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);
 
-		CUDA_SYNC();
-
 		// ffn rmsnorm
-		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
+		kernel_rmsnorm<<<1, 32>>>(s->xb, x, (cudtype_t*)w->rms_ffn_weight[l], dim);
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-		assert(hidden_dim % 32 == 0 && dim % 32 == 0);
 		kernel_ffn13<<<hidden_dim / 32, 32>>>(s->hb, s->xb, (cudtype_t*)w->w1[l], (cudtype_t*)w->w3[l], dim, hidden_dim);
 		kernel_matmuladd<<<dim / 32, 32>>>(x, s->hb, (cudtype_t*)w->w2[l], hidden_dim, dim);
-
-		CUDA_SYNC();
 	}
 
 	// final rmsnorm
-	rmsnorm(x, x, w->rms_final_weight, dim);
+	kernel_rmsnorm<<<1, 32>>>(x, x, (cudtype_t*)w->rms_final_weight, dim);
 
 	// classifier into logits
-	matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+	kernel_matmul<<<p->vocab_size / 32, 32>>>(s->logits, x, (cudtype_t*)w->wcls, p->dim, p->vocab_size);
 
 	CUDA_SYNC();
 
