@@ -148,6 +148,22 @@ __global__ static void kernel_ffn13(float* xout, float* x, cudtype_t* w1, cudtyp
 	xout[i] = val;
 }
 
+__global__ static void kernel_rope(float* vec, int head_size, int pos, float theta, int d) {
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
+	assert(unsigned(i) < d);
+
+	int head_dim = i % head_size;
+	float freq = 1.0f / powf(theta, head_dim / (float)head_size);
+	float val = pos * freq;
+	float fcr = cosf(val);
+	float fci = sinf(val);
+
+	float v0 = vec[i];
+	float v1 = vec[i + 1];
+	vec[i] = v0 * fcr - v1 * fci;
+	vec[i + 1] = v0 * fci + v1 * fcr;
+}
+
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
 
 	// a few convenience variables
@@ -185,24 +201,12 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		kernel_matmul<<<kv_dim / 32, 32>>>(s->k, s->xb, (cudtype_t*)w->wk[l], dim, kv_dim);
 		kernel_matmul<<<kv_dim / 32, 32>>>(s->v, s->xb, (cudtype_t*)w->wv[l], dim, kv_dim);
 
-		CUDA_SYNC();
-
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
-		for (int i = 0; i < dim; i += 2) {
-			int head_dim = i % head_size;
-			float freq = 1.0f / powf(p->rope_theta, head_dim / (float)head_size);
-			float val = pos * freq;
-			float fcr = cosf(val);
-			float fci = sinf(val);
-			int rotn = i < kv_dim ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
-			for (int v = 0; v < rotn; v++) {
-				float* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
-				float v0 = vec[i];
-				float v1 = vec[i + 1];
-				vec[i] = v0 * fcr - v1 * fci;
-				vec[i + 1] = v0 * fci + v1 * fcr;
-			}
-		}
+		assert(dim % 64 == 0 && kv_dim % 64 == 0);
+		kernel_rope<<<dim / 64, 32>>>(s->q, head_size, pos, p->rope_theta, dim);
+		kernel_rope<<<kv_dim / 64, 32>>>(s->k, head_size, pos, p->rope_theta, kv_dim);
+
+		CUDA_SYNC();
 
 		// multihead attention. iterate over all heads
 		int h;
