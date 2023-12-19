@@ -78,6 +78,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 }
 
+__device__ static float matmul(float* x, cudtype_t* w, int i, int n) {
+	float val = 0.0f;
+	for (int j = 0; j < n; j++) {
+		val += float(w[i * n + j]) * x[j];
+	}
+	return val;
+}
+
 __global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < size);
@@ -111,15 +119,7 @@ __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int
 	}
 }
 
-__device__ static float matmul(float* x, cudtype_t* w, int i, int n) {
-	float val = 0.0f;
-	for (int j = 0; j < n; j++) {
-		val += float(w[i * n + j]) * x[j];
-	}
-	return val;
-}
-
-__global__ static void kernel_matmul(float* xout, float* x, cudtype_t* w, int n, int d) {
+__global__ static void kernel_matmul_cls(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < d);
 
@@ -128,7 +128,25 @@ __global__ static void kernel_matmul(float* xout, float* x, cudtype_t* w, int n,
 	xout[i] = val;
 }
 
-__global__ static void kernel_matmuladd(float* xout, float* x, cudtype_t* w, int n, int d) {
+__global__ static void kernel_matmul_q(float* xout, float* x, cudtype_t* w, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float val = matmul(x, w, i, n);
+
+	xout[i] = val;
+}
+
+__global__ static void kernel_matmul_kv(float* xout, float* x, cudtype_t* w, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float val = matmul(x, w, i, n);
+
+	xout[i] = val;
+}
+
+__global__ static void kernel_matmul_attn(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < d);
 
@@ -138,8 +156,7 @@ __global__ static void kernel_matmuladd(float* xout, float* x, cudtype_t* w, int
 	xout[i] = val;
 }
 
-// F.silu(self.w1(x)) * self.w3(x)
-__global__ static void kernel_ffn13(float* xout, float* x, cudtype_t* w1, cudtype_t* w3, int n, int d) {
+__global__ static void kernel_matmul_ffn13(float* xout, float* x, cudtype_t* w1, cudtype_t* w3, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < d);
 
@@ -150,6 +167,16 @@ __global__ static void kernel_ffn13(float* xout, float* x, cudtype_t* w1, cudtyp
 	float val = v1;
 	val *= 1.0f / (1.0f + expf(-v1));
 	val *= v3;
+
+	xout[i] = val;
+}
+
+__global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float val = matmul(x, w, i, n);
+	val += xout[i];
 
 	xout[i] = val;
 }
@@ -281,9 +308,9 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		s->v = s->value_cache + loff + pos * kv_dim;
 
 		// qkv matmuls for this position
-		kernel_matmul<<<dim / 32, 32>>>(s->q, s->xb, (cudtype_t*)w->wq[l], dim, dim);
-		kernel_matmul<<<kv_dim / 32, 32>>>(s->k, s->xb, (cudtype_t*)w->wk[l], dim, kv_dim);
-		kernel_matmul<<<kv_dim / 32, 32>>>(s->v, s->xb, (cudtype_t*)w->wv[l], dim, kv_dim);
+		kernel_matmul_q<<<dim / 32, 32>>>(s->q, s->xb, (cudtype_t*)w->wq[l], dim, dim);
+		kernel_matmul_kv<<<kv_dim / 32, 32>>>(s->k, s->xb, (cudtype_t*)w->wk[l], dim, kv_dim);
+		kernel_matmul_kv<<<kv_dim / 32, 32>>>(s->v, s->xb, (cudtype_t*)w->wv[l], dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
@@ -301,21 +328,21 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
 		// final matmul to get the output of the attention
-		kernel_matmuladd<<<dim / 32, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);
+		kernel_matmul_attn<<<dim / 32, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);
 
 		// ffn rmsnorm
 		kernel_rmsnorm<<<1, 32>>>(s->xb, x, (cudtype_t*)w->rms_ffn_weight[l], dim);
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-		kernel_ffn13<<<hidden_dim / 32, 32>>>(s->hb, s->xb, (cudtype_t*)w->w1[l], (cudtype_t*)w->w3[l], dim, hidden_dim);
-		kernel_matmuladd<<<dim / 32, 32>>>(x, s->hb, (cudtype_t*)w->w2[l], hidden_dim, dim);
+		kernel_matmul_ffn13<<<hidden_dim / 32, 32>>>(s->hb, s->xb, (cudtype_t*)w->w1[l], (cudtype_t*)w->w3[l], dim, hidden_dim);
+		kernel_matmul_ffn2<<<dim / 32, 32>>>(x, s->hb, (cudtype_t*)w->w2[l], hidden_dim, dim);
 	}
 
 	// final rmsnorm
 	kernel_rmsnorm<<<1, 32>>>(x, x, (cudtype_t*)w->rms_final_weight, dim);
 
 	// classifier into logits
-	kernel_matmul<<<p->vocab_size / 32, 32>>>(s->logits, x, (cudtype_t*)w->wcls, p->dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size / 32, 32>>>(s->logits, x, (cudtype_t*)w->wcls, p->dim, p->vocab_size);
 
 	CUDA_SYNC();
 
