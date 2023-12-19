@@ -3,7 +3,6 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 #include <cuda_fp16.h>
 
@@ -209,9 +208,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		CUDA_SYNC();
 
 		// multihead attention. iterate over all heads
-		int h;
-#pragma omp parallel for private(h)
-		for (h = 0; h < p->n_heads; h++) {
+		for (int h = 0; h < p->n_heads; h++) {
 			// get the query vector for this head
 			float* q = s->q + h * head_size;
 			// attention scores for this head
@@ -235,7 +232,9 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 			// weighted sum of the values, store back into xb
 			float* xb = s->xb + h * head_size;
-			memset(xb, 0, head_size * sizeof(float));
+			for (int i = 0; i < head_size; i++) {
+				xb[i] = 0.0f;
+			}
 			for (int t = 0; t <= pos; t++) {
 				// get the value vector for this head and at this timestep
 				float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
