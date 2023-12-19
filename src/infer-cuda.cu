@@ -51,7 +51,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	}
 
 	weights->rms_final_weight = (dtype_t*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(dtype_t));
-
+	weights->token_embedding_table = (dtype_t*)cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * sizeof(dtype_t));
 	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
 }
 
@@ -73,6 +73,13 @@ static void softmax(float* x, int size) {
 	for (int i = 0; i < size; i++) {
 		x[i] /= sum;
 	}
+}
+
+__global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < size);
+
+	o[i] = float(weight[i]);
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int size) {
@@ -159,9 +166,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	assert(p->vocab_size % 32 == 0);
 
 	// copy the token embedding into x
-	dtype_t* content_row = w->token_embedding_table + token * dim;
-	for (int i = 0; i < dim; ++i)
-		x[i] = content_row[i];
+	assert(token < p->vocab_size);
+	kernel_embed<<<dim / 32, 32>>>(x, (cudtype_t*)w->token_embedding_table + token * dim, dim);
 
 	// forward all the layers
 	for (unsigned long long l = 0; l < p->n_layers; l++) {
