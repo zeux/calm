@@ -206,6 +206,24 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 }
 
+__global__ static void kernel_attn_mix(float* xout, float* attb, float* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < head_size);
+
+	int h = blockIdx.y;
+	assert(unsigned(h) < n_heads);
+
+	float* att = attb + h * seq_len;
+	float* val = valb + (h / kv_mul) * head_size;
+
+	float res = 0.0f;
+	for (int t = 0; t <= pos; t++) {
+		res += att[t] * val[t * kv_dim + i];
+	}
+
+	xout[h * head_size + i] = res;
+}
+
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
 
 	// a few convenience variables
@@ -254,26 +272,9 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		// softmax the scores to get attention weights, from 0..pos inclusively
 		kernel_attn_softmax<<<dim3(1, p->n_heads), 32>>>(s->att, p->n_heads, p->seq_len, pos);
 
-		CUDA_SYNC();
-
 		// compute weighted sum of the values into xb
-		for (int h = 0; h < p->n_heads; h++) {
-			float* att = s->att + h * p->seq_len;
-			float* xb = s->xb + h * head_size;
-			for (int i = 0; i < head_size; i++) {
-				xb[i] = 0.0f;
-			}
-			for (int t = 0; t <= pos; t++) {
-				// get the value vector for this head and at this timestep
-				float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-				// get the attention weight for this timestep
-				float a = att[t];
-				// accumulate the weighted value into xb
-				for (int i = 0; i < head_size; i++) {
-					xb[i] += a * v[i];
-				}
-			}
-		}
+		assert(head_size % 32 == 0);
+		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
 		// final matmul to get the output of the attention
 		kernel_matmuladd<<<dim / 32, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);
