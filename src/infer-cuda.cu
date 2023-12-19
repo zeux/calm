@@ -104,7 +104,7 @@ __device__ static float matmul(float* x, cudtype_t* w, int i, int n) {
 
 __global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < size);
+	assert(i < size);
 
 	o[i] = float(weight[i]);
 }
@@ -145,34 +145,28 @@ __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int
 
 __global__ static void kernel_matmul_cls(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
-	float val = matmul(x, w, i, n);
-
-	xout[i] = val;
+	xout[i] = matmul(x, w, i, n);
 }
 
 __global__ static void kernel_matmul_q(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
-	float val = matmul(x, w, i, n);
-
-	xout[i] = val;
+	xout[i] = matmul(x, w, i, n);
 }
 
 __global__ static void kernel_matmul_kv(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
-	float val = matmul(x, w, i, n);
-
-	xout[i] = val;
+	xout[i] = matmul(x, w, i, n);
 }
 
 __global__ static void kernel_matmul_attn(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
 	float val = matmul(x, w, i, n);
 	val += xout[i];
@@ -182,7 +176,7 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, cudtype_t* w, i
 
 __global__ static void kernel_matmul_ffn13(float* xout, float* x, cudtype_t* w1, cudtype_t* w3, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
 	float v1 = matmul(x, w1, i, n);
 	float v3 = matmul(x, w3, i, n);
@@ -197,7 +191,7 @@ __global__ static void kernel_matmul_ffn13(float* xout, float* x, cudtype_t* w1,
 
 __global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, int n, int d) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
 	float val = matmul(x, w, i, n);
 	val += xout[i];
@@ -207,7 +201,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, i
 
 __global__ static void kernel_rope(float* vec, int head_size, int pos, float theta, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-	assert(unsigned(i) < d);
+	assert(i < d);
 
 	int head_dim = i % head_size;
 	float freq = 1.0f / powf(theta, head_dim / (float)head_size);
@@ -228,7 +222,7 @@ __global__ static void kernel_attn_score(float* attb, float* qb, float* kb, int 
 	}
 
 	int h = blockIdx.y;
-	assert(unsigned(h) < n_heads);
+	assert(h < n_heads);
 
 	float* q = qb + h * head_size;
 	float* k = kb + t * kv_dim + (h / kv_mul) * head_size;
@@ -247,7 +241,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	int i = threadIdx.x;
 
 	int h = blockIdx.y;
-	assert(unsigned(h) < n_heads);
+	assert(h < n_heads);
 
 	float* att = attb + h * seq_len;
 
@@ -277,10 +271,10 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 
 __global__ static void kernel_attn_mix(float* xout, float* attb, float* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < head_size);
+	assert(i < head_size);
 
 	int h = blockIdx.y;
-	assert(unsigned(h) < n_heads);
+	assert(h < n_heads);
 
 	float* att = attb + h * seq_len;
 	float* val = valb + (h / kv_mul) * head_size;
@@ -319,7 +313,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	kernel_embed<<<dim / 32, 32>>>(x, (cudtype_t*)w->token_embedding_table + token * dim, dim);
 
 	// forward all the layers
-	for (unsigned long long l = 0; l < p->n_layers; l++) {
+	for (int l = 0; l < p->n_layers; l++) {
 
 		// attention rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, (cudtype_t*)w->rms_att_weight[l], dim);
