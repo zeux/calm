@@ -161,6 +161,28 @@ __global__ static void kernel_rope(float* vec, int head_size, int pos, float the
 	vec[i + 1] = v0 * fci + v1 * fcr;
 }
 
+__global__ static void kernel_attn_score(float* attb, float* qb, float* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+	int t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t > pos) {
+		return;
+	}
+
+	int h = blockIdx.y;
+	assert(unsigned(h) < n_heads);
+
+	float* q = qb + h * head_size;
+	float* k = kb + t * kv_dim + (h / kv_mul) * head_size;
+	float* att = attb + h * seq_len;
+
+	float score = 0.0f;
+	for (int i = 0; i < head_size; i++) {
+		score += q[i] * k[i];
+	}
+	score /= sqrtf(head_size);
+
+	att[t] = score;
+}
+
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
 
 	// a few convenience variables
@@ -203,28 +225,10 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		kernel_rope<<<dim / 64, 32>>>(s->q, head_size, pos, p->rope_theta, dim);
 		kernel_rope<<<kv_dim / 64, 32>>>(s->k, head_size, pos, p->rope_theta, kv_dim);
 
-		CUDA_SYNC();
+		// attention scores for all heads
+		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
-		// multihead attention. iterate over all heads
-		for (int h = 0; h < p->n_heads; h++) {
-			// get the query vector for this head
-			float* q = s->q + h * head_size;
-			// attention scores for this head
-			float* att = s->att + h * p->seq_len;
-			// iterate over all timesteps, including the current one
-			for (int t = 0; t <= pos; t++) {
-				// get the key vector for this head and at this timestep
-				float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-				// calculate the attention score as the dot product of q and k
-				float score = 0.0f;
-				for (int i = 0; i < head_size; i++) {
-					score += q[i] * k[i];
-				}
-				score /= sqrtf(head_size);
-				// save the score to the attention buffer
-				att[t] = score;
-			}
-		}
+		CUDA_SYNC();
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
 		for (int h = 0; h < p->n_heads; h++) {
