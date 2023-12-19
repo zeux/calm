@@ -16,43 +16,11 @@
 // ----------------------------------------------------------------------------
 // Transformer model
 
+void prepare(struct Transformer* transformer);
 float* forward(struct Transformer* transformer, int token, int pos);
 
 void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos);
-
-void malloc_run_state(struct RunState* s, struct Config* p) {
-	// we calloc instead of malloc to keep valgrind happy
-	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-	s->x = calloc(p->dim, sizeof(float));
-	s->xb = calloc(p->dim, sizeof(float));
-	s->xb2 = calloc(p->dim, sizeof(float));
-	s->hb = calloc(p->hidden_dim, sizeof(float));
-	s->hb2 = calloc(p->hidden_dim, sizeof(float));
-	s->q = calloc(p->dim, sizeof(float));
-	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
-	s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
-	s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
-	s->logits = calloc(p->vocab_size, sizeof(float));
-	// ensure all mallocs went fine
-	if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
-		fprintf(stderr, "malloc failed!\n");
-		exit(EXIT_FAILURE);
-	}
-}
-
-void free_run_state(struct RunState* s) {
-	free(s->x);
-	free(s->xb);
-	free(s->xb2);
-	free(s->hb);
-	free(s->hb2);
-	free(s->q);
-	free(s->att);
-	free(s->logits);
-	free(s->key_cache);
-	free(s->value_cache);
-}
 
 void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
 	// create config
@@ -784,13 +752,12 @@ int main(int argc, char* argv[]) {
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
 	build_transformer(&transformer.config, &transformer.weights, &tensors);
-	// allocate the RunState buffers
-	malloc_run_state(&transformer.state, &transformer.config);
 
 	if (strcmp(accelerator, "cuda") == 0) {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
 	} else if (strcmp(accelerator, "cpu") == 0) {
+		prepare(&transformer);
 		transformer.forward = forward;
 	} else {
 		fprintf(stderr, "unknown accelerator: %s\n", accelerator);
@@ -819,9 +786,9 @@ int main(int argc, char* argv[]) {
 	}
 
 	// memory and file handles cleanup
+	// TODO: free transformer.state and transformer.weights for CUDA
 	free_sampler(&sampler);
 	free_tokenizer(&tokenizer);
-	free_run_state(&transformer.state);
 	tensors_close(&tensors);
 	return 0;
 }

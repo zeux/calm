@@ -27,9 +27,22 @@ static void* cuda_devicecopy(void* host, size_t size) {
 	return device;
 }
 
+static void* cuda_devicealloc(size_t size) {
+	void* ptr = NULL;
+	CUDA_CHECK(cudaMalloc(&ptr, size));
+	return ptr;
+}
+
+static void* cuda_hostalloc(size_t size) {
+	void* ptr = NULL;
+	CUDA_CHECK(cudaHostAlloc(&ptr, size, 0));
+	return ptr;
+}
+
 extern "C" void prepare_cuda(struct Transformer* transformer) {
 	struct Config* config = &transformer->config;
 	struct Weights* weights = &transformer->weights;
+	struct RunState* state = &transformer->state;
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
@@ -52,6 +65,17 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	weights->rms_final_weight = (dtype_t*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(dtype_t));
 	weights->token_embedding_table = (dtype_t*)cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * sizeof(dtype_t));
 	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
+
+	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
+	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->key_cache = (float*)cuda_devicealloc(config->n_layers * config->seq_len * kv_dim * sizeof(float));
+	state->value_cache = (float*)cuda_devicealloc(config->n_layers * config->seq_len * kv_dim * sizeof(float));
+	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
+
+	// logits are going to be read by the host so we just allocate them in host and write to host directly
+	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 }
 
 __global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
