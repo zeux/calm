@@ -1,2 +1,11 @@
+# build intermediates
 .vscode/
 build/
+
+# model files
+*.calm
+
+# profiling tools
+*.sqlite
+*.nsys-rep
+perf.data*
