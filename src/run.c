@@ -550,8 +550,9 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 	// report achieved tok/s (pos-1 because the timer starts after first iteration)
 	if (pos > 1) {
 		long end = time_in_ms();
-		fprintf(stderr, "throughput: %.2f tok/s; bandwidth: %.2f GB/s\n",
+		fprintf(stderr, "throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s\n",
 		        (pos - 1) / (double)(end - start) * 1000,
+		        (double)(end - start) / (pos - 1),
 		        ((double)read_bytes / 1024 / 1024 / 1024) / ((double)(end - start) / 1000));
 	}
 
