@@ -54,26 +54,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
 }
 
-static void softmax(float* x, int size) {
-	// find max value (for numerical stability)
-	float max_val = x[0];
-	for (int i = 1; i < size; i++) {
-		if (x[i] > max_val) {
-			max_val = x[i];
-		}
-	}
-	// exp and sum
-	float sum = 0.0f;
-	for (int i = 0; i < size; i++) {
-		x[i] = expf(x[i] - max_val);
-		sum += x[i];
-	}
-	// normalize
-	for (int i = 0; i < size; i++) {
-		x[i] /= sum;
-	}
-}
-
 __global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < size);
@@ -82,22 +62,27 @@ __global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int size) {
+	int i = threadIdx.x;
+
 	// calculate sum of squares (per thread)
 	float ss = 0.0f;
-	for (int j = threadIdx.x; j < size; j += 32) {
+	for (int j = i; j < size; j += warpSize) {
 		ss += x[j] * x[j];
 	}
+
 	// sum across threads
 	#pragma unroll
 	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
 		ss += __shfl_xor_sync(0xffffffff, ss, mask);
 	}
+
 	// compute scale
 	ss /= size;
 	ss += 1e-5f;
 	ss = 1.0f / sqrtf(ss);
+
 	// normalize and scale
-	for (int j = threadIdx.x; j < size; j += 32) {
+	for (int j = i; j < size; j += warpSize) {
 		o[j] = float(weight[j]) * (ss * x[j]);
 	}
 }
@@ -175,12 +160,50 @@ __global__ static void kernel_attn_score(float* attb, float* qb, float* kb, int 
 	float* att = attb + h * seq_len;
 
 	float score = 0.0f;
-	for (int i = 0; i < head_size; i++) {
-		score += q[i] * k[i];
+	for (int j = 0; j < head_size; j++) {
+		score += q[j] * k[j];
 	}
 	score /= sqrtf(head_size);
 
 	att[t] = score;
+}
+
+__global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int pos) {
+	int i = threadIdx.x;
+
+	int h = blockIdx.y;
+	assert(unsigned(h) < n_heads);
+
+	float* att = attb + h * seq_len;
+
+	// find max value per thread (for numerical stability)
+	float max_val = 0.f;
+	for (int j = i; j <= pos; j += warpSize) {
+		max_val = max(max_val, att[j]);
+	}
+
+	// max across threads
+	#pragma unroll
+	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
+		max_val = max(max_val, __shfl_xor_sync(0xffffffff, max_val, mask));
+	}
+
+	// exp and sum per thread
+	float sum = 0.0f;
+	for (int j = i; j <= pos; j += warpSize) {
+		sum += expf(att[j] - max_val);
+	}
+
+	// sum across threads
+	#pragma unroll
+	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
+		sum += __shfl_xor_sync(0xffffffff, sum, mask);
+	}
+
+	// output normalized values
+	for (int j = i; j <= pos; j += warpSize) {
+		att[j] = expf(att[j] - max_val) / sum;
+	}
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
@@ -228,13 +251,10 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
-		CUDA_SYNC();
-
 		// softmax the scores to get attention weights, from 0..pos inclusively
-		for (int h = 0; h < p->n_heads; h++) {
-			float* att = s->att + h * p->seq_len;
-			softmax(att, pos + 1);
-		}
+		kernel_attn_softmax<<<dim3(1, p->n_heads), 32>>>(s->att, p->n_heads, p->seq_len, pos);
+
+		CUDA_SYNC();
 
 		// compute weighted sum of the values into xb
 		for (int h = 0; h < p->n_heads; h++) {
