@@ -78,6 +78,22 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 }
 
+__device__ static float warpreduce_sum(float v) {
+	#pragma unroll
+	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
+		v += __shfl_xor_sync(0xffffffff, v, mask);
+	}
+	return v;
+}
+
+__device__ static float warpreduce_max(float v) {
+	#pragma unroll
+	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
+		v = max(v, __shfl_xor_sync(0xffffffff, v, mask));
+	}
+	return v;
+}
+
 __device__ static float matmul(float* x, cudtype_t* w, int i, int n) {
 	float val = 0.0f;
 	for (int j = 0; j < n; j++) {
@@ -103,10 +119,7 @@ __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int
 	}
 
 	// sum across threads
-	#pragma unroll
-	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
-		ss += __shfl_xor_sync(0xffffffff, ss, mask);
-	}
+	ss = warpreduce_sum(ss);
 
 	// compute scale
 	ss /= size;
@@ -234,10 +247,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 
 	// max across threads
-	#pragma unroll
-	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
-		max_val = max(max_val, __shfl_xor_sync(0xffffffff, max_val, mask));
-	}
+	max_val = warpreduce_max(max_val);
 
 	// exp and sum per thread
 	float sum = 0.0f;
@@ -246,10 +256,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 
 	// sum across threads
-	#pragma unroll
-	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
-		sum += __shfl_xor_sync(0xffffffff, sum, mask);
-	}
+	sum = warpreduce_sum(sum);
 
 	// output normalized values
 	for (int j = i; j <= pos; j += warpSize) {
