@@ -102,14 +102,19 @@ __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int
 	}
 }
 
-__global__ static void kernel_matmul(float* xout, float* x, cudtype_t* w, int n, int d) {
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(unsigned(i) < d);
-
+__device__ static float matmul(float* x, cudtype_t* w, int i, int n) {
 	float val = 0.0f;
 	for (int j = 0; j < n; j++) {
 		val += float(w[i * n + j]) * x[j];
 	}
+	return val;
+}
+
+__global__ static void kernel_matmul(float* xout, float* x, cudtype_t* w, int n, int d) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(unsigned(i) < d);
+
+	float val = matmul(x, w, i, n);
 
 	xout[i] = val;
 }
@@ -118,10 +123,7 @@ __global__ static void kernel_matmuladd(float* xout, float* x, cudtype_t* w, int
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < d);
 
-	float val = 0.0f;
-	for (int j = 0; j < n; j++) {
-		val += float(w[i * n + j]) * x[j];
-	}
+	float val = matmul(x, w, i, n);
 	val += xout[i];
 
 	xout[i] = val;
@@ -132,12 +134,8 @@ __global__ static void kernel_ffn13(float* xout, float* x, cudtype_t* w1, cudtyp
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(unsigned(i) < d);
 
-	float v1 = 0.0f;
-	float v3 = 0.0f;
-	for (int j = 0; j < n; j++) {
-		v1 += float(w1[i * n + j]) * x[j];
-		v3 += float(w3[i * n + j]) * x[j];
-	}
+	float v1 = matmul(x, w1, i, n);
+	float v3 = matmul(x, w3, i, n);
 
 	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
 	float val = v1;
@@ -226,11 +224,17 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 				// save the score to the attention buffer
 				att[t] = score;
 			}
+		}
 
-			// softmax the scores to get attention weights, from 0..pos inclusively
+		// softmax the scores to get attention weights, from 0..pos inclusively
+		for (int h = 0; h < p->n_heads; h++) {
+			float* att = s->att + h * p->seq_len;
 			softmax(att, pos + 1);
+		}
 
-			// weighted sum of the values, store back into xb
+		// compute weighted sum of the values into xb
+		for (int h = 0; h < p->n_heads; h++) {
+			float* att = s->att + h * p->seq_len;
 			float* xb = s->xb + h * head_size;
 			for (int i = 0; i < head_size; i++) {
 				xb[i] = 0.0f;
