@@ -675,6 +675,7 @@ void error_usage() {
 	fprintf(stderr, "  -p <float>  p value in top-p (nucleus) sampling in [0,1] default 0.9\n");
 	fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
 	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
+	fprintf(stderr, "  -r <int>    number of sequences to decode, default 1\n");
 	fprintf(stderr, "  -i <string> input prompt\n");
 	fprintf(stderr, "  -m <string> mode: generate|chat, default: generate\n");
 	fprintf(stderr, "  -y <string> (optional) system prompt in chat mode\n");
@@ -689,6 +690,7 @@ int main(int argc, char* argv[]) {
 	float temperature = 1.0f;        // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 	float topp = 0.9f;               // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
 	int steps = 256;                 // number of steps to run for
+	int sequences = 1;               // number of sequences to decode
 	char* prompt = NULL;             // prompt string
 	unsigned long long rng_seed = 0; // seed rng with time by default
 	char* mode = "generate";         // generate|chat
@@ -721,6 +723,8 @@ int main(int argc, char* argv[]) {
 			rng_seed = atoi(argv[i + 1]);
 		} else if (argv[i][1] == 'n') {
 			steps = atoi(argv[i + 1]);
+		} else if (argv[i][1] == 'r') {
+			sequences = atoi(argv[i + 1]);
 		} else if (argv[i][1] == 'i') {
 			prompt = argv[i + 1];
 		} else if (argv[i][1] == 'm') {
@@ -778,7 +782,9 @@ int main(int argc, char* argv[]) {
 
 	// run!
 	if (strcmp(mode, "generate") == 0) {
-		generate(&transformer, &tokenizer, &sampler, prompt, steps);
+		for (int s = 0; s < sequences; ++s) {
+			generate(&transformer, &tokenizer, &sampler, prompt, steps);
+		}
 	} else if (strcmp(mode, "chat") == 0) {
 		chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
 	} else {
