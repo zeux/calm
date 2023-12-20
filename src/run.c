@@ -553,7 +553,7 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 		fprintf(stderr, "throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s\n",
 		        (pos - 1) / (double)(end - start) * 1000,
 		        (double)(end - start) / (pos - 1),
-		        ((double)read_bytes / 1024 / 1024 / 1024) / ((double)(end - start) / 1000));
+		        ((double)read_bytes / 1e9) / ((double)(end - start) / 1000));
 	}
 
 	free(prompt_tokens);

@@ -427,8 +427,6 @@ static long time_in_ms() {
 }
 
 int main() {
-	double GB = 1024 * 1024 * 1024;
-
 	// benchmark memcpy performance
 	for (int dim = 16384; dim <= 32768; dim += 4096) {
 		cudtype_t* w = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
@@ -453,7 +451,7 @@ int main() {
 
 		long end = time_in_ms();
 
-		printf("memcpy %d: %.2f ms/copy, %.2f GB/s\n", dim, double(end - start) / n, (2 * double(dim) * dim * sizeof(cudtype_t) * n / GB) / (double(end - start) / 1e3));
+		printf("memcpy %d: %.2f ms/op, %.2f GB/s\n", dim, double(end - start) / n, (2 * double(dim) * dim * sizeof(cudtype_t) * n / 1e9) / (double(end - start) / 1e3));
 
 		CUDA_CHECK(cudaFree(wc));
 		CUDA_CHECK(cudaFree(w));
@@ -486,7 +484,7 @@ int main() {
 
 		long end = time_in_ms();
 
-		printf("dim %d: %.2f ms/matmul, %.2f GB/s\n", dim, double(end - start) / n, (double(dim) * dim * sizeof(cudtype_t) * n / GB) / (double(end - start) / 1e3));
+		printf("matmul %d: %.2f ms/op, %.2f GB/s\n", dim, double(end - start) / n, (double(dim) * dim * sizeof(cudtype_t) * n / 1e9) / (double(end - start) / 1e3));
 
 		CUDA_CHECK(cudaFree(xout));
 		CUDA_CHECK(cudaFree(x));
