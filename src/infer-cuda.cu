@@ -79,7 +79,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 }
 
 __device__ static float warpreduce_sum(float v) {
-	#pragma unroll
+#pragma unroll
 	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
 		v += __shfl_xor_sync(0xffffffff, v, mask);
 	}
@@ -87,7 +87,7 @@ __device__ static float warpreduce_sum(float v) {
 }
 
 __device__ static float warpreduce_max(float v) {
-	#pragma unroll
+#pragma unroll
 	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
 		v = max(v, __shfl_xor_sync(0xffffffff, v, mask));
 	}
@@ -104,11 +104,24 @@ __device__ static float warpreduce_max(float v) {
 }
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
-__device__ static float matmul_warppar(float* x, cudtype_t* w, int i, int n) {
+[[maybe_unused]] __device__ static float matmul_warppar(float* x, cudtype_t* w, int i, int n) {
 	assert(n % warpSize == 0);
 	float val = 0.0f;
 	for (int j = threadIdx.x; j < n; j += warpSize) {
 		val += float(w[i * n + j]) * x[j];
+	}
+	return warpreduce_sum(val);
+}
+
+// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
+// specialized for half weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
+[[maybe_unused]] __device__ static float matmul_warppar_half2(float* x, __half* w, int i, int n) {
+	assert(n % (warpSize * 2) == 0);
+	float val = 0.0f;
+	for (int j = threadIdx.x * 2; j < n; j += warpSize * 2) {
+		float2 ww = __half22float2(*(half2*)&w[i * n + j]);
+		val += ww.x * x[j];
+		val += ww.y * x[j + 1];
 	}
 	return warpreduce_sum(val);
 }
