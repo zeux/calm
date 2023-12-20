@@ -21,6 +21,9 @@ format:
 $(BUILD)/fuzz-tensors: src/tensors.c
 	clang $(CFLAGS) -DFUZZING -O1 -fsanitize=address,fuzzer -o $@ $^
 
+$(BUILD)/perftest-cuda: src/infer-cuda.cu
+	$(NVCC) $(CUFLAGS) -DCUDA_PERFTEST -o $@ $^
+
 $(BINARY): $(OBJECTS)
 	$(CC) $^ $(LDFLAGS) -o $@
 

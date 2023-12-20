@@ -404,3 +404,93 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	return s->logits;
 }
+
+#ifdef CUDA_PERFTEST
+#include <time.h>
+
+__global__ static void kernel_matmul_perf(float* xout, float* x, cudtype_t* w, int n, int d) {
+	int i = blockIdx.x;
+	assert(i < d);
+
+	float val = matmul_warppar(x, w, i, n);
+
+	if (threadIdx.x == 0) {
+		xout[i] = val;
+	}
+}
+
+static long time_in_ms() {
+	// return time in milliseconds, for benchmarking the model speed
+	struct timespec time;
+	clock_gettime(CLOCK_REALTIME, &time);
+	return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+}
+
+int main() {
+	double GB = 1024 * 1024 * 1024;
+
+	// benchmark memcpy performance
+	for (int dim = 16384; dim <= 32768; dim += 4096) {
+		cudtype_t* w = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
+		CUDA_CHECK(cudaMemset(w, 0, dim * dim * sizeof(cudtype_t)));
+
+		cudtype_t* wc = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
+
+		// warmup
+		CUDA_CHECK(cudaMemcpy(wc, w, dim * dim * sizeof(cudtype_t), cudaMemcpyDeviceToDevice));
+		CUDA_SYNC();
+
+		int n = 10000000 / dim;
+
+		// benchmark
+		long start = time_in_ms();
+
+		for (int i = 0; i < n; i++) {
+			CUDA_CHECK(cudaMemcpy(wc, w, dim * dim * sizeof(cudtype_t), cudaMemcpyDeviceToDevice));
+		}
+
+		CUDA_SYNC();
+
+		long end = time_in_ms();
+
+		printf("memcpy %d: %.2f ms/copy, %.2f GB/s\n", dim, double(end - start) / n, (2 * double(dim) * dim * sizeof(cudtype_t) * n / GB) / (double(end - start) / 1e3));
+
+		CUDA_CHECK(cudaFree(wc));
+		CUDA_CHECK(cudaFree(w));
+	}
+
+	printf("\n");
+
+	// benchmark matmul performance
+	for (int dim = 16384; dim <= 32768; dim += 4096) {
+		cudtype_t* w = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
+		CUDA_CHECK(cudaMemset(w, 0, dim * dim * sizeof(cudtype_t)));
+
+		float* x = (float*)cuda_devicealloc(dim * sizeof(float));
+		float* xout = (float*)cuda_devicealloc(dim * sizeof(float));
+
+		int n = 10000000 / dim;
+
+		// warmup
+		kernel_matmul_perf<<<dim, 32>>>(xout, x, w, dim, dim);
+		CUDA_SYNC();
+
+		// benchmark
+		long start = time_in_ms();
+
+		for (int i = 0; i < n; i++) {
+			kernel_matmul_perf<<<dim, 32>>>(xout, x, w, dim, dim);
+		}
+
+		CUDA_SYNC();
+
+		long end = time_in_ms();
+
+		printf("dim %d: %.2f ms/matmul, %.2f GB/s\n", dim, double(end - start) / n, (double(dim) * dim * sizeof(cudtype_t) * n / GB) / (double(end - start) / 1e3));
+
+		CUDA_CHECK(cudaFree(xout));
+		CUDA_CHECK(cudaFree(x));
+		CUDA_CHECK(cudaFree(w));
+	}
+}
+#endif
