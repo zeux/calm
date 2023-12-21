@@ -1,5 +1,6 @@
-#include <time.h>
+#include <float.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "../src/helpers.cuh"
 
@@ -21,7 +22,7 @@ static void* cuda_devicealloc(size_t size) {
 	return ptr;
 }
 
-__global__ static void kernel_matmul_perf(float* xout, float* x, half* w, int n, int d) {
+__global__ static void kernel_matmul(float* xout, float* x, half* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -73,31 +74,56 @@ int main() {
 	printf("\n");
 
 	// benchmark matmul performance
-	for (int dim = 16384; dim <= 32768; dim += 4096) {
-		half* w = (half*)cuda_devicealloc(dim * dim * sizeof(half));
-		CUDA_CHECK(cudaMemset(w, 0, dim * dim * sizeof(half)));
+	const int dims[][2] = {
+	    // generic large sizes
+	    {4096, 4096},
+	    {8192, 8192},
+	    {16384, 16384},
+	    {32768, 32768},
+	    // mistral 7b
+	    {14336, 4096},
+	    {4096, 1024},
+	    {4096, 14336},
+	    {4096, 32000},
+	    // llama2 7b
+	    {11008, 4096},
+	    {4096, 11008},
+	    {4096, 32000},
+	};
 
-		float* x = (float*)cuda_devicealloc(dim * sizeof(float));
-		float* xout = (float*)cuda_devicealloc(dim * sizeof(float));
+	cudaEvent_t events[1000];
 
-		int n = 10000000 / dim;
+	for (size_t ei = 0; ei < sizeof(events) / sizeof(events[0]); ei++) {
+		CUDA_CHECK(cudaEventCreate(&events[ei]));
+	}
 
-		// warmup
-		kernel_matmul_perf<<<dim, 32>>>(xout, x, w, dim, dim);
-		CUDA_SYNC();
+	for (size_t di = 0; di < sizeof(dims) / sizeof(dims[0]); di++) {
+		int n = dims[di][0], d = dims[di][1];
 
-		// benchmark
-		long start = time_in_ms();
+		half* w = (half*)cuda_devicealloc(n * d * sizeof(half));
+		CUDA_CHECK(cudaMemset(w, 0, n * d * sizeof(half)));
 
-		for (int i = 0; i < n; i++) {
-			kernel_matmul_perf<<<dim, 32>>>(xout, x, w, dim, dim);
+		float* x = (float*)cuda_devicealloc(n * sizeof(float));
+		float* xout = (float*)cuda_devicealloc(d * sizeof(float));
+
+		CUDA_CHECK(cudaEventRecord(events[0]));
+
+		for (size_t ei = 1; ei < sizeof(events) / sizeof(events[0]); ei++) {
+			kernel_matmul<<<d, 32>>>(xout, x, w, n, d);
+			CUDA_CHECK(cudaEventRecord(events[ei]));
 		}
 
-		CUDA_SYNC();
+		CUDA_CHECK(cudaEventSynchronize(events[sizeof(events) / sizeof(events[0]) - 1]));
 
-		long end = time_in_ms();
+		float mint = FLT_MAX;
 
-		printf("matmul %d: %.2f ms/op, %.2f GB/s\n", dim, double(end - start) / n, (double(dim) * dim * sizeof(half) * n / 1e9) / (double(end - start) / 1e3));
+		for (size_t ei = 1; ei < sizeof(events) / sizeof(events[0]); ei++) {
+			float t;
+			CUDA_CHECK(cudaEventElapsedTime(&t, events[ei - 1], events[ei]));
+			mint = mint < t ? mint : t;
+		}
+
+		printf("matmul %dx%d: %.2f ms peak, %.2f GB/s\n", n, d, mint, (double(n) * d * sizeof(half) / 1e9) / (mint / 1e3));
 
 		CUDA_CHECK(cudaFree(xout));
 		CUDA_CHECK(cudaFree(x));
