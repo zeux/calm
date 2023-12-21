@@ -33,39 +33,44 @@ __global__ static void kernel_matmul(float* xout, float* x, half* w, int n, int 
 	}
 }
 
-static long time_in_ms() {
-	// return time in milliseconds, for benchmarking the model speed
-	struct timespec time;
-	clock_gettime(CLOCK_REALTIME, &time);
-	return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+static float events_mintime(cudaEvent_t* events, size_t nevents) {
+	float mint = FLT_MAX;
+
+	for (size_t ei = 1; ei < nevents; ei++) {
+		float t;
+		CUDA_CHECK(cudaEventElapsedTime(&t, events[ei - 1], events[ei]));
+		mint = mint < t ? mint : t;
+	}
+
+	return mint;
 }
 
 int main() {
+	cudaEvent_t events[1000];
+
+	for (size_t ei = 0; ei < sizeof(events) / sizeof(events[0]); ei++) {
+		CUDA_CHECK(cudaEventCreate(&events[ei]));
+	}
+
 	// benchmark memcpy performance
-	for (int dim = 16384; dim <= 32768; dim += 4096) {
-		half* w = (half*)cuda_devicealloc(dim * dim * sizeof(half));
-		CUDA_CHECK(cudaMemset(w, 0, dim * dim * sizeof(half)));
+	for (size_t mb = 512; mb <= 2048; mb *= 2) {
+		void* w = cuda_devicealloc(mb * 1024 * 1024);
+		CUDA_CHECK(cudaMemset(w, 0, mb * 1024 * 1024));
 
-		half* wc = (half*)cuda_devicealloc(dim * dim * sizeof(half));
+		void* wc = cuda_devicealloc(mb * 1024 * 1024);
 
-		// warmup
-		CUDA_CHECK(cudaMemcpy(wc, w, dim * dim * sizeof(half), cudaMemcpyDeviceToDevice));
-		CUDA_SYNC();
+		CUDA_CHECK(cudaEventRecord(events[0]));
 
-		int n = 10000000 / dim;
-
-		// benchmark
-		long start = time_in_ms();
-
-		for (int i = 0; i < n; i++) {
-			CUDA_CHECK(cudaMemcpy(wc, w, dim * dim * sizeof(half), cudaMemcpyDeviceToDevice));
+		for (size_t ei = 1; ei < sizeof(events) / sizeof(events[0]); ei++) {
+			CUDA_CHECK(cudaMemcpy(wc, w, mb * 1024 * 1024, cudaMemcpyDeviceToDevice));
+			CUDA_CHECK(cudaEventRecord(events[ei]));
 		}
 
-		CUDA_SYNC();
+		CUDA_CHECK(cudaEventSynchronize(events[sizeof(events) / sizeof(events[0]) - 1]));
 
-		long end = time_in_ms();
+		float mint = events_mintime(events, sizeof(events) / sizeof(events[0]));
 
-		printf("memcpy %d: %.2f ms/op, %.2f GB/s\n", dim, double(end - start) / n, (2 * double(dim) * dim * sizeof(half) * n / 1e9) / (double(end - start) / 1e3));
+		printf("memcpy %d MB: %.2f ms peak, %.2f GB/s\n", (int)mb, mint, (2 * double(mb) * 1024 * 1024 / 1e9) / (mint / 1e3));
 
 		CUDA_CHECK(cudaFree(wc));
 		CUDA_CHECK(cudaFree(w));
@@ -75,11 +80,12 @@ int main() {
 
 	// benchmark matmul performance
 	const int dims[][2] = {
-	    // generic large sizes
+	    // ~2 GB matrix that definitely isn't impacted by cache effects
+	    {32768, 32768},
+	    // generic sizes
 	    {4096, 4096},
 	    {8192, 8192},
 	    {16384, 16384},
-	    {32768, 32768},
 	    // mistral 7b
 	    {14336, 4096},
 	    {4096, 1024},
@@ -91,13 +97,11 @@ int main() {
 	    {4096, 32000},
 	};
 
-	cudaEvent_t events[1000];
-
-	for (size_t ei = 0; ei < sizeof(events) / sizeof(events[0]); ei++) {
-		CUDA_CHECK(cudaEventCreate(&events[ei]));
-	}
-
 	for (size_t di = 0; di < sizeof(dims) / sizeof(dims[0]); di++) {
+		if (di == 1) {
+			printf("\n");
+		}
+
 		int n = dims[di][0], d = dims[di][1];
 
 		half* w = (half*)cuda_devicealloc(n * d * sizeof(half));
@@ -115,18 +119,16 @@ int main() {
 
 		CUDA_CHECK(cudaEventSynchronize(events[sizeof(events) / sizeof(events[0]) - 1]));
 
-		float mint = FLT_MAX;
-
-		for (size_t ei = 1; ei < sizeof(events) / sizeof(events[0]); ei++) {
-			float t;
-			CUDA_CHECK(cudaEventElapsedTime(&t, events[ei - 1], events[ei]));
-			mint = mint < t ? mint : t;
-		}
+		float mint = events_mintime(events, sizeof(events) / sizeof(events[0]));
 
 		printf("matmul %dx%d: %.2f ms peak, %.2f GB/s\n", n, d, mint, (double(n) * d * sizeof(half) / 1e9) / (mint / 1e3));
 
 		CUDA_CHECK(cudaFree(xout));
 		CUDA_CHECK(cudaFree(x));
 		CUDA_CHECK(cudaFree(w));
+	}
+
+	for (size_t ei = 0; ei < sizeof(events) / sizeof(events[0]); ei++) {
+		CUDA_CHECK(cudaEventDestroy(events[ei]));
 	}
 }
