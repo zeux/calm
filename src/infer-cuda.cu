@@ -180,23 +180,17 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, cudtype_t* w, in
 	}
 }
 
-__global__ static void kernel_matmul_q(float* xout, float* x, cudtype_t* w, int n, int d) {
+__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, cudtype_t* wq, cudtype_t* wk, cudtype_t* wv, int n, int d, int kvd) {
 	int i = blockIdx.x;
-	assert(i < d);
+	assert(i < d + kvd * 2);
 
-	float val = matmul_warppar(x, w, i, n);
+	float* out = i < d ? qout : (i < d + kvd ? kout : vout);
+	cudtype_t* w = i < d ? wq : (i < d + kvd ? wk : wv);
+	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
+
+	float val = matmul_warppar(x, w, j, n);
 	if (threadIdx.x == 0) {
-		xout[i] = val;
-	}
-}
-
-__global__ static void kernel_matmul_kv(float* xout, float* x, cudtype_t* w, int n, int d) {
-	int i = blockIdx.x;
-	assert(i < d);
-
-	float val = matmul_warppar(x, w, i, n);
-	if (threadIdx.x == 0) {
-		xout[i] = val;
+		out[j] = val;
 	}
 }
 
@@ -241,7 +235,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, i
 	}
 }
 
-__global__ static void kernel_rope(float* vec, int head_size, int pos, float theta, int d) {
+__global__ static void kernel_rope(float* q, float* k, int head_size, int pos, float theta, int d, int kvd) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < d);
 
@@ -251,10 +245,17 @@ __global__ static void kernel_rope(float* vec, int head_size, int pos, float the
 	float fcr = cosf(val);
 	float fci = sinf(val);
 
-	float v0 = vec[i];
-	float v1 = vec[i + 1];
-	vec[i] = v0 * fcr - v1 * fci;
-	vec[i + 1] = v0 * fci + v1 * fcr;
+	float q0 = q[i];
+	float q1 = q[i + 1];
+	q[i] = q0 * fcr - q1 * fci;
+	q[i + 1] = q0 * fci + q1 * fcr;
+
+	if (i < kvd) {
+		float k0 = k[i];
+		float k1 = k[i + 1];
+		k[i] = k0 * fcr - k1 * fci;
+		k[i + 1] = k0 * fci + k1 * fcr;
+	}
 }
 
 __global__ static void kernel_attn_score(float* attb, float* qb, float* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
@@ -366,14 +367,11 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		s->v = s->value_cache + loff + pos * kv_dim;
 
 		// qkv matmuls for this position
-		kernel_matmul_q<<<dim, 32>>>(s->q, s->xb, (cudtype_t*)w->wq[l], dim, dim);
-		kernel_matmul_kv<<<kv_dim, 32>>>(s->k, s->xb, (cudtype_t*)w->wk[l], dim, kv_dim);
-		kernel_matmul_kv<<<kv_dim, 32>>>(s->v, s->xb, (cudtype_t*)w->wv[l], dim, kv_dim);
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (cudtype_t*)w->wq[l], (cudtype_t*)w->wk[l], (cudtype_t*)w->wv[l], dim, dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope<<<dim / 64, 32>>>(s->q, head_size, pos, p->rope_theta, dim);
-		kernel_rope<<<kv_dim / 64, 32>>>(s->k, head_size, pos, p->rope_theta, kv_dim);
+		kernel_rope<<<dim / 64, 32>>>(s->q, s->k, head_size, pos, p->rope_theta, dim, kv_dim);
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
