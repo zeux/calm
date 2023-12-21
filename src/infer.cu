@@ -6,6 +6,8 @@
 
 #include <cuda_fp16.h>
 
+#include "helpers.cuh"
+
 typedef __half cudtype_t;
 
 #define CUDA_CHECK(x)                                                                                    \
@@ -76,56 +78,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
-}
-
-__device__ static float warpreduce_sum(float v) {
-#pragma unroll
-	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
-		v += __shfl_xor_sync(0xffffffff, v, mask);
-	}
-	return v;
-}
-
-__device__ static float warpreduce_max(float v) {
-#pragma unroll
-	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
-		v = max(v, __shfl_xor_sync(0xffffffff, v, mask));
-	}
-	return v;
-}
-
-// regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
-[[maybe_unused]] __device__ static float matmul(float* x, cudtype_t* w, int i, int n) {
-	float val = 0.0f;
-	for (int j = 0; j < n; j++) {
-		val += float(w[i * n + j]) * x[j];
-	}
-	return val;
-}
-
-// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
-[[maybe_unused]] __device__ static float matmul_warppar(float* x, cudtype_t* w, int i, int n) {
-	assert(n % warpSize == 0);
-	int lane = threadIdx.x % warpSize;
-	float val = 0.0f;
-	for (int j = lane; j < n; j += warpSize) {
-		val += float(w[i * n + j]) * x[j];
-	}
-	return warpreduce_sum(val);
-}
-
-// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
-// specialized for half weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-[[maybe_unused]] __device__ static float matmul_warppar_half2(float* x, __half* w, int i, int n) {
-	assert(n % (warpSize * 2) == 0);
-	int lane = threadIdx.x % warpSize;
-	float val = 0.0f;
-	for (int j = lane * 2; j < n; j += warpSize * 2) {
-		float2 ww = __half22float2(*(half2*)&w[i * n + j]);
-		val += ww.x * x[j];
-		val += ww.y * x[j + 1];
-	}
-	return warpreduce_sum(val);
 }
 
 __global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
@@ -404,91 +356,3 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	return s->logits;
 }
-
-#ifdef CUDA_PERFTEST
-#include <time.h>
-
-__global__ static void kernel_matmul_perf(float* xout, float* x, cudtype_t* w, int n, int d) {
-	int i = blockIdx.x;
-	assert(i < d);
-
-	float val = matmul_warppar(x, w, i, n);
-
-	if (threadIdx.x == 0) {
-		xout[i] = val;
-	}
-}
-
-static long time_in_ms() {
-	// return time in milliseconds, for benchmarking the model speed
-	struct timespec time;
-	clock_gettime(CLOCK_REALTIME, &time);
-	return time.tv_sec * 1000 + time.tv_nsec / 1000000;
-}
-
-int main() {
-	// benchmark memcpy performance
-	for (int dim = 16384; dim <= 32768; dim += 4096) {
-		cudtype_t* w = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
-		CUDA_CHECK(cudaMemset(w, 0, dim * dim * sizeof(cudtype_t)));
-
-		cudtype_t* wc = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
-
-		// warmup
-		CUDA_CHECK(cudaMemcpy(wc, w, dim * dim * sizeof(cudtype_t), cudaMemcpyDeviceToDevice));
-		CUDA_SYNC();
-
-		int n = 10000000 / dim;
-
-		// benchmark
-		long start = time_in_ms();
-
-		for (int i = 0; i < n; i++) {
-			CUDA_CHECK(cudaMemcpy(wc, w, dim * dim * sizeof(cudtype_t), cudaMemcpyDeviceToDevice));
-		}
-
-		CUDA_SYNC();
-
-		long end = time_in_ms();
-
-		printf("memcpy %d: %.2f ms/op, %.2f GB/s\n", dim, double(end - start) / n, (2 * double(dim) * dim * sizeof(cudtype_t) * n / 1e9) / (double(end - start) / 1e3));
-
-		CUDA_CHECK(cudaFree(wc));
-		CUDA_CHECK(cudaFree(w));
-	}
-
-	printf("\n");
-
-	// benchmark matmul performance
-	for (int dim = 16384; dim <= 32768; dim += 4096) {
-		cudtype_t* w = (cudtype_t*)cuda_devicealloc(dim * dim * sizeof(cudtype_t));
-		CUDA_CHECK(cudaMemset(w, 0, dim * dim * sizeof(cudtype_t)));
-
-		float* x = (float*)cuda_devicealloc(dim * sizeof(float));
-		float* xout = (float*)cuda_devicealloc(dim * sizeof(float));
-
-		int n = 10000000 / dim;
-
-		// warmup
-		kernel_matmul_perf<<<dim, 32>>>(xout, x, w, dim, dim);
-		CUDA_SYNC();
-
-		// benchmark
-		long start = time_in_ms();
-
-		for (int i = 0; i < n; i++) {
-			kernel_matmul_perf<<<dim, 32>>>(xout, x, w, dim, dim);
-		}
-
-		CUDA_SYNC();
-
-		long end = time_in_ms();
-
-		printf("matmul %d: %.2f ms/op, %.2f GB/s\n", dim, double(end - start) / n, (double(dim) * dim * sizeof(cudtype_t) * n / 1e9) / (double(end - start) / 1e3));
-
-		CUDA_CHECK(cudaFree(xout));
-		CUDA_CHECK(cudaFree(x));
-		CUDA_CHECK(cudaFree(w));
-	}
-}
-#endif
