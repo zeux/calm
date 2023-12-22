@@ -482,8 +482,8 @@ size_t kvcache_bandwidth(struct Config* config, int pos) {
 
 	size_t res = 0;
 
-	res += sizeof(float) * config->n_layers * kv_dim * (pos + 1);
-	res += sizeof(float) * config->n_layers * kv_dim * (pos + 1);
+	res += sizeof(kvtype_t) * config->n_layers * kv_dim * (pos + 1);
+	res += sizeof(kvtype_t) * config->n_layers * kv_dim * (pos + 1);
 
 	return res;
 }

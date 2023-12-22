@@ -4,6 +4,7 @@
 
 // Can switch between float and _Float16 (model rebuild required)
 typedef _Float16 dtype_t;
+typedef _Float16 kvtype_t;
 
 struct Config {
 	int dim;          // transformer dimension
@@ -50,8 +51,8 @@ struct RunState {
 	float* att;    // buffer for scores/attention values (n_heads, seq_len)
 	float* logits; // output logits
 	// kv cache
-	float* key_cache;   // (layer, seq_len, dim)
-	float* value_cache; // (layer, seq_len, dim)
+	kvtype_t* key_cache;   // (layer, seq_len, dim)
+	kvtype_t* value_cache; // (layer, seq_len, dim)
 };
 
 struct Transformer {

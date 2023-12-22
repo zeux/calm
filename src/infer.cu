@@ -9,6 +9,7 @@
 #include "helpers.cuh"
 
 typedef __half cudtype_t;
+typedef __half cukvtype_t;
 
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
@@ -80,9 +81,12 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
-	state->key_cache = (float*)cuda_devicealloc(config->n_layers * config->seq_len * kv_dim * sizeof(float));
-	state->value_cache = (float*)cuda_devicealloc(config->n_layers * config->seq_len * kv_dim * sizeof(float));
+	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
+	state->v = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
+
+	state->key_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
+	state->value_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
 
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
@@ -195,7 +199,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, i
 	}
 }
 
-__global__ static void kernel_rope(float* q, float* k, int head_size, int pos, float theta, int d, int kvd) {
+__global__ static void kernel_rope_kv(float* q, float* k, float* v, cukvtype_t* kb, cukvtype_t* vb, int head_size, int pos, float theta, int d, int kvd) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < d);
 
@@ -213,12 +217,20 @@ __global__ static void kernel_rope(float* q, float* k, int head_size, int pos, f
 	if (i < kvd) {
 		float k0 = k[i];
 		float k1 = k[i + 1];
-		k[i] = k0 * fcr - k1 * fci;
-		k[i + 1] = k0 * fci + k1 * fcr;
+		float rk0 = k0 * fcr - k1 * fci;
+		float rk1 = k0 * fci + k1 * fcr;
+
+		k[i] = rk0;
+		k[i + 1] = rk1;
+
+		kb[pos * kvd + i] = rk0;
+		kb[pos * kvd + i + 1] = rk1;
+		vb[pos * kvd + i] = v[i];
+		vb[pos * kvd + i + 1] = v[i + 1];
 	}
 }
 
-__global__ static void kernel_attn_score(float* attb, float* qb, float* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+__global__ static void kernel_attn_score(float* attb, float* qb, cukvtype_t* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t > pos) {
 		return;
@@ -228,12 +240,12 @@ __global__ static void kernel_attn_score(float* attb, float* qb, float* kb, int 
 	assert(h < n_heads);
 
 	float* q = qb + h * head_size;
-	float* k = kb + t * kv_dim + (h / kv_mul) * head_size;
+	cukvtype_t* k = kb + t * kv_dim + (h / kv_mul) * head_size;
 	float* att = attb + h * seq_len;
 
 	float score = 0.0f;
 	for (int j = 0; j < head_size; j++) {
-		score += q[j] * k[j];
+		score += q[j] * float(k[j]);
 	}
 	score /= sqrtf(head_size);
 
@@ -272,7 +284,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 }
 
-__global__ static void kernel_attn_mix(float* xout, float* attb, float* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+__global__ static void kernel_attn_mix(float* xout, float* attb, cukvtype_t* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < head_size);
 
@@ -280,11 +292,11 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, float* valb, in
 	assert(h < n_heads);
 
 	float* att = attb + h * seq_len;
-	float* val = valb + (h / kv_mul) * head_size;
+	cukvtype_t* val = valb + (h / kv_mul) * head_size;
 
 	float res = 0.0f;
 	for (int t = 0; t <= pos; t++) {
-		res += att[t] * val[t * kv_dim + i];
+		res += att[t] * float(val[t * kv_dim + i]);
 	}
 
 	xout[h * head_size + i] = res;
@@ -317,31 +329,27 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
+		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
 		// attention rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, (cudtype_t*)w->rms_att_weight[l], dim);
 
-		// key and value point to the kv cache
-		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
-		s->k = s->key_cache + loff + pos * kv_dim;
-		s->v = s->value_cache + loff + pos * kv_dim;
-
 		// qkv matmuls for this position
 		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (cudtype_t*)w->wq[l], (cudtype_t*)w->wk[l], (cudtype_t*)w->wv[l], dim, dim, kv_dim);
 
-		// RoPE relative positional encoding: complex-valued rotate q and k in each head
+		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope<<<dim / 64, 32>>>(s->q, s->k, head_size, pos, p->rope_theta, dim, kv_dim);
+		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, (cukvtype_t*)s->key_cache + loff, (cukvtype_t*)s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim);
 
 		// attention scores for all heads
-		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, (cukvtype_t*)s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
 		kernel_attn_softmax<<<dim3(1, p->n_heads), 32>>>(s->att, p->n_heads, p->seq_len, pos);
 
 		// compute weighted sum of the values into xb
 		assert(head_size % 32 == 0);
-		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, (cukvtype_t*)s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);

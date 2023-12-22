@@ -16,10 +16,12 @@ void prepare(struct Transformer* transformer) {
 	s->hb = calloc(p->hidden_dim, sizeof(float));
 	s->hb2 = calloc(p->hidden_dim, sizeof(float));
 	s->q = calloc(p->dim, sizeof(float));
-	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
-	s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
+	s->k = calloc(kv_dim, sizeof(float));
+	s->v = calloc(kv_dim, sizeof(float));
 	s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
 	s->logits = calloc(p->vocab_size, sizeof(float));
+	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
+	s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
 	// ensure all mallocs went fine
 	if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
 		fprintf(stderr, "malloc failed!\n");
@@ -117,8 +119,6 @@ float* forward(struct Transformer* transformer, int token, int pos) {
 
 		// key and value point to the kv cache
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
-		s->k = s->key_cache + loff + pos * kv_dim;
-		s->v = s->value_cache + loff + pos * kv_dim;
 
 		// qkv matmuls for this position
 		matmul(s->q, s->xb, w->wq[l], dim, dim);
@@ -128,6 +128,12 @@ float* forward(struct Transformer* transformer, int token, int pos) {
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		rope(s->q, dim, head_size, pos, p->rope_theta);
 		rope(s->k, kv_dim, head_size, pos, p->rope_theta);
+
+		// update kv cache
+		for (int i = 0; i < kv_dim; i++) {
+			s->key_cache[loff + pos * kv_dim + i] = s->k[i];
+			s->value_cache[loff + pos * kv_dim + i] = s->v[i];
+		}
 
 		// multihead attention. iterate over all heads
 		int h;
@@ -140,7 +146,7 @@ float* forward(struct Transformer* transformer, int token, int pos) {
 			// iterate over all timesteps, including the current one
 			for (int t = 0; t <= pos; t++) {
 				// get the key vector for this head and at this timestep
-				float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+				kvtype_t* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
 				// calculate the attention score as the dot product of q and k
 				float score = 0.0f;
 				for (int i = 0; i < head_size; i++) {
@@ -161,7 +167,7 @@ float* forward(struct Transformer* transformer, int token, int pos) {
 			}
 			for (int t = 0; t <= pos; t++) {
 				// get the value vector for this head and at this timestep
-				float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+				kvtype_t* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
 				// get the attention weight for this timestep
 				float a = att[t];
 				// accumulate the weighted value into xb
