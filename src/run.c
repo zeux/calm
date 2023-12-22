@@ -477,12 +477,13 @@ size_t model_bandwidth(struct Config* config) {
 
 size_t kvcache_bandwidth(struct Config* config, int pos) {
 	assert(pos < config->seq_len);
-	int head_size = config->dim / config->n_heads;
+
+	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
 
 	size_t res = 0;
 
-	res += sizeof(dtype_t) * config->n_kv_heads * head_size * (pos + 1);
-	res += sizeof(dtype_t) * config->n_kv_heads * head_size * (pos + 1);
+	res += sizeof(float) * config->n_layers * kv_dim * (pos + 1);
+	res += sizeof(float) * config->n_layers * kv_dim * (pos + 1);
 
 	return res;
 }
