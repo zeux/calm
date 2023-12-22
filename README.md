@@ -1,6 +1,6 @@
 # 😌 calm
 
-This is an experimental implementation of language model inference, aiming to get maximum single-GPU hardware utilization for LLM architectures with a minimal implementation. It is heavily work in progress (for example, it doesn't run on GPU yet!).
+This is an experimental implementation of language model inference, aiming to get maximum single-GPU single-batch hardware utilization for LLM architectures with a minimal implementation. It is heavily work in progress.
 
 If you need support for a wide range of models, computing devices or quantization methods, you're probably looking for [llama.cpp](https://github.com/ggerganov/llama.cpp) or [🤗 Transformers](https://github.com/huggingface/transformers).
 
