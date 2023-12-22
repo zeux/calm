@@ -46,6 +46,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	struct Weights* weights = &transformer->weights;
 	struct RunState* state = &transformer->state;
 
+	cudaDeviceProp devprop = {};
+	CUDA_CHECK(cudaGetDeviceProperties(&devprop, 0));
+
+	printf("# CUDA: %s, SM %d.%d, %.1f GiB, peak bandwidth %.0f GB/s\n",
+		devprop.name, devprop.major, devprop.minor,
+		(double)devprop.totalGlobalMem / (1024 * 1024 * 1024),
+		(double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
+
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;

@@ -648,6 +648,11 @@ int main(int argc, char* argv[]) {
 	struct Transformer transformer = {};
 	build_transformer(&transformer.config, &transformer.weights, &tensors);
 
+	printf("# %s: %d layers, %d context, weights %.1f GiB, KV cache %.1f GiB\n",
+	       checkpoint_path, transformer.config.n_layers, transformer.config.seq_len,
+	       (double)model_bandwidth(&transformer.config) / 1024 / 1024 / 1024,
+	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
+
 	if (strcmp(accelerator, "cuda") == 0) {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
