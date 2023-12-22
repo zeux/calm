@@ -8,9 +8,6 @@
 
 #include "helpers.cuh"
 
-typedef __half cudtype_t;
-typedef __half cukvtype_t;
-
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -92,14 +89,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 }
 
-__global__ static void kernel_embed(float* o, cudtype_t* weight, int size) {
+__global__ static void kernel_embed(float* o, dtype_t* weight, int size) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < size);
 
 	o[i] = float(weight[i]);
 }
 
-__global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int size) {
+__global__ static void kernel_rmsnorm(float* o, float* x, dtype_t* weight, int size) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -133,7 +130,7 @@ __global__ static void kernel_rmsnorm(float* o, float* x, cudtype_t* weight, int
 	}
 }
 
-__global__ static void kernel_matmul_cls(float* xout, float* x, cudtype_t* w, int n, int d) {
+__global__ static void kernel_matmul_cls(float* xout, float* x, dtype_t* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -144,12 +141,12 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, cudtype_t* w, in
 	}
 }
 
-__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, cudtype_t* wq, cudtype_t* wk, cudtype_t* wv, int n, int d, int kvd) {
+__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, dtype_t* wq, dtype_t* wk, dtype_t* wv, int n, int d, int kvd) {
 	int i = blockIdx.x;
 	assert(i < d + kvd * 2);
 
 	float* out = i < d ? qout : (i < d + kvd ? kout : vout);
-	cudtype_t* w = i < d ? wq : (i < d + kvd ? wk : wv);
+	dtype_t* w = i < d ? wq : (i < d + kvd ? wk : wv);
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
 	float val = matmul_warppar(x, w, j, n);
@@ -158,7 +155,7 @@ __global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, 
 	}
 }
 
-__global__ static void kernel_matmul_attn(float* xout, float* x, cudtype_t* w, int n, int d) {
+__global__ static void kernel_matmul_attn(float* xout, float* x, dtype_t* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -170,7 +167,7 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, cudtype_t* w, i
 	}
 }
 
-__global__ static void kernel_matmul_ffn13(float* xout, float* x, cudtype_t* w1, cudtype_t* w3, int n, int d) {
+__global__ static void kernel_matmul_ffn13(float* xout, float* x, dtype_t* w1, dtype_t* w3, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -187,7 +184,7 @@ __global__ static void kernel_matmul_ffn13(float* xout, float* x, cudtype_t* w1,
 	}
 }
 
-__global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, int n, int d) {
+__global__ static void kernel_matmul_ffn2(float* xout, float* x, dtype_t* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -199,7 +196,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, cudtype_t* w, i
 	}
 }
 
-__global__ static void kernel_rope_kv(float* q, float* k, float* v, cukvtype_t* kb, cukvtype_t* vb, int head_size, int pos, float theta, int d, int kvd) {
+__global__ static void kernel_rope_kv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, float theta, int d, int kvd) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < d);
 
@@ -230,7 +227,7 @@ __global__ static void kernel_rope_kv(float* q, float* k, float* v, cukvtype_t* 
 	}
 }
 
-__global__ static void kernel_attn_score(float* attb, float* qb, cukvtype_t* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+__global__ static void kernel_attn_score(float* attb, float* qb, kvtype_t* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t > pos) {
 		return;
@@ -240,7 +237,7 @@ __global__ static void kernel_attn_score(float* attb, float* qb, cukvtype_t* kb,
 	assert(h < n_heads);
 
 	float* q = qb + h * head_size;
-	cukvtype_t* k = kb + t * kv_dim + (h / kv_mul) * head_size;
+	kvtype_t* k = kb + t * kv_dim + (h / kv_mul) * head_size;
 	float* att = attb + h * seq_len;
 
 	float score = 0.0f;
@@ -284,7 +281,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 }
 
-__global__ static void kernel_attn_mix(float* xout, float* attb, cukvtype_t* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+__global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < head_size);
 
@@ -292,7 +289,7 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, cukvtype_t* val
 	assert(h < n_heads);
 
 	float* att = attb + h * seq_len;
-	cukvtype_t* val = valb + (h / kv_mul) * head_size;
+	kvtype_t* val = valb + (h / kv_mul) * head_size;
 
 	float res = 0.0f;
 	for (int t = 0; t <= pos; t++) {
@@ -325,48 +322,48 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32>>>(x, (cudtype_t*)w->token_embedding_table + token * dim, dim);
+	kernel_embed<<<dim / 32, 32>>>(x, w->token_embedding_table + token * dim, dim);
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
 		// attention rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, (cudtype_t*)w->rms_att_weight[l], dim);
+		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_att_weight[l], dim);
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (cudtype_t*)w->wq[l], (cudtype_t*)w->wk[l], (cudtype_t*)w->wv[l], dim, dim, kv_dim);
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, w->wq[l], w->wk[l], w->wv[l], dim, dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, (cukvtype_t*)s->key_cache + loff, (cukvtype_t*)s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim);
+		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim);
 
 		// attention scores for all heads
-		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, (cukvtype_t*)s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
 		kernel_attn_softmax<<<dim3(1, p->n_heads), 32>>>(s->att, p->n_heads, p->seq_len, pos);
 
 		// compute weighted sum of the values into xb
 		assert(head_size % 32 == 0);
-		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, (cukvtype_t*)s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, (cudtype_t*)w->wo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, w->wo[l], dim, dim);
 
 		// ffn rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, (cudtype_t*)w->rms_ffn_weight[l], dim);
+		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-		kernel_matmul_ffn13<<<hidden_dim, 32>>>(s->hb, s->xb, (cudtype_t*)w->w1[l], (cudtype_t*)w->w3[l], dim, hidden_dim);
-		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, (cudtype_t*)w->w2[l], hidden_dim, dim);
+		kernel_matmul_ffn13<<<hidden_dim, 32>>>(s->hb, s->xb, w->w1[l], w->w3[l], dim, hidden_dim);
+		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, w->w2[l], hidden_dim, dim);
 	}
 
 	// final rmsnorm
-	kernel_rmsnorm<<<1, rmsnorm_size>>>(x, x, (cudtype_t*)w->rms_final_weight, dim);
+	kernel_rmsnorm<<<1, rmsnorm_size>>>(x, x, w->rms_final_weight, dim);
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, (cudtype_t*)w->wcls, p->dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, w->wcls, p->dim, p->vocab_size);
 
 	CUDA_SYNC();
 

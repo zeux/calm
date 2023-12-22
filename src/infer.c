@@ -27,6 +27,11 @@ void prepare(struct Transformer* transformer) {
 		fprintf(stderr, "malloc failed!\n");
 		abort();
 	}
+
+#if !defined(__FLT16_MANT_DIG__)
+	fprintf(stderr, "FATAL: _Float16 compiler support is required for CPU backend\n");
+	abort();
+#endif
 }
 
 static void rmsnorm(float* o, float* x, dtype_t* weight, int size) {

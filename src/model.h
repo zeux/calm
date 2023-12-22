@@ -1,10 +1,23 @@
 #pragma once
 
+#ifdef __CUDACC__
+#include <cuda_fp16.h>
+#endif
+
 #define MAX_LAYERS 128
 
 // Can switch between float and _Float16 (model rebuild required)
+#ifdef __CUDACC__
+typedef half dtype_t;
+typedef half kvtype_t;
+#elif defined(__FLT16_MANT_DIG__)
 typedef _Float16 dtype_t;
 typedef _Float16 kvtype_t;
+#else
+// We can't use _Float16 on CPU but we can still run CUDA
+typedef short dtype_t;
+typedef short kvtype_t;
+#endif
 
 struct Config {
 	int dim;          // transformer dimension
