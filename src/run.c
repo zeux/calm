@@ -576,7 +576,6 @@ void error_usage() {
 	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
 	fprintf(stderr, "  -r <int>    number of sequences to decode, default 1\n");
 	fprintf(stderr, "  -i <string> input prompt\n");
-	fprintf(stderr, "  -a <string> use accelerator (cpu, cuda)\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -590,7 +589,6 @@ int main(int argc, char* argv[]) {
 	int sequences = 1;               // number of sequences to decode
 	char* prompt = NULL;             // prompt string
 	unsigned long long rng_seed = 0; // seed rng with time by default
-	char* accelerator = "cpu";       // cpu|cuda
 
 	// poor man's C argparse so we can override the defaults above from the command line
 	if (argc >= 2) {
@@ -622,8 +620,6 @@ int main(int argc, char* argv[]) {
 			sequences = atoi(argv[i + 1]);
 		} else if (argv[i][1] == 'i') {
 			prompt = argv[i + 1];
-		} else if (argv[i][1] == 'a') {
-			accelerator = argv[i + 1];
 		} else {
 			error_usage();
 		}
@@ -654,15 +650,14 @@ int main(int argc, char* argv[]) {
 	       (double)model_bandwidth(&transformer.config) / 1024 / 1024 / 1024,
 	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
 
-	if (strcmp(accelerator, "cuda") == 0) {
-		prepare_cuda(&transformer);
-		transformer.forward = forward_cuda;
-	} else if (strcmp(accelerator, "cpu") == 0) {
+	char* cpu = getenv("CALM_CPU");
+
+	if (cpu && atoi(cpu)) {
 		prepare(&transformer);
 		transformer.forward = forward;
 	} else {
-		fprintf(stderr, "unknown accelerator: %s\n", accelerator);
-		exit(EXIT_FAILURE);
+		prepare_cuda(&transformer);
+		transformer.forward = forward_cuda;
 	}
 
 	if (steps == 0 || steps > transformer.config.seq_len)
