@@ -39,7 +39,7 @@ struct Profiler {
 
 static int profiler_enabled = -1;
 
-struct ProfilerKernel* get_kernel(const char* name) {
+static struct ProfilerKernel* get_kernel(const char* name) {
 	for (int i = 0; i < profiler.n_kernels; i++) {
 		if (strcmp(profiler.kernels[i].name, name) == 0) {
 			return &profiler.kernels[i];
@@ -67,14 +67,14 @@ void profiler_begin() {
 		}
 	}
 
-	if (!profiler_enabled)
+	if (profiler_enabled <= 0)
 		return;
 
 	cudaEventRecord(profiler.start, 0);
 }
 
 void profiler_trigger(const char* name, size_t bytes) {
-	if (!profiler_enabled)
+	if (profiler_enabled <= 0)
 		return;
 
 	assert(profiler.n_triggers < MAX_EVENTS);
@@ -86,8 +86,6 @@ void profiler_trigger(const char* name, size_t bytes) {
 }
 
 void profiler_endsync() {
-	if (!profiler_enabled)
-		return;
 	if (profiler.n_triggers == 0)
 		return;
 
@@ -117,7 +115,7 @@ void profiler_endsync() {
 }
 
 void profiler_dump() {
-	if (!profiler_enabled)
+	if (profiler.n_kernels == 0)
 		return;
 
 	printf("\n");
