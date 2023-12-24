@@ -509,12 +509,13 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 
 	// start the main loop
 	size_t read_bytes = 0;
-	long start = 0;               // used to time our code, only initialized after first iteration
+	long start = time_in_ms();
+
 	int next;                     // will store the next token in the sequence
 	int token = prompt_tokens[0]; // kick off with the first token in the prompt
 	int pos = 0;                  // position in the sequence
-	while (pos < steps) {
 
+	while (pos < steps) {
 		// forward the transformer to get logits for the next token
 		float* logits = transformer->forward(transformer, token, pos);
 
@@ -541,23 +542,15 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 		safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
 		fflush(stdout);
 		token = next;
-
-		// init the timer here because the first iteration can be slower
-		if (start == 0) {
-			start = time_in_ms();
-		}
 	}
 	printf("\n");
 
-	// report achieved tok/s (pos-1 because the timer starts after first iteration)
-	if (pos > 1) {
-		long end = time_in_ms();
-		fprintf(stderr, "# %d tokens: throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s\n",
-		        pos,
-		        (pos - 1) / (double)(end - start) * 1000,
-		        (double)(end - start) / (pos - 1),
-		        ((double)read_bytes / 1e9) / ((double)(end - start) / 1000));
-	}
+	long end = time_in_ms();
+	fprintf(stderr, "# %d tokens: throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s; total %.3f sec\n",
+			pos,
+			pos / (double)(end - start) * 1000, (double)(end - start) / pos,
+			((double)read_bytes / 1e9) / ((double)(end - start) / 1000),
+			(double)(end - start) / 1000);
 
 	free(prompt_tokens);
 }
@@ -641,6 +634,7 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "failed to open tensors\n");
 		exit(EXIT_FAILURE);
 	}
+
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
 	build_transformer(&transformer.config, &transformer.weights, &tensors);
@@ -655,6 +649,12 @@ int main(int argc, char* argv[]) {
 	if (cpu && atoi(cpu)) {
 		prepare(&transformer);
 		transformer.forward = forward;
+
+		// preload all the tensors into memory (avoids slowdown on first token processing for cpu)
+		volatile unsigned int force_read = 0;
+		for (size_t i = 0; i < tensors.size; i += 4096) {
+			force_read += ((char*)tensors.data)[i];
+		}
 	} else {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
