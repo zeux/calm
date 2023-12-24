@@ -1,5 +1,7 @@
 #include "model.h"
 
+#include "profiler.h"
+
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -48,9 +50,9 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	CUDA_CHECK(cudaGetDeviceProperties(&devprop, 0));
 
 	printf("# CUDA: %s, SM %d.%d, %.1f GiB, peak bandwidth %.0f GB/s\n",
-		devprop.name, devprop.major, devprop.minor,
-		(double)devprop.totalGlobalMem / (1024 * 1024 * 1024),
-		(double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
+	       devprop.name, devprop.major, devprop.minor,
+	       (double)devprop.totalGlobalMem / (1024 * 1024 * 1024),
+	       (double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
@@ -300,6 +302,7 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb,
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
+	profiler_begin();
 
 	// a few convenience variables
 	struct Config* p = &transformer->config;
@@ -323,6 +326,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
 	kernel_embed<<<dim / 32, 32>>>(x, w->token_embedding_table + token * dim, dim);
+	profiler_trigger("embed", 0);
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
@@ -330,40 +334,55 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 		// attention rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_att_weight[l], dim);
+		profiler_trigger("rmsnorm", 0);
 
 		// qkv matmuls for this position
 		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, w->wq[l], w->wk[l], w->wv[l], dim, dim, kv_dim);
+		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(dtype_t));
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
 		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim);
+		profiler_trigger("rope_kv", 0);
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		profiler_trigger("attn_score", 0);
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
 		kernel_attn_softmax<<<dim3(1, p->n_heads), 32>>>(s->att, p->n_heads, p->seq_len, pos);
+		profiler_trigger("attn_softmax", 0);
 
 		// compute weighted sum of the values into xb
 		assert(head_size % 32 == 0);
 		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		profiler_trigger("attn_mix", 0);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, w->wo[l], dim, dim);
+		profiler_trigger("matmul_attn", dim * dim * sizeof(dtype_t));
 
 		// ffn rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_ffn_weight[l], dim);
+		profiler_trigger("rmsnorm", 0);
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 		kernel_matmul_ffn13<<<hidden_dim, 32>>>(s->hb, s->xb, w->w1[l], w->w3[l], dim, hidden_dim);
+		profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(dtype_t));
+
 		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, w->w2[l], hidden_dim, dim);
+		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(dtype_t));
 	}
 
 	// final rmsnorm
 	kernel_rmsnorm<<<1, rmsnorm_size>>>(x, x, w->rms_final_weight, dim);
+	profiler_trigger("rmsnorm", 0);
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, w->wcls, p->dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, w->wcls, dim, p->vocab_size);
+	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(dtype_t));
+
+	profiler_endsync();
 
 	CUDA_SYNC();
 

@@ -11,6 +11,7 @@
 #include <time.h>
 
 #include "model.h"
+#include "profiler.h"
 #include "tensors.h"
 
 // ----------------------------------------------------------------------------
@@ -679,6 +680,8 @@ int main(int argc, char* argv[]) {
 	for (int s = 0; s < sequences; ++s) {
 		generate(&transformer, &tokenizer, &sampler, prompt, steps);
 	}
+
+	profiler_dump();
 
 	// memory and file handles cleanup
 	// TODO: free transformer.state and transformer.weights for CUDA
