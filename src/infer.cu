@@ -108,18 +108,8 @@ __global__ static void kernel_rmsnorm(float* o, float* x, dtype_t* weight, int s
 		ss += x[j] * x[j];
 	}
 
-	// sum across threads in warp
-	ss = warpreduce_sum(ss);
-
-	// sum across warps in block
-	assert(blockSize <= 32 * warpSize);
-	int lane = i % warpSize;
-	int warp = i / warpSize;
-
-	__shared__ float ssb[32];
-	ssb[warp] = ss;
-	__syncthreads();
-	ss = warpreduce_sum(ssb[lane]);
+	// sum across threads in block
+	ss = blockreduce_sum(ss);
 
 	// compute scale
 	ss /= size;
@@ -254,31 +244,31 @@ __global__ static void kernel_attn_score(float* attb, float* qb, kvtype_t* kb, i
 __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int pos) {
 	int i = threadIdx.x;
 
-	int h = blockIdx.y;
+	int h = blockIdx.x;
 	assert(h < n_heads);
 
 	float* att = attb + h * seq_len;
 
 	// find max value per thread (for numerical stability)
 	float max_val = 0.f;
-	for (int j = i; j <= pos; j += warpSize) {
+	for (int j = i; j <= pos; j += blockDim.x) {
 		max_val = max(max_val, att[j]);
 	}
 
-	// max across threads
-	max_val = warpreduce_max(max_val);
+	// max across threads in block
+	max_val = blockreduce_max(max_val);
 
 	// exp and sum per thread
 	float sum = 0.0f;
-	for (int j = i; j <= pos; j += warpSize) {
+	for (int j = i; j <= pos; j += blockDim.x) {
 		sum += expf(att[j] - max_val);
 	}
 
-	// sum across threads
-	sum = warpreduce_sum(sum);
+	// sum across threads in block
+	sum = blockreduce_sum(sum);
 
 	// output normalized values
-	for (int j = i; j <= pos; j += warpSize) {
+	for (int j = i; j <= pos; j += blockDim.x) {
 		att[j] = expf(att[j] - max_val) / sum;
 	}
 }
@@ -347,16 +337,16 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
-		profiler_trigger("attn_score", 0);
+		profiler_trigger("attn_score", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
-		kernel_attn_softmax<<<dim3(1, p->n_heads), 32>>>(s->att, p->n_heads, p->seq_len, pos);
+		kernel_attn_softmax<<<p->n_heads, 1024>>>(s->att, p->n_heads, p->seq_len, pos);
 		profiler_trigger("attn_softmax", 0);
 
 		// compute weighted sum of the values into xb
 		assert(head_size % 32 == 0);
 		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
-		profiler_trigger("attn_mix", 0);
+		profiler_trigger("attn_mix", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, w->wo[l], dim, dim);
