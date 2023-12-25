@@ -507,6 +507,10 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 		exit(EXIT_FAILURE);
 	}
 
+	// hack for profiling: offset pos to make sure we need to use most of kv cache
+	char* pos_offset_env = getenv("CALM_POSO");
+	int pos_offset = pos_offset_env ? atoi(pos_offset_env) : 0;
+
 	// start the main loop
 	size_t read_bytes = 0;
 	long start = time_in_ms();
@@ -517,10 +521,10 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 
 	while (pos < steps) {
 		// forward the transformer to get logits for the next token
-		float* logits = transformer->forward(transformer, token, pos);
+		float* logits = transformer->forward(transformer, token, pos + pos_offset);
 
 		read_bytes += model_bandwidth(&transformer->config);
-		read_bytes += kvcache_bandwidth(&transformer->config, pos);
+		read_bytes += kvcache_bandwidth(&transformer->config, pos + pos_offset);
 
 		// advance the state machine
 		if (pos < num_prompt_tokens - 1) {
