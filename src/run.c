@@ -551,10 +551,10 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 
 	long end = time_in_ms();
 	fprintf(stderr, "# %d tokens: throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s; total %.3f sec\n",
-			pos,
-			pos / (double)(end - start) * 1000, (double)(end - start) / pos,
-			((double)read_bytes / 1e9) / ((double)(end - start) / 1000),
-			(double)(end - start) / 1000);
+	        pos,
+	        pos / (double)(end - start) * 1000, (double)(end - start) / pos,
+	        ((double)read_bytes / 1e9) / ((double)(end - start) / 1000),
+	        (double)(end - start) / 1000);
 
 	free(prompt_tokens);
 }
@@ -643,10 +643,12 @@ int main(int argc, char* argv[]) {
 	struct Transformer transformer = {};
 	build_transformer(&transformer.config, &transformer.weights, &tensors);
 
-	printf("# %s: %d layers, %d context, weights %.1f GiB, KV cache %.1f GiB\n",
+	printf("# %s: %d layers, %d context, weights %.1f GiB (fp%d), KV cache %.1f GiB (fp%d)\n",
 	       checkpoint_path, transformer.config.n_layers, transformer.config.seq_len,
 	       (double)model_bandwidth(&transformer.config) / 1024 / 1024 / 1024,
-	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
+	       (int)sizeof(dtype_t) * 8,
+	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024,
+	       (int)sizeof(kvtype_t) * 8);
 
 	char* cpu = getenv("CALM_CPU");
 
