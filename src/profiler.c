@@ -114,6 +114,10 @@ void profiler_endsync() {
 	profiler.n_triggers = 0;
 }
 
+void profiler_reset() {
+	profiler.n_kernels = 0;
+}
+
 void profiler_dump() {
 	if (profiler.n_kernels == 0)
 		return;

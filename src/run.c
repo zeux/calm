@@ -653,12 +653,6 @@ int main(int argc, char* argv[]) {
 	if (cpu && atoi(cpu)) {
 		prepare(&transformer);
 		transformer.forward = forward;
-
-		// preload all the tensors into memory (avoids slowdown on first token processing for cpu)
-		volatile unsigned int force_read = 0;
-		for (size_t i = 0; i < tensors.size; i += 4096) {
-			force_read += ((char*)tensors.data)[i];
-		}
 	} else {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
@@ -674,6 +668,12 @@ int main(int argc, char* argv[]) {
 	// build the Sampler
 	Sampler sampler;
 	build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
+
+	// do one inference as warmup
+	// when using cpu, this makes sure tensors are loaded into memory (via mmap)
+	// when using cuda, this makes sure all kernels are compiled and instantiated
+	transformer.forward(&transformer, 0, 0);
+	profiler_reset();
 
 	// run!
 	for (int s = 0; s < sequences; ++s) {
