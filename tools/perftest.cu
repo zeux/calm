@@ -46,6 +46,14 @@ static float events_mintime(cudaEvent_t* events, size_t nevents) {
 }
 
 int main() {
+	cudaDeviceProp devprop = {};
+	CUDA_CHECK(cudaGetDeviceProperties(&devprop, 0));
+
+	printf("# CUDA: %s, SM %d.%d, %.1f GiB, peak bandwidth %.0f GB/s\n",
+	       devprop.name, devprop.major, devprop.minor,
+	       (double)devprop.totalGlobalMem / (1024 * 1024 * 1024),
+	       (double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
+
 	cudaEvent_t events[1000];
 
 	for (size_t ei = 0; ei < sizeof(events) / sizeof(events[0]); ei++) {
