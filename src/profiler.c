@@ -112,6 +112,15 @@ void profiler_endsync() {
 	}
 
 	profiler.n_triggers = 0;
+
+	char* env = getenv("CALM_PROFLOG");
+	if (env && atoi(env)) {
+		float total_ms;
+		cudaEventElapsedTime(&total_ms, profiler.start, last_event);
+
+		static int run = 0;
+		fprintf(stderr, "%d\t%.2f\n", run++, total_ms);
+	}
 }
 
 void profiler_reset() {
