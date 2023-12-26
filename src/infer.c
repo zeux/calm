@@ -98,7 +98,7 @@ static void rope(float* vec, int d, int head_size, int pos, float theta) {
 	}
 }
 
-float* forward(struct Transformer* transformer, int token, int pos) {
+float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 
 	// a few convenience variables
 	struct Config* p = &transformer->config;
@@ -215,6 +215,11 @@ float* forward(struct Transformer* transformer, int token, int pos) {
 		for (int i = 0; i < dim; i++) {
 			x[i] += s->xb[i];
 		}
+	}
+
+	if (flags & FF_UPDATE_KV_ONLY) {
+		// only update kv cache and don't output logits
+		return NULL;
 	}
 
 	// final rmsnorm

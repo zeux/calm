@@ -72,5 +72,9 @@ struct Transformer {
 	struct Config config;   // the hyperparameters of the architecture (the blueprint)
 	struct Weights weights; // the weights of the model
 	struct RunState state;  // buffers for the "wave" of activations in the forward pass
-	float* (*forward)(struct Transformer* transformer, int token, int pos);
+	float* (*forward)(struct Transformer* transformer, int token, int pos, unsigned flags);
+};
+
+enum ForwardFlags {
+	FF_UPDATE_KV_ONLY = 1 << 0, // only update kv cache and don't output logits
 };

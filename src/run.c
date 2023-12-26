@@ -18,10 +18,10 @@
 // Transformer model
 
 void prepare(struct Transformer* transformer);
-float* forward(struct Transformer* transformer, int token, int pos);
+float* forward(struct Transformer* transformer, int token, int pos, unsigned flags);
 
 void prepare_cuda(struct Transformer* transformer);
-float* forward_cuda(struct Transformer* transformer, int token, int pos);
+float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 
 void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
 	// create config
@@ -521,7 +521,8 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 
 	while (pos < steps) {
 		// forward the transformer to get logits for the next token
-		float* logits = transformer->forward(transformer, token, pos + pos_offset);
+		unsigned flags = pos < num_prompt_tokens - 1 ? FF_UPDATE_KV_ONLY : 0;
+		float* logits = transformer->forward(transformer, token, pos + pos_offset, flags);
 
 		read_bytes += model_bandwidth(&transformer->config);
 		read_bytes += kvcache_bandwidth(&transformer->config, pos + pos_offset);
@@ -674,7 +675,7 @@ int main(int argc, char* argv[]) {
 	// do one inference as warmup
 	// when using cpu, this makes sure tensors are loaded into memory (via mmap)
 	// when using cuda, this makes sure all kernels are compiled and instantiated
-	transformer.forward(&transformer, 0, 0);
+	transformer.forward(&transformer, 0, 0, 0);
 	profiler_reset();
 
 	// run!

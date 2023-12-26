@@ -291,7 +291,7 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb,
 	xout[h * head_size + i] = res;
 }
 
-extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos) {
+extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	profiler_begin();
 
 	// a few convenience variables
@@ -335,6 +335,11 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim);
 		profiler_trigger("rope_kv", 0);
 
+		// only update kv cache and don't output logits
+		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
+			break;
+		}
+
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 		profiler_trigger("attn_score", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
@@ -362,6 +367,13 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, w->w2[l], hidden_dim, dim);
 		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(dtype_t));
+	}
+
+	if (flags & FF_UPDATE_KV_ONLY) {
+		// only update kv cache and don't output logits
+		profiler_endsync();
+
+		return NULL;
 	}
 
 	// final rmsnorm

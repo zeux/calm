@@ -1,8 +1,8 @@
 #pragma once
 
 #include <assert.h>
-#include <float.h>
 #include <cuda_fp16.h>
+#include <float.h>
 
 __device__ inline float warpreduce_sum(float v) {
 #pragma unroll
