@@ -27,7 +27,9 @@ if args.input is not None:
     if args.tokenizer is None:
         args.tokenizer = os.path.join(args.input, "tokenizer.model")
         if not os.path.exists(args.tokenizer):
-            argp.error("no tokenizer.model found in {}".format(args.input))
+            args.tokenizer = os.path.join(args.input, "tokenizer.json")
+        if not os.path.exists(args.tokenizer):
+            argp.error("no tokenizer.model or tokenizer.json found in {}".format(args.input))
     if args.models is None:
         files = os.listdir(args.input)
         args.models = [os.path.join(args.input, fn) for fn in files if os.path.splitext(fn)[1] == ".safetensors"]
@@ -61,28 +63,46 @@ if "rope_theta" in config:
     metadata["rope_theta"] = config["rope_theta"]
 
 # load tokenizer model
-tokens, scores = [], []
+tokens = [""] * config["vocab_size"]
+scores = [0] * config["vocab_size"]
 
 ext = os.path.splitext(args.tokenizer)[1]
 if ext == ".model":
     sp_model = sentencepiece.SentencePieceProcessor(model_file=args.tokenizer)
-    assert sp_model.vocab_size() == sp_model.get_piece_size()
-    assert sp_model.vocab_size() == config["vocab_size"]
+    assert sp_model.vocab_size() <= config["vocab_size"]
     assert sp_model.bos_id() == config["bos_token_id"]
     assert sp_model.eos_id() == config["eos_token_id"]
 
-    # get all the tokens (postprocessed) and their scores as floats
     for i in range(sp_model.vocab_size()):
-        t = sp_model.id_to_piece(i)
-        s = sp_model.get_score(i)
-        t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
-        b = t.encode('utf-8')
-        assert b.count(0) == 0 # no null bytes allowed
+        tokens[i] = sp_model.id_to_piece(i)
+        scores[i] = sp_model.get_score(i)
+elif ext == ".json":
+    with open(args.tokenizer, "r") as f:
+        tokenizer = json.load(f)
 
-        tokens.append(b)
-        scores.append(s)
+    vocab = tokenizer["model"]["vocab"]
+    assert len(vocab) <= config["vocab_size"]
+
+    for t, i in vocab.items():
+        tokens[i] = t
+
+    # compute score as negative merge index so that earlier merges get selected first
+    for i, m in enumerate(tokenizer["model"]["merges"]):
+        t1, t2 = m.split(" ")
+        ti = vocab[t1 + t2]
+        if scores[ti] == 0:
+            scores[ti] = -(1 + i)
 else:
     raise Exception("Unknown tokenizer file extension: {}; expected .model".format(ext))
+
+# postprocess tokens
+for i, t in enumerate(tokens):
+    t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
+    t = t.replace('\u0120', ' ') # some gpt-based tokenizers use this character as whitespace
+    b = t.encode('utf-8')
+    assert b.count(0) == 0 # no null bytes allowed
+
+    tokens[i] = b
 
 # add tokenizer tensors
 # note: we concatenate all bytes of all tokens into a single tensor
