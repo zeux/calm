@@ -42,6 +42,7 @@ with open(args.config, "r") as f:
     config = json.load(f)
 
 metadata = {}
+tensors = {}
 
 # hardcoded in C
 assert config["hidden_act"] == "silu"
@@ -60,45 +61,50 @@ if "rope_theta" in config:
     metadata["rope_theta"] = config["rope_theta"]
 
 # load tokenizer model
-sp_model = sentencepiece.SentencePieceProcessor(model_file=args.tokenizer)
-assert sp_model.vocab_size() == sp_model.get_piece_size()
-assert sp_model.vocab_size() == config["vocab_size"]
-assert sp_model.bos_id() == config["bos_token_id"]
-assert sp_model.eos_id() == config["eos_token_id"]
-
-# get all the tokens (postprocessed) and their scores as floats
 tokens, scores = [], []
-for i in range(sp_model.vocab_size()):
-    # decode the token and light postprocessing
-    t = sp_model.id_to_piece(i)
-    s = sp_model.get_score(i)
-    if i == sp_model.bos_id():
-        t = '\n<s>\n'
-    elif i == sp_model.eos_id():
-        t = '\n</s>\n'
-    t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
-    b = t.encode('utf-8') # bytes of this token, utf-8 encoded
-    assert b.count(0) == 0 # no null bytes allowed
 
-    tokens.append(b)
-    scores.append(s)
+ext = os.path.splitext(args.tokenizer)[1]
+if ext == ".model":
+    sp_model = sentencepiece.SentencePieceProcessor(model_file=args.tokenizer)
+    assert sp_model.vocab_size() == sp_model.get_piece_size()
+    assert sp_model.vocab_size() == config["vocab_size"]
+    assert sp_model.bos_id() == config["bos_token_id"]
+    assert sp_model.eos_id() == config["eos_token_id"]
+
+    # get all the tokens (postprocessed) and their scores as floats
+    for i in range(sp_model.vocab_size()):
+        t = sp_model.id_to_piece(i)
+        s = sp_model.get_score(i)
+        t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
+        b = t.encode('utf-8')
+        assert b.count(0) == 0 # no null bytes allowed
+
+        tokens.append(b)
+        scores.append(s)
+else:
+    raise Exception("Unknown tokenizer file extension: {}; expected .model".format(ext))
+
+# add tokenizer tensors
+# note: we concatenate all bytes of all tokens into a single tensor
+tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
+tensors["tokenizer.scores"] = torch.tensor(scores, dtype=torch.float32)
 
 # load model files
-tensors = {}
+weights = {}
 for fn in args.models:
     ext = os.path.splitext(fn)[1]
     if ext == ".safetensors":
         with safetensors.safe_open(fn, framework="pt") as f:
             for k in f.keys():
-                assert(k not in tensors)
-                tensors[k] = f.get_tensor(k)
+                assert(k not in weights)
+                weights[k] = f.get_tensor(k)
     elif ext == ".bin":
-        weights = torch.load(fn, weights_only=True)
-        for k in weights.keys():
-            assert(k not in tensors)
-            tensors[k] = weights[k]
+        pth = torch.load(fn, weights_only=True)
+        for k in pth.keys():
+            assert(k not in weights)
+            weights[k] = pth[k]
     else:
-        raise Exception("Unknown file extension: {}; expected .safetensors or .bin".format(ext))
+        raise Exception("Unknown model file extension: {}; expected .safetensors or .bin".format(ext))
 
 # huggingface permutes WQ and WK, this function reverses it
 # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
@@ -107,8 +113,8 @@ def permute_reverse(w, heads, dim1, dim2):
 
 dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
 
-# convert tensors to dtype and permute if necessary
-for k, v in tensors.items():
+# convert weights to dtype and permute if necessary
+for k, v in weights.items():
     if "self_attn.q_proj" in k or "self_attn.k_proj" in k:
         n_heads = 32
         dim1 = v.shape[0]
@@ -116,11 +122,6 @@ for k, v in tensors.items():
         v = permute_reverse(v, n_heads // (dim2 // dim1), dim1, dim2)
 
     tensors[k] = v.to(dtype)
-
-# add tokenizer tensors
-# note: we concatenate all bytes of all tokens into a single tensor
-tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
-tensors["tokenizer.scores"] = torch.tensor(scores, dtype=torch.float32)
 
 # metadata values must be strings in safetensors
 safetensors.torch.save_file(tensors, args.output, {k: str(v) for k, v in metadata.items()})
