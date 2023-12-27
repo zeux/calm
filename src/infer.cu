@@ -188,7 +188,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, dtype_t* w, int
 	}
 }
 
-__global__ static void kernel_rope_kv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, float theta, int d, int kvd) {
+__global__ static void kernel_rope_kv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, float theta, int d, int kvd, int seq_len) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < d);
 
@@ -212,10 +212,13 @@ __global__ static void kernel_rope_kv(float* q, float* k, float* v, kvtype_t* kb
 		k[i] = rk0;
 		k[i + 1] = rk1;
 
+		// update kvcache key/value
 		kb[pos * kvd + i] = rk0;
 		kb[pos * kvd + i + 1] = rk1;
-		vb[pos * kvd + i] = v[i];
-		vb[pos * kvd + i + 1] = v[i + 1];
+
+		// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
+		vb[pos + seq_len * i] = v[i];
+		vb[pos + seq_len * (i + 1)] = v[i + 1];
 	}
 }
 
@@ -279,22 +282,28 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 }
 
-__global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+	int i = blockIdx.x;
 	assert(i < head_size);
 
-	int h = blockIdx.y;
-	assert(h < n_heads);
+	int kvh = blockIdx.y;
+	assert(kvh < n_kv_heads);
+
+	int h = kvh * kv_mul + threadIdx.y;
 
 	float* att = attb + h * seq_len;
-	kvtype_t* val = valb + (h / kv_mul) * head_size;
+	kvtype_t* val = valb + (kvh * head_size + i) * seq_len;
 
 	float res = 0.0f;
-	for (int t = 0; t <= pos; t++) {
-		res += att[t] * float(val[t * kv_dim + i]);
+	for (int t = threadIdx.x; t <= pos; t += warpSize) {
+		res += att[t] * float(val[t]);
 	}
 
-	xout[h * head_size + i] = res;
+	res = warpreduce_sum(res);
+
+	if (threadIdx.x == 0) {
+		xout[h * head_size + i] = res;
+	}
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
@@ -338,7 +347,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim);
+		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim, p->seq_len);
 		profiler_trigger("rope_kv", 0);
 
 		// only update kv cache and don't output logits
@@ -356,7 +365,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 		// compute weighted sum of the values into xb
 		assert(head_size % 32 == 0);
-		kernel_attn_mix<<<dim3(head_size / 32, p->n_heads), 32>>>(s->xb, s->att, s->value_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul)>>>(s->xb, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 		profiler_trigger("attn_mix", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
