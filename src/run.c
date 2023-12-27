@@ -13,6 +13,7 @@
 #include "model.h"
 #include "profiler.h"
 #include "tensors.h"
+#include "tokenizer.h"
 
 // ----------------------------------------------------------------------------
 // Transformer model
@@ -57,226 +58,16 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	weights->wcls = (dtype_t*)tensors_get(tensors, "lm_head.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
 }
 
-// ----------------------------------------------------------------------------
-// The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
-
-#define MAX_TOKEN_LENGTH 128
-
-typedef struct {
-	char* str;
-	int id;
-} TokenIndex;
-
-typedef struct {
-	char** vocab;
-	float* vocab_scores;
-	TokenIndex* sorted_vocab;
-	int vocab_size;
-	int bos_id;
-	int eos_id;
-	int byte_fallbacks;
-	char byte_pieces[256][2];
-} Tokenizer;
-
-int compare_tokens(const void* a, const void* b) {
-	return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
-}
-
-int str_lookup(char* str, TokenIndex* sorted_vocab, int vocab_size) {
-	// efficiently find the perfect match for str in vocab, return its index or -1 if not found
-	TokenIndex tok = {.str = str}; // acts as the key to search for
-	TokenIndex* res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
-	return res != NULL ? res->id : -1;
-}
-
-void build_tokenizer(Tokenizer* t, struct Tensors* tensors, int vocab_size) {
-	t->vocab_size = vocab_size;
-	t->bos_id = 1;
-	t->eos_id = 2;
-
+void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_size) {
 	struct Tensor* tensor = tensors_find(tensors, "tokenizer.tokens", 0);
 
 	char* tokens = (char*)tensors_get(tensors, "tokenizer.tokens", 0, dt_u8, (int[]){tensor->shape[0], 0, 0, 0});
 	float* scores = (float*)tensors_get(tensors, "tokenizer.scores", 0, dt_f32, (int[]){vocab_size, 0, 0, 0});
 
-	// malloc space to hold the scores and the strings
-	t->vocab = (char**)malloc(vocab_size * sizeof(char*));
-	t->sorted_vocab = (TokenIndex*)malloc(vocab_size * sizeof(TokenIndex));
+	int bos_id = 1;
+	int eos_id = 2;
 
-	// TODO: validate tokens are null terminated
-	for (int i = 0; i < vocab_size; ++i) {
-		t->vocab[i] = tokens;
-		t->sorted_vocab[i].str = tokens;
-		t->sorted_vocab[i].id = i;
-
-		assert(strlen(tokens) < MAX_TOKEN_LENGTH);
-		tokens += strlen(tokens) + 1;
-	}
-
-	t->vocab_scores = scores;
-
-	qsort(t->sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
-
-	t->byte_fallbacks = str_lookup("<0x00>", t->sorted_vocab, t->vocab_size);
-
-	if (t->byte_fallbacks >= 0) {
-		for (int i = 0; i < 256; i++) {
-			t->byte_pieces[i][0] = (char)i;
-			t->byte_pieces[i][1] = '\0';
-		}
-	}
-}
-
-void free_tokenizer(Tokenizer* t) {
-	free(t->vocab);
-	free(t->sorted_vocab);
-}
-
-char* decode(Tokenizer* t, int prev_token, int token) {
-	char* piece = t->vocab[token];
-	// following BOS token, sentencepiece decoder strips any leading whitespace (see PR #89)
-	if (prev_token == t->bos_id && piece[0] == ' ') {
-		piece++;
-	}
-	// return byte piece for byte fallback tokens (<0x00>, <0x01>, etc.)
-	if (t->byte_fallbacks >= 0 && (unsigned)(token - t->byte_fallbacks) < 256) {
-		piece = t->byte_pieces[token - t->byte_fallbacks];
-	}
-	return piece;
-}
-
-void safe_printf(char* piece) {
-	// piece might be a raw byte token, and we only want to print printable chars or whitespace
-	// because some of the other bytes can be various control codes, backspace, etc.
-	if (piece == NULL) {
-		return;
-	}
-	if (piece[0] == '\0') {
-		return;
-	}
-	if (piece[1] == '\0') {
-		unsigned char byte_val = piece[0];
-		if (!(isprint(byte_val) || isspace(byte_val))) {
-			return; // bad byte, don't print it
-		}
-	}
-	printf("%s", piece);
-}
-
-void encode(Tokenizer* t, char* text, int8_t bos, int8_t eos, int* tokens, int* n_tokens) {
-	// encode the string text (input) into an upper-bound preallocated tokens[] array
-	// bos != 0 means prepend the BOS token, eos != 0 means append the EOS token
-	if (text == NULL) {
-		fprintf(stderr, "cannot encode NULL text\n");
-		exit(EXIT_FAILURE);
-	}
-
-	// create a temporary buffer that will store merge candidates of always two consecutive tokens
-	// *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-	char* str_buffer = malloc((MAX_TOKEN_LENGTH * 2 + 1 + 2) * sizeof(char));
-	size_t str_len = 0;
-
-	// start at 0 tokens
-	*n_tokens = 0;
-
-	// add optional BOS token, if desired
-	if (bos)
-		tokens[(*n_tokens)++] = t->bos_id;
-
-	// add_dummy_prefix is true by default
-	// so prepend a dummy prefix token to the input string, but only if text != ""
-	// TODO: pretty sure this isn't correct in the general case but I don't have the
-	// energy to read more of the sentencepiece code to figure out what it's doing
-	if (text[0] != '\0') {
-		int dummy_prefix = str_lookup(" ", t->sorted_vocab, t->vocab_size);
-		tokens[(*n_tokens)++] = dummy_prefix;
-	}
-
-	// Okay UTF-8 time. This will get messy. Here is the reference from Wikipedia:
-	// Code point ↔ UTF-8 conversion
-	// First code point	Last code point	Byte 1	Byte 2	Byte 3	Byte 4
-	// U+0000	U+007F	    0xxxxxxx
-	// U+0080	U+07FF	    110xxxxx	10xxxxxx
-	// U+0800	U+FFFF	    1110xxxx	10xxxxxx	10xxxxxx
-	// U+10000	U+10FFFF    11110xxx	10xxxxxx	10xxxxxx	10xxxxxx
-
-	// process the raw (UTF-8) byte sequence of the input string
-	for (char* c = text; *c != '\0'; c++) {
-
-		// reset buffer if the current byte is ASCII or a leading byte
-		// 0xC0 is 11000000, so (*c & 0xC0) keeps the first 2 bits and zeros the rest
-		// 0x80 is 10000000
-		// in UTF-8, all continuation bytes start with "10" in first two bits
-		// so in English this is: "if this byte is not a continuation byte"
-		if ((*c & 0xC0) != 0x80) {
-			// this byte must be either a leading byte (11...) or an ASCII char (0x...)
-			// => reset our location, as we're starting a new UTF-8 codepoint
-			str_len = 0;
-		}
-
-		// append the current byte to the buffer
-		str_buffer[str_len++] = *c; // ++ is post-increment, incremented after this line
-		str_buffer[str_len] = '\0';
-
-		// while the next character is a continuation byte, continue appending
-		// but if there are too many of them, just stop to avoid overruning str_buffer size.
-		if ((*(c + 1) & 0xC0) == 0x80 && str_len < 4) {
-			continue;
-		}
-
-		// ok c+1 is not a continuation byte, so we've read in a full codepoint
-		int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
-
-		if (id != -1) {
-			// we found this codepoint in vocab, add it as a token
-			tokens[(*n_tokens)++] = id;
-		} else {
-			// byte_fallback encoding: just encode each byte as a token
-			// +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
-			// so the individual bytes only start at index 3
-			for (int i = 0; i < str_len; i++) {
-				tokens[(*n_tokens)++] = (unsigned char)str_buffer[i] + 3;
-			}
-		}
-		str_len = 0; // protect against a sequence of stray UTF8 continuation bytes
-	}
-
-	// merge the best consecutive pair each iteration, according the scores in vocab_scores
-	while (1) {
-		float best_score = -1e10;
-		int best_id = -1;
-		int best_idx = -1;
-
-		for (int i = 0; i < (*n_tokens - 1); i++) {
-			// check if we can merge the pair (tokens[i], tokens[i+1])
-			sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i + 1]]);
-			int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
-			if (id != -1 && t->vocab_scores[id] > best_score) {
-				// this merge pair exists in vocab! record its score and position
-				best_score = t->vocab_scores[id];
-				best_id = id;
-				best_idx = i;
-			}
-		}
-
-		if (best_idx == -1) {
-			break; // we couldn't find any more pairs to merge, so we're done
-		}
-
-		// merge the consecutive pair (best_idx, best_idx+1) into new token best_id
-		tokens[best_idx] = best_id;
-		// delete token at position best_idx+1, shift the entire sequence back 1
-		for (int i = best_idx + 1; i < (*n_tokens - 1); i++) {
-			tokens[i] = tokens[i + 1];
-		}
-		(*n_tokens)--; // token length decreased
-	}
-
-	// add optional EOS token, if desired
-	if (eos)
-		tokens[(*n_tokens)++] = t->eos_id;
-
-	free(str_buffer);
+	tokenizer_init(t, tokens, scores, bos_id, eos_id, vocab_size);
 }
 
 // ----------------------------------------------------------------------------
@@ -498,7 +289,7 @@ size_t kvcache_bandwidth(struct Config* config, int pos) {
 // ----------------------------------------------------------------------------
 // generation loop
 
-void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char* prompt, int steps) {
+void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, Sampler* sampler, char* prompt, int steps) {
 	char* empty_prompt = "";
 	if (prompt == NULL) {
 		prompt = empty_prompt;
@@ -507,7 +298,7 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 	// encode the (string) prompt into tokens sequence
 	int num_prompt_tokens = 0;
 	int* prompt_tokens = (int*)malloc((strlen(prompt) + 3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
-	encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+	tokenizer_encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
 	if (num_prompt_tokens < 1) {
 		fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
 		exit(EXIT_FAILURE);
@@ -516,7 +307,7 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 	char* tokens_env = getenv("CALM_TOKENS");
 	if (tokens_env && atoi(tokens_env)) {
 		for (int i = 0; i < num_prompt_tokens; i++) {
-			printf("[%s]", decode(tokenizer, prompt_tokens[i], prompt_tokens[i]));
+			printf("[%s]", tokenizer_decode(tokenizer, prompt_tokens[i], prompt_tokens[i]));
 		}
 		printf("\n");
 	}
@@ -557,8 +348,8 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 		}
 
 		// print the token as string, decode it with the Tokenizer object
-		char* piece = decode(tokenizer, token, next);
-		safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
+		char* piece = tokenizer_decode(tokenizer, token, next);
+		printf("%s", piece);
 		fflush(stdout);
 		token = next;
 	}
@@ -679,7 +470,7 @@ int main(int argc, char* argv[]) {
 		steps = transformer.config.seq_len; // ovrerride to ~max length
 
 	// build the Tokenizer via the tokenizer .bin file
-	Tokenizer tokenizer;
+	struct Tokenizer tokenizer;
 	build_tokenizer(&tokenizer, &tensors, transformer.config.vocab_size);
 
 	// build the Sampler
@@ -702,7 +493,7 @@ int main(int argc, char* argv[]) {
 	// memory and file handles cleanup
 	// TODO: free transformer.state and transformer.weights for CUDA
 	free_sampler(&sampler);
-	free_tokenizer(&tokenizer);
+	tokenizer_free(&tokenizer);
 	tensors_close(&tensors);
 	return 0;
 }
