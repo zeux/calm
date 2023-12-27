@@ -33,7 +33,7 @@ void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, in
 		tokenizer->sorted_vocab[i].str = tokens;
 		tokenizer->sorted_vocab[i].id = i;
 
-		assert(strlen(tokens) < MAX_TOKEN_LENGTH);
+		assert(strlen(tokens) <= MAX_TOKEN_LENGTH);
 		tokens += strlen(tokens) + 1;
 	}
 
@@ -151,7 +151,8 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 
 		for (int i = 0; i < n_tokens - 1; i++) {
 			// check if we can merge the pair (tokens[i], tokens[i+1])
-			sprintf(str_buffer, "%s%s", tokenizer->vocab[tokens[i]], tokenizer->vocab[tokens[i + 1]]);
+			strcpy(str_buffer, tokenizer->vocab[tokens[i]]);
+			strcat(str_buffer, tokenizer->vocab[tokens[i + 1]]);
 			int id = str_lookup(str_buffer, tokenizer->sorted_vocab, tokenizer->vocab_size);
 			if (id != -1 && tokenizer->vocab_scores[id] > best_score) {
 				// this merge pair exists in vocab! record its score and position
