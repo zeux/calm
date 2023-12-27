@@ -48,8 +48,6 @@ tensors = {}
 
 # hardcoded in C
 assert config["hidden_act"] == "silu"
-assert config["bos_token_id"] == 1
-assert config["eos_token_id"] == 2
 assert config["rms_norm_eps"] == 1e-5
 
 # customizable
@@ -59,6 +57,8 @@ metadata["n_layers"] = config["num_hidden_layers"]
 metadata["n_heads"] = config["num_attention_heads"]
 metadata["n_kv_heads"] = config["num_key_value_heads"]
 metadata["vocab_size"] = config["vocab_size"]
+metadata["bos_token_id"] = config["bos_token_id"]
+metadata["eos_token_id"] = config["eos_token_id"]
 if "rope_theta" in config:
     metadata["rope_theta"] = config["rope_theta"]
 
