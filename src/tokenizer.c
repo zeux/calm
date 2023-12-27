@@ -134,12 +134,10 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 		if (id != -1) {
 			// we found this codepoint in vocab, add it as a token
 			tokens[n_tokens++] = id;
-		} else {
+		} else if (tokenizer->byte_fallbacks >= 0) {
 			// byte_fallback encoding: just encode each byte as a token
-			// +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
-			// so the individual bytes only start at index 3
 			for (int i = 0; i < str_len; i++) {
-				tokens[n_tokens++] = (unsigned char)str_buffer[i] + 3;
+				tokens[n_tokens++] = (unsigned char)str_buffer[i] + tokenizer->byte_fallbacks;
 			}
 		}
 		str_len = 0; // protect against a sequence of stray UTF8 continuation bytes
