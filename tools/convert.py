@@ -108,18 +108,19 @@ for fn in args.models:
 
 # huggingface permutes WQ and WK, this function reverses it
 # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
-def permute_reverse(w, heads, dim1, dim2):
+def permute_reverse(w, heads):
+    dim1 = w.shape[0]
+    dim2 = w.shape[1]
     return w.view(heads, 2, dim1 // heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
 dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
 
 # convert weights to dtype and permute if necessary
 for k, v in weights.items():
-    if "self_attn.q_proj" in k or "self_attn.k_proj" in k:
-        n_heads = 32
-        dim1 = v.shape[0]
-        dim2 = v.shape[1]
-        v = permute_reverse(v, n_heads // (dim2 // dim1), dim1, dim2)
+    if "self_attn.q_proj" in k:
+        v = permute_reverse(v, config["num_attention_heads"])
+    elif "self_attn.k_proj" in k:
+        v = permute_reverse(v, config["num_key_value_heads"])
 
     tensors[k] = v.to(dtype)
 
