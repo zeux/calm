@@ -13,6 +13,11 @@ CFLAGS=-g -Wall -Werror -O3 -ffast-math -Iextern -fopenmp -mf16c -mavx2
 CUFLAGS=-g -O2
 LDFLAGS=-lm -fopenmp -lcudart
 
+ifneq (,$(wildcard /usr/local/cuda))
+    CFLAGS+=-I/usr/local/cuda/include
+    LDFLAGS+=-L/usr/local/cuda/lib64
+endif
+
 all: $(BINARY)
 
 format:
