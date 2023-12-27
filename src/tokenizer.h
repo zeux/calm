@@ -18,8 +18,15 @@ struct Tokenizer {
 	char byte_pieces[256][2];
 };
 
+enum TokenizerFlags {
+	TF_ENCODE_BOS = 1 << 0,
+	TF_ENCODE_EOS = 1 << 1,
+};
+
 void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, int bos_id, int eos_id, int vocab_size);
 void tokenizer_free(struct Tokenizer* tokenizer);
 
+int tokenizer_bound(int bytes);
+
 char* tokenizer_decode(struct Tokenizer* tokenizer, int prev_token, int token);
-void tokenizer_encode(struct Tokenizer* tokenizer, char* text, int bos, int eos, int* tokens, int* n_tokens);
+int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, int* tokens);

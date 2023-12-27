@@ -296,9 +296,8 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, Samp
 	}
 
 	// encode the (string) prompt into tokens sequence
-	int num_prompt_tokens = 0;
-	int* prompt_tokens = (int*)malloc((strlen(prompt) + 3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
-	tokenizer_encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+	int* prompt_tokens = (int*)malloc(tokenizer_bound(strlen(prompt)) * sizeof(int));
+	int num_prompt_tokens = tokenizer_encode(tokenizer, prompt, TF_ENCODE_BOS, prompt_tokens);
 	if (num_prompt_tokens < 1) {
 		fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
 		exit(EXIT_FAILURE);
