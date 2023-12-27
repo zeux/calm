@@ -12,6 +12,7 @@
 
 #include "model.h"
 #include "profiler.h"
+#include "sampler.h"
 #include "tensors.h"
 #include "tokenizer.h"
 
@@ -71,173 +72,6 @@ void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_siz
 }
 
 // ----------------------------------------------------------------------------
-// The Sampler, which takes logits and returns a sampled token
-// sampling can be done in a few ways: greedy argmax, sampling, top-p sampling
-
-typedef struct {
-	float prob;
-	int index;
-} ProbIndex; // struct used when sorting probabilities during top-p sampling
-
-typedef struct {
-	int vocab_size;
-	ProbIndex* probindex; // buffer used in top-p sampling
-	float temperature;
-	float topp;
-	unsigned long long rng_state;
-} Sampler;
-
-int sample_argmax(float* probabilities, int n) {
-	// return the index that has the highest probability
-	int max_i = 0;
-	float max_p = probabilities[0];
-	for (int i = 1; i < n; i++) {
-		if (probabilities[i] > max_p) {
-			max_i = i;
-			max_p = probabilities[i];
-		}
-	}
-	return max_i;
-}
-
-int sample_mult(float* probabilities, int n, float coin) {
-	// sample index from probabilities (they must sum to 1!)
-	// coin is a random number in [0, 1), usually from random_f32()
-	float cdf = 0.0f;
-	for (int i = 0; i < n; i++) {
-		cdf += probabilities[i];
-		if (coin < cdf) {
-			return i;
-		}
-	}
-	return n - 1; // in case of rounding errors
-}
-
-int compare(const void* a, const void* b) {
-	ProbIndex* a_ = (ProbIndex*)a;
-	ProbIndex* b_ = (ProbIndex*)b;
-	if (a_->prob > b_->prob)
-		return -1;
-	if (a_->prob < b_->prob)
-		return 1;
-	return 0;
-}
-
-int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
-	// top-p sampling (or "nucleus sampling") samples from the smallest set of
-	// tokens that exceed probability topp. This way we never sample tokens that
-	// have very low probabilities and are less likely to go "off the rails".
-	// coin is a random number in [0, 1), usually from random_f32()
-
-	int n0 = 0;
-	// quicksort indices in descending order of probabilities
-	// values smaller than (1 - topp) / (n - 1) cannot be part of the result
-	// so for efficiency we crop these out as candidates before sorting
-	const float cutoff = (1.0f - topp) / (n - 1);
-	for (int i = 0; i < n; i++) {
-		if (probabilities[i] >= cutoff) {
-			probindex[n0].index = i;
-			probindex[n0].prob = probabilities[i];
-			n0++;
-		}
-	}
-	qsort(probindex, n0, sizeof(ProbIndex), compare);
-
-	// truncate the list where cumulative probability exceeds topp
-	float cumulative_prob = 0.0f;
-	int last_idx = n0 - 1; // in case of rounding errors consider all elements
-	for (int i = 0; i < n0; i++) {
-		cumulative_prob += probindex[i].prob;
-		if (cumulative_prob > topp) {
-			last_idx = i;
-			break; // we've exceeded topp by including last_idx
-		}
-	}
-
-	// sample from the truncated list
-	float r = coin * cumulative_prob;
-	float cdf = 0.0f;
-	for (int i = 0; i <= last_idx; i++) {
-		cdf += probindex[i].prob;
-		if (r < cdf) {
-			return probindex[i].index;
-		}
-	}
-	return probindex[last_idx].index; // in case of rounding errors
-}
-
-void build_sampler(Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
-	sampler->vocab_size = vocab_size;
-	sampler->temperature = temperature;
-	sampler->topp = topp;
-	sampler->rng_state = rng_seed;
-	// buffer only used with nucleus sampling; may not need but it's ~small
-	sampler->probindex = malloc(sampler->vocab_size * sizeof(ProbIndex));
-}
-
-void free_sampler(Sampler* sampler) {
-	free(sampler->probindex);
-}
-
-unsigned int random_u32(unsigned long long* state) {
-	// xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
-	*state ^= *state >> 12;
-	*state ^= *state << 25;
-	*state ^= *state >> 27;
-	return (*state * 0x2545F4914F6CDD1Dull) >> 32;
-}
-float random_f32(unsigned long long* state) { // random float32 in [0,1)
-	return (random_u32(state) >> 8) / 16777216.0f;
-}
-
-void sample_softmax(float* x, int size) {
-	// find max value (for numerical stability)
-	float max_val = x[0];
-	for (int i = 1; i < size; i++) {
-		if (x[i] > max_val) {
-			max_val = x[i];
-		}
-	}
-	// exp and sum
-	float sum = 0.0f;
-	for (int i = 0; i < size; i++) {
-		x[i] = expf(x[i] - max_val);
-		sum += x[i];
-	}
-	// normalize
-	for (int i = 0; i < size; i++) {
-		x[i] /= sum;
-	}
-}
-
-int sample(Sampler* sampler, float* logits) {
-	// sample the token given the logits and some hyperparameters
-	int next;
-	if (sampler->temperature == 0.0f) {
-		// greedy argmax sampling: take the token with the highest probability
-		next = sample_argmax(logits, sampler->vocab_size);
-	} else {
-		// apply the temperature to the logits
-		for (int q = 0; q < sampler->vocab_size; q++) {
-			logits[q] /= sampler->temperature;
-		}
-		// apply softmax to the logits to get the probabilities for next token
-		sample_softmax(logits, sampler->vocab_size);
-		// flip a (float) coin (this is our source of entropy for sampling)
-		float coin = random_f32(&sampler->rng_state);
-		// we sample from this distribution to get the next token
-		if (sampler->topp <= 0 || sampler->topp >= 1) {
-			// simply sample from the predicted probability distribution
-			next = sample_mult(logits, sampler->vocab_size, coin);
-		} else {
-			// top-p (nucleus) sampling, clamping the least likely tokens to zero
-			next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
-		}
-	}
-	return next;
-}
-
-// ----------------------------------------------------------------------------
 // utilities: time
 
 long time_in_ms() {
@@ -289,7 +123,7 @@ size_t kvcache_bandwidth(struct Config* config, int pos) {
 // ----------------------------------------------------------------------------
 // generation loop
 
-void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, Sampler* sampler, char* prompt, int steps) {
+void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* prompt, int steps) {
 	char* empty_prompt = "";
 	if (prompt == NULL) {
 		prompt = empty_prompt;
@@ -473,8 +307,8 @@ int main(int argc, char* argv[]) {
 	build_tokenizer(&tokenizer, &tensors, transformer.config.vocab_size);
 
 	// build the Sampler
-	Sampler sampler;
-	build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
+	struct Sampler sampler;
+	sampler_init(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
 
 	// do one inference as warmup
 	// when using cpu, this makes sure tensors are loaded into memory (via mmap)
@@ -491,7 +325,7 @@ int main(int argc, char* argv[]) {
 
 	// memory and file handles cleanup
 	// TODO: free transformer.state and transformer.weights for CUDA
-	free_sampler(&sampler);
+	sampler_free(&sampler);
 	tokenizer_free(&tokenizer);
 	tensors_close(&tensors);
 	return 0;
