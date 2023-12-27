@@ -219,26 +219,32 @@ __global__ static void kernel_rope_kv(float* q, float* k, float* v, kvtype_t* kb
 	}
 }
 
-__global__ static void kernel_attn_score(float* attb, float* qb, kvtype_t* kb, int n_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
-	int t = blockIdx.x * blockDim.x + threadIdx.x;
-	if (t > pos) {
-		return;
-	}
+__global__ static void kernel_attn_score(float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int pos) {
+	int t = blockIdx.x;
+	assert(t <= pos);
 
-	int h = blockIdx.y;
-	assert(h < n_heads);
+	int kvh = blockIdx.y;
+	assert(kvh < n_kv_heads);
+
+	int h = kvh * kv_mul + threadIdx.y;
 
 	float* q = qb + h * head_size;
-	kvtype_t* k = kb + t * kv_dim + (h / kv_mul) * head_size;
+	kvtype_t* k = kb + t * kv_dim + kvh * head_size;
 	float* att = attb + h * seq_len;
 
 	float score = 0.0f;
-	for (int j = 0; j < head_size; j++) {
-		score += q[j] * float(k[j]);
+	for (int j = threadIdx.x * 2; j < head_size; j += warpSize * 2) {
+		float2 kk = __half22float2(*((half2*)&k[j]));
+		score += kk.x * q[j];
+		score += kk.y * q[j + 1];
 	}
+
+	score = warpreduce_sum(score);
 	score /= sqrtf(head_size);
 
-	att[t] = score;
+	if (threadIdx.x == 0) {
+		att[t] = score;
+	}
 }
 
 __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int pos) {
@@ -341,7 +347,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		}
 
 		// attention scores for all heads
-		kernel_attn_score<<<dim3((pos + 1 + 31) / 32, p->n_heads), 32>>>(s->att, s->q, s->key_cache + loff, p->n_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
+		kernel_attn_score<<<dim3(pos + 1, p->n_kv_heads), dim3(32, kv_mul)>>>(s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, pos);
 		profiler_trigger("attn_score", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
