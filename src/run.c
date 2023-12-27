@@ -72,26 +72,32 @@ typedef struct {
 	float* vocab_scores;
 	TokenIndex* sorted_vocab;
 	int vocab_size;
-	unsigned char byte_pieces[512]; // stores all single-byte strings
+	int bos_id;
+	int eos_id;
+	int byte_fallbacks;
+	char byte_pieces[256][2];
 } Tokenizer;
 
 int compare_tokens(const void* a, const void* b) {
 	return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
+int str_lookup(char* str, TokenIndex* sorted_vocab, int vocab_size) {
+	// efficiently find the perfect match for str in vocab, return its index or -1 if not found
+	TokenIndex tok = {.str = str}; // acts as the key to search for
+	TokenIndex* res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
+	return res != NULL ? res->id : -1;
+}
+
 void build_tokenizer(Tokenizer* t, struct Tensors* tensors, int vocab_size) {
 	t->vocab_size = vocab_size;
+	t->bos_id = 1;
+	t->eos_id = 2;
 
 	struct Tensor* tensor = tensors_find(tensors, "tokenizer.tokens", 0);
 
 	char* tokens = (char*)tensors_get(tensors, "tokenizer.tokens", 0, dt_u8, (int[]){tensor->shape[0], 0, 0, 0});
 	float* scores = (float*)tensors_get(tensors, "tokenizer.scores", 0, dt_f32, (int[]){vocab_size, 0, 0, 0});
-
-	// TODO: this is likely redundant
-	for (int i = 0; i < 256; i++) {
-		t->byte_pieces[i * 2] = (unsigned char)i;
-		t->byte_pieces[i * 2 + 1] = '\0';
-	}
 
 	// malloc space to hold the scores and the strings
 	t->vocab = (char**)malloc(vocab_size * sizeof(char*));
@@ -110,6 +116,15 @@ void build_tokenizer(Tokenizer* t, struct Tensors* tensors, int vocab_size) {
 	t->vocab_scores = scores;
 
 	qsort(t->sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
+
+	t->byte_fallbacks = str_lookup("<0x00>", t->sorted_vocab, t->vocab_size);
+
+	if (t->byte_fallbacks >= 0) {
+		for (int i = 0; i < 256; i++) {
+			t->byte_pieces[i][0] = (char)i;
+			t->byte_pieces[i][1] = '\0';
+		}
+	}
 }
 
 void free_tokenizer(Tokenizer* t) {
@@ -119,15 +134,13 @@ void free_tokenizer(Tokenizer* t) {
 
 char* decode(Tokenizer* t, int prev_token, int token) {
 	char* piece = t->vocab[token];
-	// following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
-	if (prev_token == 1 && piece[0] == ' ') {
+	// following BOS token, sentencepiece decoder strips any leading whitespace (see PR #89)
+	if (prev_token == t->bos_id && piece[0] == ' ') {
 		piece++;
 	}
-	// careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
-	// parse this and convert and return the actual byte
-	unsigned char byte_val;
-	if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
-		piece = (char*)t->byte_pieces + byte_val * 2;
+	// return byte piece for byte fallback tokens (<0x00>, <0x01>, etc.)
+	if (t->byte_fallbacks >= 0 && (unsigned)(token - t->byte_fallbacks) < 256) {
+		piece = t->byte_pieces[token - t->byte_fallbacks];
 	}
 	return piece;
 }
@@ -150,16 +163,9 @@ void safe_printf(char* piece) {
 	printf("%s", piece);
 }
 
-int str_lookup(char* str, TokenIndex* sorted_vocab, int vocab_size) {
-	// efficiently find the perfect match for str in vocab, return its index or -1 if not found
-	TokenIndex tok = {.str = str}; // acts as the key to search for
-	TokenIndex* res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
-	return res != NULL ? res->id : -1;
-}
-
 void encode(Tokenizer* t, char* text, int8_t bos, int8_t eos, int* tokens, int* n_tokens) {
 	// encode the string text (input) into an upper-bound preallocated tokens[] array
-	// bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
+	// bos != 0 means prepend the BOS token, eos != 0 means append the EOS token
 	if (text == NULL) {
 		fprintf(stderr, "cannot encode NULL text\n");
 		exit(EXIT_FAILURE);
@@ -173,9 +179,9 @@ void encode(Tokenizer* t, char* text, int8_t bos, int8_t eos, int* tokens, int* 
 	// start at 0 tokens
 	*n_tokens = 0;
 
-	// add optional BOS (=1) token, if desired
+	// add optional BOS token, if desired
 	if (bos)
-		tokens[(*n_tokens)++] = 1;
+		tokens[(*n_tokens)++] = t->bos_id;
 
 	// add_dummy_prefix is true by default
 	// so prepend a dummy prefix token to the input string, but only if text != ""
@@ -266,9 +272,9 @@ void encode(Tokenizer* t, char* text, int8_t bos, int8_t eos, int* tokens, int* 
 		(*n_tokens)--; // token length decreased
 	}
 
-	// add optional EOS (=2) token, if desired
+	// add optional EOS token, if desired
 	if (eos)
-		tokens[(*n_tokens)++] = 2;
+		tokens[(*n_tokens)++] = t->eos_id;
 
 	free(str_buffer);
 }
@@ -545,8 +551,8 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 		}
 		pos++;
 
-		// data-dependent terminating condition: the BOS (=1) token delimits sequences, EOS (=2) token ends the sequence
-		if (next == 1 || next == 2) {
+		// data-dependent terminating condition: the BOS token delimits sequences, EOS token ends the sequence
+		if (next == tokenizer->bos_id || next == tokenizer->eos_id) {
 			break;
 		}
 
