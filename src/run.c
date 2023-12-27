@@ -507,6 +507,14 @@ void generate(struct Transformer* transformer, Tokenizer* tokenizer, Sampler* sa
 		exit(EXIT_FAILURE);
 	}
 
+	char* tokens_env = getenv("CALM_TOKENS");
+	if (tokens_env && atoi(tokens_env)) {
+		for (int i = 0; i < num_prompt_tokens; i++) {
+			printf("[%s]", decode(tokenizer, prompt_tokens[i], prompt_tokens[i]));
+		}
+		printf("\n");
+	}
+
 	// hack for profiling: offset pos to make sure we need to use most of kv cache
 	char* pos_offset_env = getenv("CALM_POSO");
 	int pos_offset = pos_offset_env ? atoi(pos_offset_env) : 0;
