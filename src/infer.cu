@@ -295,8 +295,14 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb,
 	kvtype_t* val = valb + (kvh * head_size + i) * seq_len;
 
 	float res = 0.0f;
-	for (int t = threadIdx.x; t <= pos; t += warpSize) {
-		res += att[t] * float(val[t]);
+	for (int t = threadIdx.x * 2; t + 1 <= pos; t += warpSize * 2) {
+		float2 vv = __half22float2(*((half2*)&val[t]));
+		res += vv.x * att[t];
+		res += vv.y * att[t + 1];
+	}
+
+	if (pos % 2 == 0 && threadIdx.x == 0) {
+		res += att[pos] * float(val[pos]);
 	}
 
 	res = warpreduce_sum(res);
