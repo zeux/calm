@@ -309,9 +309,9 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 	assert(p->vocab_size % 32 == 0);
 
-	// rmsnorm requires a larger-than-warp block size for efficiency
+	// rmsnorm and softmax require a larger-than-warp block size for efficiency
 	const int rmsnorm_size = 1024;
-	assert(dim % rmsnorm_size == 0);
+	const int softmax_size = 1024;
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
@@ -345,7 +345,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		profiler_trigger("attn_score", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
 
 		// softmax the scores to get attention weights, from 0..pos inclusively
-		kernel_attn_softmax<<<p->n_heads, 1024>>>(s->att, p->n_heads, p->seq_len, pos);
+		kernel_attn_softmax<<<p->n_heads, softmax_size>>>(s->att, p->n_heads, p->seq_len, pos);
 		profiler_trigger("attn_softmax", 0);
 
 		// compute weighted sum of the values into xb
