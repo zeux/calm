@@ -32,7 +32,7 @@ calm currently expects models to follow LLama-like architecture (RMSNorm normali
 
 ## Supported formats
 
-Model weights are currently using `float16`. KV cache activations are currently using `float16`. Support for smaller formats is planned.
+Model weights are currently using `float16`. KV cache is using `float16`. Support for smaller formats for model weights is planned.
 
 ## Performance
 
