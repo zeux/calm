@@ -24,7 +24,7 @@ python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct
 
 ## Supported models
 
-calm currently expects models to follow LLama-like architecture (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN). It has been tested on following models (HF repos):
+calm currently expects models to follow Llama-like architecture (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE). It has been tested on following models:
 
 - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
 - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
