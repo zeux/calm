@@ -221,6 +221,8 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 
 	long mid = time_in_ms();
 
+	free(input);
+
 	printf("# %s: %d tokens (%.2f sec, %.2f tok/s)\n",
 	       path, n_tokens, (double)(mid - start) / 1000, (double)n_tokens / (double)(mid - start) * 1000);
 
@@ -247,6 +249,8 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 	}
 
 	long end = time_in_ms();
+
+	free(tokens);
 
 	double ppl = exp(-sum / den);
 
