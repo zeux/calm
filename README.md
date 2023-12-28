@@ -50,3 +50,4 @@ calm uses [🤗 Safetensors](https://huggingface.co/docs/safetensors/index) to s
 
 [^1]: CUDA runtime and compiler is used for GPU acceleration, but no other CUDA libraries are used; [jsmn](https://github.com/zserge/jsmn) is used for JSON parsing. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
 [^2]: Linux is the only supported OS at the moment.
+[^3]: Based on testing a specific Gigabyte GeForce RTX 4090 where both individual kernels from this repository and cuBLAS peak at about ~955 GB/s.
