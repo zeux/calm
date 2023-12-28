@@ -24,7 +24,7 @@ python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct
 
 ## Supported models
 
-calm currently expects models to follow LLama-like architecture (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN). It has been tested on following models:
+calm currently expects models to follow LLama-like architecture (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN). It has been tested on following models (HF repos):
 
 - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
 - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
@@ -33,6 +33,16 @@ calm currently expects models to follow LLama-like architecture (RMSNorm normali
 ## Supported formats
 
 Model weights are currently using `float16`. KV cache activations are currently using `float16`. Support for smaller formats is planned.
+
+## Performance
+
+As of December 2023, with Mistral 7B model and fp16 weights, `calm` reaches ~63.5 tok/s (921 GB/s) on short sequences and ~60 tok/s (904 GB/s) at the end of the 4096 token context, when using NVidia GeForce RTX 4090.
+
+Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
+
+Currently weights only support `float16`; in the future, 8-bit and 4-bit quantization (fp8, int4/8 AWQ) is planned. This will allow running inference at higher tok/s, however the main metric is bandwidth utilization and the goal is to keep it as close to peak as possible at all supported weight formats.
+
+RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3]. The code has not been heavily tuned for datacenter-grade hardware (A100/H100) or earlier NVidia architectures yet.
 
 ## Model files
 
