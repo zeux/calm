@@ -198,6 +198,62 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	free(prompt_tokens);
 }
 
+void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const char* path) {
+	int max_input_size = 32 * 1024;
+	int max_tokens = tokenizer_bound(max_input_size);
+
+	FILE* file = fopen(path, "r");
+	if (!file) {
+		fprintf(stderr, "failed to open %s\n", path);
+		exit(EXIT_FAILURE);
+	}
+
+	char* input = (char*)malloc(max_input_size + 1);
+	size_t input_size = fread(input, 1, max_input_size, file);
+	fclose(file);
+
+	input[input_size] = '\0';
+
+	long start = time_in_ms();
+
+	int* tokens = (int*)malloc(max_tokens * sizeof(int));
+	int n_tokens = tokenizer_encode(tokenizer, input, TF_ENCODE_BOS, tokens);
+
+	long mid = time_in_ms();
+
+	printf("# %s: %d tokens (%.2f sec, %.2f tok/s)\n",
+	       path, n_tokens, (double)(mid - start) / 1000, (double)n_tokens / (double)(mid - start) * 1000);
+
+	int vocab_size = transformer->config.vocab_size;
+
+	double sum = 0, den = 0;
+
+	for (int i = 0; i + 1 < n_tokens; i++) {
+		if (i != 0 && i % 1000 == 0) {
+			printf("# progress (%d/%d): %.3f\n", i, n_tokens, exp(-sum / den));
+		}
+
+		// for now we reset the context after reaching the end of the window; this will result in artifically higher perplexity
+		// note that this also means we don't get the BOS token which we might need to fix later...
+		int pos = i % transformer->config.seq_len;
+		float* logits = transformer->forward(transformer, tokens[i], pos, 0);
+
+		sample_softmax(logits, vocab_size);
+
+		float prob = logits[tokens[i + 1]];
+
+		sum += log(prob);
+		den += 1;
+	}
+
+	long end = time_in_ms();
+
+	double ppl = exp(-sum / den);
+
+	printf("# perplexity: %.3f (%.2f sec, %.2f tok/s)\n",
+	       ppl, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
+}
+
 // ----------------------------------------------------------------------------
 // CLI, include only if not testing
 #ifndef TESTING
@@ -212,6 +268,7 @@ void error_usage() {
 	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
 	fprintf(stderr, "  -r <int>    number of sequences to decode, default 1\n");
 	fprintf(stderr, "  -i <string> input prompt\n");
+	fprintf(stderr, "  -x <path>   compute perplexity for text file\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -224,6 +281,7 @@ int main(int argc, char* argv[]) {
 	int steps = 256;                 // number of steps to run for
 	int sequences = 1;               // number of sequences to decode
 	char* prompt = NULL;             // prompt string
+	char* perplexity = NULL;         // text file for perplexity
 	unsigned long long rng_seed = 0; // seed rng with time by default
 
 	// poor man's C argparse so we can override the defaults above from the command line
@@ -256,6 +314,8 @@ int main(int argc, char* argv[]) {
 			sequences = atoi(argv[i + 1]);
 		} else if (argv[i][1] == 'i') {
 			prompt = argv[i + 1];
+		} else if (argv[i][1] == 'x') {
+			perplexity = argv[i + 1];
 		} else {
 			error_usage();
 		}
@@ -317,8 +377,12 @@ int main(int argc, char* argv[]) {
 	profiler_reset();
 
 	// run!
-	for (int s = 0; s < sequences; ++s) {
-		generate(&transformer, &tokenizer, &sampler, prompt, steps);
+	if (perplexity) {
+		study(&transformer, &tokenizer, perplexity);
+	} else {
+		for (int s = 0; s < sequences; ++s) {
+			generate(&transformer, &tokenizer, &sampler, prompt, steps);
+		}
 	}
 
 	profiler_dump();

@@ -15,7 +15,7 @@ static float random_f32(unsigned long long* state) { // random float32 in [0,1)
 	return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-static void sample_softmax(float* x, int size) {
+void sample_softmax(float* x, int size) {
 	// find max value (for numerical stability)
 	float max_val = x[0];
 	for (int i = 1; i < size; i++) {
