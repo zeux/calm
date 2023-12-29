@@ -4,9 +4,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// we only support CPU inference for fp16 and only when the compiler supports it natively
+#if defined(__FLT16_MANT_DIG__)
+typedef _Float16 dtype_t;
+#else
+typedef short dtype_t;
+#endif
+
 void prepare(struct Transformer* transformer) {
 	struct Config* p = &transformer->config;
 	struct RunState* s = &transformer->state;
+
+	if (transformer->weights.dsize != 2) {
+		fprintf(stderr, "FATAL: CPU backend only supports fp16 weights\n");
+		abort();
+	}
 
 	// we calloc instead of malloc to keep valgrind happy
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;

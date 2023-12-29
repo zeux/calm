@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <cuda_fp16.h>
+#include <cuda_fp8.h>
 #include <float.h>
 
 __device__ inline float warpreduce_sum(float v) {
@@ -46,7 +47,8 @@ __device__ inline float blockreduce_max(float v) {
 }
 
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
-__device__ inline float matmul(float* x, half* w, int i, int n) {
+template <typename T>
+__device__ inline float matmul(float* x, T* w, int i, int n) {
 	float val = 0.0f;
 	for (int j = 0; j < n; j++) {
 		val += float(w[i * n + j]) * x[j];
@@ -66,4 +68,20 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 		val += ww.y * x[j + 1];
 	}
 	return warpreduce_sum(val);
+}
+
+// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
+// specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
+__device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
+       assert(n % (warpSize * 4) == 0);
+       int lane = threadIdx.x % warpSize;
+       float val = 0.0f;
+       for (int j = lane * 4; j < n; j += warpSize * 4) {
+               float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * n + j]);
+               val += ww.x * x[j];
+               val += ww.y * x[j + 1];
+               val += ww.z * x[j + 2];
+               val += ww.w * x[j + 3];
+       }
+       return warpreduce_sum(val);
 }

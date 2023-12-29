@@ -6,8 +6,6 @@
 #include <math.h>
 #include <stdio.h>
 
-#include <cuda_fp16.h>
-
 #include "helpers.cuh"
 
 #define CUDA_CHECK(x)                                                                                    \
@@ -62,19 +60,19 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		weights->rms_att_weight[l] = (float*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(float));
 		weights->rms_ffn_weight[l] = (float*)cuda_devicecopy(weights->rms_ffn_weight[l], dim * sizeof(float));
 
-		weights->wq[l] = (dtype_t*)cuda_devicecopy(weights->wq[l], dim * dim * sizeof(dtype_t));
-		weights->wk[l] = (dtype_t*)cuda_devicecopy(weights->wk[l], dim * kv_dim * sizeof(dtype_t));
-		weights->wv[l] = (dtype_t*)cuda_devicecopy(weights->wv[l], dim * kv_dim * sizeof(dtype_t));
-		weights->wo[l] = (dtype_t*)cuda_devicecopy(weights->wo[l], dim * dim * sizeof(dtype_t));
+		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * weights->dsize);
+		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * weights->dsize);
+		weights->wv[l] = cuda_devicecopy(weights->wv[l], dim * kv_dim * weights->dsize);
+		weights->wo[l] = cuda_devicecopy(weights->wo[l], dim * dim * weights->dsize);
 
-		weights->w1[l] = (dtype_t*)cuda_devicecopy(weights->w1[l], dim * hidden_dim * sizeof(dtype_t));
-		weights->w2[l] = (dtype_t*)cuda_devicecopy(weights->w2[l], dim * hidden_dim * sizeof(dtype_t));
-		weights->w3[l] = (dtype_t*)cuda_devicecopy(weights->w3[l], dim * hidden_dim * sizeof(dtype_t));
+		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * weights->dsize);
+		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * weights->dsize);
+		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * weights->dsize);
 	}
 
 	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
-	weights->token_embedding_table = (dtype_t*)cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * sizeof(dtype_t));
-	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
+	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * weights->dsize);
+	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * weights->dsize);
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
@@ -91,7 +89,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 }
 
-__global__ static void kernel_embed(float* o, dtype_t* weight, int size) {
+template <typename T>
+__global__ static void kernel_embed(float* o, T* weight, int size) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < size);
 
@@ -122,7 +121,8 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	}
 }
 
-__global__ static void kernel_matmul_cls(float* xout, float* x, dtype_t* w, int n, int d) {
+template <typename T>
+__global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -133,12 +133,13 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, dtype_t* w, int 
 	}
 }
 
-__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, dtype_t* wq, dtype_t* wk, dtype_t* wv, int n, int d, int kvd) {
+template <typename T>
+__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, int n, int d, int kvd) {
 	int i = blockIdx.x;
 	assert(i < d + kvd * 2);
 
 	float* out = i < d ? qout : (i < d + kvd ? kout : vout);
-	dtype_t* w = i < d ? wq : (i < d + kvd ? wk : wv);
+	T* w = i < d ? wq : (i < d + kvd ? wk : wv);
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
 	float val = matmul_warppar(x, w, j, n);
@@ -147,7 +148,8 @@ __global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, 
 	}
 }
 
-__global__ static void kernel_matmul_attn(float* xout, float* x, dtype_t* w, int n, int d) {
+template <typename T>
+__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -159,7 +161,8 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, dtype_t* w, int
 	}
 }
 
-__global__ static void kernel_matmul_ffn13(float* xout, float* x, dtype_t* w1, dtype_t* w3, int n, int d) {
+template <typename T>
+__global__ static void kernel_matmul_ffn13(float* xout, float* x, T* w1, T* w3, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -176,7 +179,8 @@ __global__ static void kernel_matmul_ffn13(float* xout, float* x, dtype_t* w1, d
 	}
 }
 
-__global__ static void kernel_matmul_ffn2(float* xout, float* x, dtype_t* w, int n, int d) {
+template <typename T>
+__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -312,7 +316,8 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb,
 	}
 }
 
-extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
+template <typename T>
+static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	profiler_begin();
 
 	// a few convenience variables
@@ -336,7 +341,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32>>>(x, w->token_embedding_table + token * dim, dim);
+	kernel_embed<<<dim / 32, 32>>>(x, (T*)w->token_embedding_table + token * dim, dim);
 	profiler_trigger("embed", 0);
 
 	// forward all the layers
@@ -348,8 +353,8 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		profiler_trigger("rmsnorm", 0);
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, w->wq[l], w->wk[l], w->wv[l], dim, dim, kv_dim);
-		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(dtype_t));
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], dim, dim, kv_dim);
+		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(T));
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
@@ -375,19 +380,19 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 		profiler_trigger("attn_mix", p->n_kv_heads * (pos + 1) * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, w->wo[l], dim, dim);
-		profiler_trigger("matmul_attn", dim * dim * sizeof(dtype_t));
+		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, (T*)w->wo[l], dim, dim);
+		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		// ffn rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 		profiler_trigger("rmsnorm", 0);
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-		kernel_matmul_ffn13<<<hidden_dim, 32>>>(s->hb, s->xb, w->w1[l], w->w3[l], dim, hidden_dim);
-		profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(dtype_t));
+		kernel_matmul_ffn13<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+		profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
 
-		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, w->w2[l], hidden_dim, dim);
-		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(dtype_t));
+		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, (T*)w->w2[l], hidden_dim, dim);
+		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
@@ -402,12 +407,23 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	profiler_trigger("rmsnorm", 0);
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, w->wcls, dim, p->vocab_size);
-	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(dtype_t));
+	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, (T*)w->wcls, dim, p->vocab_size);
+	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
 
 	profiler_endsync();
 
 	CUDA_SYNC();
 
 	return s->logits;
+}
+
+extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
+	switch (transformer->weights.dsize) {
+	case 1:
+		return forward<__nv_fp8_e5m2>(transformer, token, pos, flags);
+	case 2:
+		return forward<half>(transformer, token, pos, flags);
+	default:
+		return NULL;
+	}
 }

@@ -15,7 +15,7 @@ argp.add_argument("input", type=str, nargs="?")
 argp.add_argument("--config", type=str)
 argp.add_argument("--tokenizer", type=str)
 argp.add_argument("--models", type=str, nargs="+")
-argp.add_argument("--dtype", type=str, default="float16", choices=["bfloat16", "float16", "float32"])
+argp.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "fp8"])
 args = argp.parse_args()
 
 if args.input is not None:
@@ -133,7 +133,8 @@ def permute_reverse(w, heads):
     dim2 = w.shape[1]
     return w.view(heads, 2, dim1 // heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
-dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
+# fp8 support requires torch 2.1, but we support other dtypes on earlier versions
+dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None)}[args.dtype]
 
 # convert weights
 tensors["model.embed.weight"] = weights["model.embed_tokens.weight"].to(dtype)
