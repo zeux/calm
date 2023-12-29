@@ -18,7 +18,7 @@ python tools/convert.py mistral-7b-instruct.calm Mistral-7B-Instruct-v0.2/
 make && ./build/run mistral-7b-instruct.calm -i "Q: What is the meaning of life?" -t 0
 ```
 
-Before running Python you may want to install the dependencies via `pip -r tools/requirements.txt`. When using git, git-lfs is required and the download size may be larger than necessary; you can use `tools/download.py` instead:
+Before running Python you may want to install the dependencies via `pip install -r tools/requirements.txt`. When using git, git-lfs is required and the download size may be larger than necessary; you can use `tools/download.py` instead:
 
 ```sh
 python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct-v0.2
