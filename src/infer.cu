@@ -59,8 +59,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
 
 	for (int l = 0; l < config->n_layers; ++l) {
-		weights->rms_att_weight[l] = (dtype_t*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(dtype_t));
-		weights->rms_ffn_weight[l] = (dtype_t*)cuda_devicecopy(weights->rms_ffn_weight[l], dim * sizeof(dtype_t));
+		weights->rms_att_weight[l] = (float*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(float));
+		weights->rms_ffn_weight[l] = (float*)cuda_devicecopy(weights->rms_ffn_weight[l], dim * sizeof(float));
 
 		weights->wq[l] = (dtype_t*)cuda_devicecopy(weights->wq[l], dim * dim * sizeof(dtype_t));
 		weights->wk[l] = (dtype_t*)cuda_devicecopy(weights->wk[l], dim * kv_dim * sizeof(dtype_t));
@@ -72,7 +72,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		weights->w3[l] = (dtype_t*)cuda_devicecopy(weights->w3[l], dim * hidden_dim * sizeof(dtype_t));
 	}
 
-	weights->rms_final_weight = (dtype_t*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(dtype_t));
+	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
 	weights->token_embedding_table = (dtype_t*)cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * sizeof(dtype_t));
 	weights->wcls = (dtype_t*)cuda_devicecopy(weights->wcls, dim * config->vocab_size * sizeof(dtype_t));
 
@@ -98,7 +98,7 @@ __global__ static void kernel_embed(float* o, dtype_t* weight, int size) {
 	o[i] = float(weight[i]);
 }
 
-__global__ static void kernel_rmsnorm(float* o, float* x, dtype_t* weight, int size) {
+__global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -118,7 +118,7 @@ __global__ static void kernel_rmsnorm(float* o, float* x, dtype_t* weight, int s
 
 	// normalize and scale
 	for (int j = i; j < size; j += blockSize) {
-		o[j] = float(weight[j]) * (ss * x[j]);
+		o[j] = weight[j] * (ss * x[j]);
 	}
 }
 

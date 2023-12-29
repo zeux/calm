@@ -34,8 +34,8 @@ struct Weights {
 	// token embedding table
 	dtype_t* token_embedding_table; // (vocab_size, dim)
 	// weights for rmsnorms
-	dtype_t* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
-	dtype_t* rms_ffn_weight[MAX_LAYERS]; // (dim)
+	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
+	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
 	// weights for matmuls. note dim == n_heads * head_size
 	dtype_t* wq[MAX_LAYERS]; // (dim, n_heads * head_size)
 	dtype_t* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
@@ -46,8 +46,8 @@ struct Weights {
 	dtype_t* w2[MAX_LAYERS]; // (dim, hidden_dim)
 	dtype_t* w3[MAX_LAYERS]; // (hidden_dim, dim)
 	// final rmsnorm
-	dtype_t* rms_final_weight; // (dim,)
-	// (optional) classifier weights for the logits, on the last layer
+	float* rms_final_weight; // (dim,)
+	// classifier weights for the logits, on the last layer
 	dtype_t* wcls;
 };
 

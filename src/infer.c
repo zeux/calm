@@ -34,7 +34,7 @@ void prepare(struct Transformer* transformer) {
 #endif
 }
 
-static void rmsnorm(float* o, float* x, dtype_t* weight, int size) {
+static void rmsnorm(float* o, float* x, float* weight, int size) {
 	// calculate sum of squares
 	float ss = 0.0f;
 	for (int j = 0; j < size; j++) {

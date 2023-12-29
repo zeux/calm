@@ -44,18 +44,21 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	enum DType dtype = dt_f16;
 
 	weights->token_embedding_table = (dtype_t*)tensors_get(tensors, "model.embed.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
+
 	for (int l = 0; l < config->n_layers; ++l) {
-		weights->rms_att_weight[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dtype, (int[]){config->dim, 0, 0, 0});
+		weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		weights->wq[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, dtype, (int[]){config->dim, config->n_heads * head_size, 0, 0});
 		weights->wk[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, dtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
 		weights->wv[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, dtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
 		weights->wo[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, dtype, (int[]){config->n_heads * head_size, config->dim, 0, 0});
-		weights->rms_ffn_weight[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dtype, (int[]){config->dim, 0, 0, 0});
+
+		weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		weights->w1[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
 		weights->w2[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, dtype, (int[]){config->dim, config->hidden_dim, 0, 0});
 		weights->w3[l] = (dtype_t*)tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
 	}
-	weights->rms_final_weight = (dtype_t*)tensors_get(tensors, "model.norm.weight", 0, dtype, (int[]){config->dim, 0, 0, 0});
+
+	weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	weights->wcls = (dtype_t*)tensors_get(tensors, "model.output.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
 }
 
