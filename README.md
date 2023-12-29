@@ -31,18 +31,25 @@ calm currently expects models to follow Llama-like architecture (RMSNorm normali
 - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
 - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
 - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
+- Yi 34B (01-ai/Yi-34B-Chat)
 
 ## Supported formats
 
-Model weights are currently using `float16`. KV cache is using `float16`. Support for smaller formats for model weights is planned.
+Model weights support `fp16` and `fp8` formats; the weight type is specified at conversion time via `--dtype` argument to `convert.py`.
+
+`fp16` corresponds to 16-bit floating point (e5m10) and is the default option; note that some models store weights in bf16 which will be automatically converted.
+
+`fp8` corresponds to 8-bit floating point (e5m2). Using `fp8` carries a ~0.5% perplexity penalty at almost double the inference speed and half the model size.
+
+KV cache is using `fp16`.
 
 ## Performance
 
-As of December 2023, with Mistral 7B model and fp16 weights, `calm` reaches ~63.5 tok/s (921 GB/s) on short sequences and ~60 tok/s (904 GB/s) at the end of the 4096 token context, when using NVidia GeForce RTX 4090.
+As of December 2023, with Mistral 7B model and `fp16` weights, `calm` reaches ~63.5 tok/s (921 GB/s) on short sequences and ~60 tok/s (904 GB/s) at the end of the 4096 token context, when using NVidia GeForce RTX 4090. When using `fp8` weights on the same hardware and model, the performance is ~119 tok/s (863 GB/s) on short sequences and ~108 tok/s (840 GB/s) at the end of the context.
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
-Currently weights only support `float16`; in the future, 8-bit and 4-bit quantization (fp8, int4/8 AWQ) is planned. This will allow running inference at higher tok/s, however the main metric is bandwidth utilization and the goal is to keep it as close to peak as possible at all supported weight formats.
+Currently weights support `fp16` and `fp8` formats; in the future, 4-bit quantization is planned. This will allow running inference at higher tok/s, however the main metric is bandwidth utilization and the goal is to keep it as close to peak as possible at all supported weight formats.
 
 RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3]. The code has not been heavily tuned for datacenter-grade hardware (A100/H100) or earlier NVidia architectures yet.
 
