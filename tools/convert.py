@@ -135,14 +135,22 @@ def permute_reverse(w, heads):
 
 dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[args.dtype]
 
-# convert weights to dtype and permute if necessary
-for k, v in weights.items():
-    if "self_attn.q_proj" in k:
-        v = permute_reverse(v, config["num_attention_heads"])
-    elif "self_attn.k_proj" in k:
-        v = permute_reverse(v, config["num_key_value_heads"])
+# convert weights
+tensors["model.embed.weight"] = weights["model.embed_tokens.weight"].to(dtype)
 
-    tensors[k] = v.to(dtype)
+for l in range(config["num_hidden_layers"]):
+    tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].to(dtype)
+    tensors[f"model.layers.{l}.attn.wq.weight"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"]).to(dtype)
+    tensors[f"model.layers.{l}.attn.wk.weight"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"]).to(dtype)
+    tensors[f"model.layers.{l}.attn.wv.weight"] = weights[f"model.layers.{l}.self_attn.v_proj.weight"].to(dtype)
+    tensors[f"model.layers.{l}.attn.wo.weight"] = weights[f"model.layers.{l}.self_attn.o_proj.weight"].to(dtype)
+    tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].to(dtype)
+    tensors[f"model.layers.{l}.mlp.w1.weight"] = weights[f"model.layers.{l}.mlp.gate_proj.weight"].to(dtype)
+    tensors[f"model.layers.{l}.mlp.w2.weight"] = weights[f"model.layers.{l}.mlp.down_proj.weight"].to(dtype)
+    tensors[f"model.layers.{l}.mlp.w3.weight"] = weights[f"model.layers.{l}.mlp.up_proj.weight"].to(dtype)
+
+tensors["model.norm.weight"] = weights["model.norm.weight"].to(dtype)
+tensors["model.output.weight"] = weights["lm_head.weight"].to(dtype)
 
 # metadata values must be strings in safetensors
 safetensors.torch.save_file(tensors, args.output, {k: str(v) for k, v in metadata.items()})
