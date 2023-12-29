@@ -39,7 +39,29 @@ static long long json_llong(const char* json, const jsmntok_t* tok) {
 	return atoll(tmp);
 }
 
-static bool validate_shape(enum DType dtype, int shape[4], size_t length) {
+static int json_dtype(const char* json, const jsmntok_t* tok, enum DType* dtype, int* dsize) {
+	assert(tok->type == JSMN_STRING);
+
+	if (json_equal(json, tok, "F32")) {
+		*dtype = dt_f32;
+		*dsize = 4;
+	} else if (json_equal(json, tok, "F16")) {
+		*dtype = dt_f16;
+		*dsize = 2;
+	} else if (json_equal(json, tok, "BF16")) {
+		*dtype = dt_bf16;
+		*dsize = 2;
+	} else if (json_equal(json, tok, "U8")) {
+		*dtype = dt_u8;
+		*dsize = 1;
+	} else {
+		return -1;
+	}
+
+	return 0;
+}
+
+static bool validate_shape(int dsize, int shape[4], size_t length) {
 	size_t expected_length = 1;
 	int max_elements = INT_MAX;
 
@@ -54,10 +76,7 @@ static bool validate_shape(enum DType dtype, int shape[4], size_t length) {
 		max_elements /= dim;
 	}
 
-	size_t element_size = (dtype == dt_f32) ? sizeof(float) : (dtype == dt_f16) ? sizeof(uint16_t)
-	                                                                            : sizeof(uint8_t);
-
-	return expected_length * element_size == length;
+	return expected_length * dsize == length;
 }
 
 static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, const char* json, const jsmntok_t* tokens, int toki) {
@@ -73,18 +92,13 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 	toki++;
 
 	size_t length = 0;
+	int dsize = 0;
 
 	for (int i = 0; i < n_keys; ++i) {
 		const jsmntok_t* key = &tokens[toki];
 
 		if (json_equal(json, key, "dtype") && tokens[toki + 1].type == JSMN_STRING) {
-			if (json_equal(json, &tokens[toki + 1], "F32")) {
-				tensor->dtype = dt_f32;
-			} else if (json_equal(json, &tokens[toki + 1], "F16")) {
-				tensor->dtype = dt_f16;
-			} else if (json_equal(json, &tokens[toki + 1], "U8")) {
-				tensor->dtype = dt_u8;
-			} else {
+			if (json_dtype(json, &tokens[toki + 1], &tensor->dtype, &dsize) != 0) {
 				return -1;
 			}
 			toki += 2;
@@ -113,7 +127,7 @@ static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, c
 		}
 	}
 
-	if (!validate_shape(tensor->dtype, tensor->shape, length)) {
+	if (!validate_shape(dsize, tensor->shape, length)) {
 		return -1;
 	}
 
