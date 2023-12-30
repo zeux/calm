@@ -229,8 +229,8 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 
 	free(input);
 
-	printf("# %s: %d tokens (%.2f sec, %.2f tok/s)\n",
-	       path, n_tokens, (double)(mid - start) / 1000, (double)n_tokens / (double)(mid - start) * 1000);
+	printf("# %s: %d tokens (%.3f sec)\n",
+	       path, n_tokens, (double)(mid - start) / 1000);
 
 	int vocab_size = transformer->config.vocab_size;
 
