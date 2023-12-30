@@ -124,7 +124,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int head_size = dim / p->n_heads;
 
 	// copy the token embedding into x
-	dtype_t* content_row = w->token_embedding_table + token * dim;
+	dtype_t* content_row = (dtype_t*)w->token_embedding_table + token * dim;
 	for (int i = 0; i < dim; ++i)
 		x[i] = content_row[i];
 

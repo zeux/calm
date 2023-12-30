@@ -9,7 +9,7 @@ OBJECTS=$(SOURCES:%=$(BUILD)/%.o)
 
 BINARY=$(BUILD)/run
 
-CFLAGS=-g -Wall -Werror -O3 -ffast-math -Iextern -fopenmp -mf16c -mavx2
+CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math -Iextern -fopenmp -mf16c -mavx2
 CUFLAGS=-g -O2 -arch compute_80
 LDFLAGS=-lm -fopenmp -lcudart
 
