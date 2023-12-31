@@ -57,6 +57,15 @@ static int json_dtype(const char* json, const jsmntok_t* tok, enum DType* dtype,
 	} else if (json_equal(json, tok, "F8_E4M3")) {
 		*dtype = dt_f8e4m3;
 		*dsize = 1;
+	} else if (json_equal(json, tok, "I32")) {
+		*dtype = dt_i32;
+		*dsize = 4;
+	} else if (json_equal(json, tok, "I16")) {
+		*dtype = dt_i16;
+		*dsize = 2;
+	} else if (json_equal(json, tok, "I8")) {
+		*dtype = dt_i8;
+		*dsize = 1;
 	} else if (json_equal(json, tok, "U8")) {
 		*dtype = dt_u8;
 		*dsize = 1;

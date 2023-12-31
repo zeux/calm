@@ -8,6 +8,9 @@ enum DType {
 	dt_bf16,
 	dt_f8e5m2,
 	dt_f8e4m3,
+	dt_i32,
+	dt_i16,
+	dt_i8,
 	dt_u8,
 };
 
