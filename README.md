@@ -39,7 +39,7 @@ Model weights support `fp16` and `fp8` formats; the weight type is specified at 
 
 `fp16` corresponds to 16-bit floating point (e5m10) and is the default option; note that some models store weights in bf16 which will be automatically converted.
 
-`fp8` corresponds to 8-bit floating point (e5m2). Using `fp8` carries a ~0.5% perplexity penalty at almost double the inference speed and half the model size.
+`fp8` corresponds to 8-bit floating point (e5m2). Using `fp8` carries a ~0.5% perplexity penalty at almost double the inference speed and half the model size. e4m3 variant of `fp8` would result in a much smaller perplexity penalty (~0.1%) with basic tensor scaling, but it's currently not used because of performance issues wrt floating-point conversion.
 
 KV cache is using `fp16`.
 
