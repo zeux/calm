@@ -21,7 +21,7 @@ __device__ inline float warpreduce_max(float v) {
 	return v;
 }
 
-__device__ inline float blockreduce_shuffle(float v, float def) {
+__device__ inline float blocktranspose(float v, float def) {
 	int lane = threadIdx.x % warpSize;
 	int warp = threadIdx.x / warpSize;
 
@@ -34,14 +34,14 @@ __device__ inline float blockreduce_shuffle(float v, float def) {
 
 __device__ inline float blockreduce_sum(float v) {
 	v = warpreduce_sum(v);
-	v = blockreduce_shuffle(v, 0.f);
+	v = blocktranspose(v, 0.f);
 	v = warpreduce_sum(v);
 	return v;
 }
 
 __device__ inline float blockreduce_max(float v) {
 	v = warpreduce_max(v);
-	v = blockreduce_shuffle(v, -FLT_MAX);
+	v = blocktranspose(v, -FLT_MAX);
 	v = warpreduce_max(v);
 	return v;
 }
@@ -73,15 +73,15 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
-       assert(n % (warpSize * 4) == 0);
-       int lane = threadIdx.x % warpSize;
-       float val = 0.0f;
-       for (int j = lane * 4; j < n; j += warpSize * 4) {
-               float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * n + j]);
-               val += ww.x * x[j];
-               val += ww.y * x[j + 1];
-               val += ww.z * x[j + 2];
-               val += ww.w * x[j + 3];
-       }
-       return warpreduce_sum(val);
+	assert(n % (warpSize * 4) == 0);
+	int lane = threadIdx.x % warpSize;
+	float val = 0.0f;
+	for (int j = lane * 4; j < n; j += warpSize * 4) {
+		float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * n + j]);
+		val += ww.x * x[j];
+		val += ww.y * x[j + 1];
+		val += ww.z * x[j + 2];
+		val += ww.w * x[j + 3];
+	}
+	return warpreduce_sum(val);
 }

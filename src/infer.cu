@@ -136,7 +136,7 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int
 	float val = matmul_warppar(x, w, i, n);
 
 	// instead of writing one value per block, we transpose the values and write all results from first warp
-	val = blockreduce_shuffle(val, 0.f);
+	val = blocktranspose(val, 0.f);
 
 	if (threadIdx.x < blockDim.x / warpSize) {
 		xout[i + threadIdx.x] = val;
