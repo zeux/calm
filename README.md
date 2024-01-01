@@ -32,6 +32,7 @@ calm currently expects models to follow Llama-like architecture (RMSNorm normali
 - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
 - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
 - Yi 34B (01-ai/Yi-34B-Chat)
+- TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
 
 ## Supported formats
 
