@@ -25,7 +25,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 
-void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
+void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors, int context) {
 	// create config
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
@@ -34,6 +34,10 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	config->n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
 	config->vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
 	config->seq_len = 4096;
+
+	if (context) {
+		config->seq_len = context;
+	}
 
 	const char* rope_theta = tensors_metadata_find(tensors, "rope_theta");
 	config->rope_theta = rope_theta ? atof(rope_theta) : 10000.f;
@@ -277,6 +281,7 @@ void error_usage() {
 	fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
 	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
 	fprintf(stderr, "  -r <int>    number of sequences to decode, default 1\n");
+	fprintf(stderr, "  -c <int>    context length, default to model-specific maximum\n");
 	fprintf(stderr, "  -i <string> input prompt\n");
 	fprintf(stderr, "  -x <path>   compute perplexity for text file\n");
 	exit(EXIT_FAILURE);
@@ -293,6 +298,7 @@ int main(int argc, char* argv[]) {
 	char* prompt = NULL;             // prompt string
 	char* perplexity = NULL;         // text file for perplexity
 	unsigned long long rng_seed = 0; // seed rng with time by default
+	int context = 0;                 // context length
 
 	// poor man's C argparse so we can override the defaults above from the command line
 	if (argc >= 2) {
@@ -326,6 +332,8 @@ int main(int argc, char* argv[]) {
 			prompt = argv[i + 1];
 		} else if (argv[i][1] == 'x') {
 			perplexity = argv[i + 1];
+		} else if (argv[i][1] == 'c') {
+			context = atoi(argv[i + 1]);
 		} else {
 			error_usage();
 		}
@@ -350,7 +358,7 @@ int main(int argc, char* argv[]) {
 
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
-	build_transformer(&transformer.config, &transformer.weights, &tensors);
+	build_transformer(&transformer.config, &transformer.weights, &tensors, context);
 
 	printf("# %s: %d layers, %d context, weights %.1f GiB (fp%d), KV cache %.1f GiB (fp%d)\n",
 	       checkpoint_path, transformer.config.n_layers, transformer.config.seq_len,
