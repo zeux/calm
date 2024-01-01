@@ -47,8 +47,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	cudaDeviceProp devprop = {};
 	CUDA_CHECK(cudaGetDeviceProperties(&devprop, 0));
 
-	printf("# CUDA: %s, SM %d.%d, %.1f GiB, peak bandwidth %.0f GB/s\n",
-	       devprop.name, devprop.major, devprop.minor,
+	printf("# CUDA: %s, compute %d.%d, %d SMs, %.1f GiB, peak bandwidth %.0f GB/s\n",
+	       devprop.name, devprop.major, devprop.minor, devprop.multiProcessorCount,
 	       (double)devprop.totalGlobalMem / (1024 * 1024 * 1024),
 	       (double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
 
