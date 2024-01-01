@@ -199,37 +199,41 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, in
 	}
 }
 
-__global__ static void kernel_rope_kv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, float theta, int d, int kvd, int seq_len) {
+__global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, float theta_log2, int d, int kvd, int seq_len) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-	assert(i < d);
+	assert(i < d + kvd);
 
-	int head_dim = i % head_size;
-	float freq = 1.0f / powf(theta, head_dim / (float)head_size);
-	float val = pos * freq;
-	float fcr = cosf(val);
-	float fci = sinf(val);
+	int j = i < d ? i : i - d;
 
-	float q0 = q[i];
-	float q1 = q[i + 1];
-	q[i] = q0 * fcr - q1 * fci;
-	q[i + 1] = q0 * fci + q1 * fcr;
+	int head_dim = j & (head_size - 1);
+	float freq = exp2f(-theta_log2 * (head_dim / (float)head_size));
+	float fcr, fci;
+	sincosf(pos * freq, &fci, &fcr);
 
-	if (i < kvd) {
-		float k0 = k[i];
-		float k1 = k[i + 1];
+	if (i < d) {
+		float q0 = q[j];
+		float q1 = q[j + 1];
+		q[j] = q0 * fcr - q1 * fci;
+		q[j + 1] = q0 * fci + q1 * fcr;
+	} else {
+		float k0 = k[j];
+		float k1 = k[j + 1];
 		float rk0 = k0 * fcr - k1 * fci;
 		float rk1 = k0 * fci + k1 * fcr;
 
-		k[i] = rk0;
-		k[i + 1] = rk1;
+		float v0 = v[j];
+		float v1 = v[j + 1];
+
+		k[j] = rk0;
+		k[j + 1] = rk1;
 
 		// update kvcache key/value
-		kb[pos * kvd + i] = rk0;
-		kb[pos * kvd + i + 1] = rk1;
+		kb[pos * kvd + j] = rk0;
+		kb[pos * kvd + j + 1] = rk1;
 
 		// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
-		vb[pos + seq_len * i] = v[i];
-		vb[pos + seq_len * (i + 1)] = v[i + 1];
+		vb[pos + seq_len * j] = v0;
+		vb[pos + seq_len * (j + 1)] = v1;
 	}
 }
 
@@ -365,8 +369,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope_kv<<<dim / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, p->rope_theta, dim, kv_dim, p->seq_len);
-		profiler_trigger("rope_kv", 0);
+		assert((head_size & (head_size - 1)) == 0); // head_size must be a power of 2
+		kernel_rope_qkv<<<(dim + kv_dim) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, log2(p->rope_theta), dim, kv_dim, p->seq_len);
+		profiler_trigger("rope_qkv", 0);
 
 		// only update kv cache and don't output logits
 		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
