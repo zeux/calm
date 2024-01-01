@@ -101,10 +101,16 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
+	extern __shared__ float xs[];
+
 	// calculate sum of squares (per thread)
 	float ss = 0.0f;
 	for (int j = i; j < size; j += blockSize) {
-		ss += x[j] * x[j];
+		float v = x[j];
+		ss += v * v;
+
+		// premultiply x by weight into shared memory to accelerate the second loop
+		xs[j] = v * weight[j];
 	}
 
 	// sum across threads in block
@@ -116,8 +122,9 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	ss = 1.0f / sqrtf(ss);
 
 	// normalize and scale
+	// note: blockreduce above implies __syncthreads so xs[] reads are safe
 	for (int j = i; j < size; j += blockSize) {
-		o[j] = weight[j] * (ss * x[j]);
+		o[j] = xs[j] * ss;
 	}
 }
 
@@ -349,7 +356,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
 		// attention rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_att_weight[l], dim);
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_att_weight[l], dim);
 		profiler_trigger("rmsnorm", 0);
 
 		// qkv matmuls for this position
@@ -384,7 +391,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		// ffn rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size>>>(s->xb, x, w->rms_ffn_weight[l], dim);
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 		profiler_trigger("rmsnorm", 0);
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
@@ -403,7 +410,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	}
 
 	// final rmsnorm
-	kernel_rmsnorm<<<1, rmsnorm_size>>>(x, x, w->rms_final_weight, dim);
+	kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(x, x, w->rms_final_weight, dim);
 	profiler_trigger("rmsnorm", 0);
 
 	// classifier into logits
