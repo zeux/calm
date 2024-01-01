@@ -33,7 +33,10 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	config->n_heads = atoi(tensors_metadata(tensors, "n_heads"));
 	config->n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
 	config->vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
-	config->seq_len = 4096;
+
+	// for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since we don't implement sliding window attention
+	const char* max_seq_len = tensors_metadata_find(tensors, "max_seq_len");
+	config->seq_len = max_seq_len && atoi(max_seq_len) < 4096 ? atoi(max_seq_len) : 4096;
 
 	if (context) {
 		config->seq_len = context;
