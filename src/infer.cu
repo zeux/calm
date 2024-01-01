@@ -130,13 +130,16 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 
 template <typename T>
 __global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int d) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n);
 
-	if (threadIdx.x == 0) {
-		xout[i] = val;
+	// instead of writing one value per block, we transpose the values and write all results from first warp
+	val = blockreduce_shuffle(val, 0.f);
+
+	if (threadIdx.x < blockDim.x / warpSize) {
+		xout[i + threadIdx.x] = val;
 	}
 }
 
@@ -419,7 +422,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	profiler_trigger("rmsnorm", 0);
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size, 32>>>(s->logits, x, (T*)w->wcls, dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32>>>(s->logits, x, (T*)w->wcls, dim, p->vocab_size);
 	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
 
 	profiler_endsync();
