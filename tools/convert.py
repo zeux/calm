@@ -137,6 +137,7 @@ def permute_reverse(w, heads):
 
 # fp8 support requires torch 2.1, but we support other dtypes on earlier versions
 dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None)}[args.dtype]
+assert dtype
 
 # convert weights
 def conv(t):
