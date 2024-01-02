@@ -285,7 +285,7 @@ void error_usage() {
 	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
 	fprintf(stderr, "  -r <int>    number of sequences to decode, default 1\n");
 	fprintf(stderr, "  -c <int>    context length, default to model-specific maximum\n");
-	fprintf(stderr, "  -i <string> input prompt\n");
+	fprintf(stderr, "  -i <string> input prompt (- to read from stdin)\n");
 	fprintf(stderr, "  -x <path>   compute perplexity for text file\n");
 	exit(EXIT_FAILURE);
 }
@@ -351,6 +351,13 @@ int main(int argc, char* argv[]) {
 		topp = 0.9;
 	if (steps < 0)
 		steps = 0;
+
+	if (prompt && strcmp(prompt, "-") == 0) {
+		static char input[32768];
+		size_t input_size = fread(input, 1, sizeof(input) - 1, stdin);
+		input[input_size] = '\0';
+		prompt = input;
+	}
 
 	// read .safetensors model
 	struct Tensors tensors = {};
