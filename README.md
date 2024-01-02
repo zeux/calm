@@ -29,6 +29,7 @@ python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct
 calm currently expects models to follow Llama-like architecture (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE). It has been tested on following models:
 
 - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
+- Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
 - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
 - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
 - Yi 34B (01-ai/Yi-34B-Chat)
