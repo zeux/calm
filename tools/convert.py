@@ -160,5 +160,41 @@ for l in range(config["num_hidden_layers"]):
 tensors["model.norm.weight"] = weights["model.norm.weight"].float()
 tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 
+# in a perfect world, we would just use HF safetensors.torch.save_file
+# however, not only does it not support fp8 (https://github.com/huggingface/safetensors/pull/404), it also copies every tensor
+# our models are large, so we'll implement a custom save function. could even materialize converted tensors lazily later.
+def save_file(tensors, filename, metadata=None):
+    _TYPES = {
+        torch.float32: "F32",
+        torch.float16: "F16",
+        torch.bfloat16: "BF16",
+        getattr(torch, "float8_e5m2", None): "F8_E5M2",
+        getattr(torch, "float8_e4m3fn", None): "F8_E4M3",
+        torch.int32: "I32",
+        torch.int16: "I16",
+        torch.int8: "I8",
+        torch.uint8: "U8",
+    }
+
+    header = {}
+    offset = 0
+    if metadata:
+        header["__metadata__"] = metadata
+    for k, v in tensors.items():
+        size = v.numel() * v.element_size()
+        header[k] = { "dtype": _TYPES[v.dtype], "shape": v.shape, "data_offsets": [offset, offset + size] }
+        offset += size
+
+    hjson = json.dumps(header).encode("utf-8")
+    hjson += b" " * (-len(hjson) % 8)
+
+    with open(filename, "wb") as f:
+        f.write(len(hjson).to_bytes(8, byteorder="little"))
+        f.write(hjson)
+        for k, v in tensors.items():
+            assert v.layout == torch.strided and v.is_contiguous()
+            v.view(torch.uint8).numpy().tofile(f)
+
 # metadata values must be strings in safetensors
-safetensors.torch.save_file(tensors, args.output, {k: str(v) for k, v in metadata.items()})
+# save_file = safetensors.torch.save_file
+save_file(tensors, args.output, {k: str(v) for k, v in metadata.items()})
