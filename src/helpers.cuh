@@ -46,6 +46,21 @@ __device__ inline float blockreduce_max(float v) {
 	return v;
 }
 
+// fast fp8x4 => float4 conversion; drops unnecessary NaN handling from __nv_cvt_fp8_to_halfraw
+__device__ inline float4 fp8x4_e5m2_ff(__nv_fp8x4_e5m2 v) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+	return float4(v);
+#else
+	unsigned int vlo = v.__x, vhi = v.__x >> 16;
+	__half2_raw hlo = {(unsigned short)(vlo << 8), (unsigned short)(vlo & 0xff00)};
+	__half2_raw hhi = {(unsigned short)(vhi << 8), (unsigned short)(vhi & 0xff00)};
+	float2 rlo = __internal_halfraw2_to_float2(hlo);
+	float2 rhi = __internal_halfraw2_to_float2(hhi);
+	float4 res = {rlo.x, rlo.y, rhi.x, rhi.y};
+	return res;
+#endif
+}
+
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
 template <typename T>
 __device__ inline float matmul(float* x, T* w, int i, int n) {
@@ -78,7 +93,7 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n,
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	for (int j = lane * 4; j < n; j += warpSize * 4) {
-		float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * stride + j]);
+		float4 ww = fp8x4_e5m2_ff(*(__nv_fp8x4_e5m2*)&w[i * stride + j]);
 		float4 xx = *(float4*)&x[j];
 		val += ww.x * xx.x;
 		val += ww.y * xx.y;
