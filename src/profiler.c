@@ -125,6 +125,7 @@ void profiler_endsync() {
 
 void profiler_reset() {
 	profiler.n_kernels = 0;
+	memset(profiler.kernels, 0, sizeof(profiler.kernels));
 }
 
 void profiler_dump() {
