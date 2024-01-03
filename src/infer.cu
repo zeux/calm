@@ -133,7 +133,7 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n);
+	float val = matmul_warppar(x, w, i, n, n);
 
 	// instead of writing one value per block, we transpose the values and write all results from first warp
 	val = blocktranspose(val, 0.f);
@@ -152,7 +152,7 @@ __global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, 
 	T* w = i < d ? wq : (i < d + kvd ? wk : wv);
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
-	float val = matmul_warppar(x, w, j, n);
+	float val = matmul_warppar(x, w, j, n, n);
 	if (threadIdx.x == 0) {
 		out[j] = val;
 	}
@@ -163,7 +163,7 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, T* w, int n, in
 	int i = blockIdx.x;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n);
+	float val = matmul_warppar(x, w, i, n, n);
 
 	if (threadIdx.x == 0) {
 		// += for residual
@@ -176,8 +176,8 @@ __global__ static void kernel_matmul_ffn13(float* xout, float* x, T* w1, T* w3, 
 	int i = blockIdx.x;
 	assert(i < d);
 
-	float v1 = matmul_warppar(x, w1, i, n);
-	float v3 = matmul_warppar(x, w3, i, n);
+	float v1 = matmul_warppar(x, w1, i, n, n);
+	float v3 = matmul_warppar(x, w3, i, n, n);
 
 	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
 	float val = v1;
@@ -194,7 +194,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, in
 	int i = blockIdx.x;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n);
+	float val = matmul_warppar(x, w, i, n, n);
 
 	if (threadIdx.x == 0) {
 		// += for residual

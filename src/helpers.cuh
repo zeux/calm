@@ -58,12 +58,12 @@ __device__ inline float matmul(float* x, T* w, int i, int n) {
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for half weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
+__device__ inline float matmul_warppar(float* x, half* w, int i, int n, int stride) {
 	assert(n % (warpSize * 2) == 0);
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	for (int j = lane * 2; j < n; j += warpSize * 2) {
-		float2 ww = __half22float2(*(half2*)&w[i * n + j]);
+		float2 ww = __half22float2(*(half2*)&w[i * stride + j]);
 		val += ww.x * x[j];
 		val += ww.y * x[j + 1];
 	}
@@ -72,12 +72,12 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
+__device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n, int stride) {
 	assert(n % (warpSize * 4) == 0);
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	for (int j = lane * 4; j < n; j += warpSize * 4) {
-		float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * n + j]);
+		float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * stride + j]);
 		val += ww.x * x[j];
 		val += ww.y * x[j + 1];
 		val += ww.z * x[j + 2];
