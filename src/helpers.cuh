@@ -64,8 +64,9 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n, int stri
 	float val = 0.0f;
 	for (int j = lane * 2; j < n; j += warpSize * 2) {
 		float2 ww = __half22float2(*(half2*)&w[i * stride + j]);
-		val += ww.x * x[j];
-		val += ww.y * x[j + 1];
+		float2 xx = *(float2*)&x[j];
+		val += ww.x * xx.x;
+		val += ww.y * xx.y;
 	}
 	return warpreduce_sum(val);
 }
@@ -78,10 +79,11 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n,
 	float val = 0.0f;
 	for (int j = lane * 4; j < n; j += warpSize * 4) {
 		float4 ww = float4(*(__nv_fp8x4_e5m2*)&w[i * stride + j]);
-		val += ww.x * x[j];
-		val += ww.y * x[j + 1];
-		val += ww.z * x[j + 2];
-		val += ww.w * x[j + 3];
+		float4 xx = *(float4*)&x[j];
+		val += ww.x * xx.x;
+		val += ww.y * xx.y;
+		val += ww.z * xx.z;
+		val += ww.w * xx.w;
 	}
 	return warpreduce_sum(val);
 }
