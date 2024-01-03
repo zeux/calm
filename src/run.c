@@ -212,7 +212,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 }
 
 void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const char* path) {
-	int max_input_size = 32 * 1024;
+	int max_input_size = 64 * 1024;
 	int max_tokens = tokenizer_bound(max_input_size);
 
 	FILE* file = fopen(path, "r");
