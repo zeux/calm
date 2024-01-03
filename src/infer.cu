@@ -256,8 +256,9 @@ __global__ static void kernel_attn_score(float* attb, float* qb, kvtype_t* kb, i
 	float score = 0.0f;
 	for (int j = threadIdx.x * 2; j < head_size; j += warpSize * 2) {
 		float2 kk = __half22float2(*((half2*)&k[j]));
-		score += kk.x * q[j];
-		score += kk.y * q[j + 1];
+		float2 qq = *(float2*)&q[j];
+		score += kk.x * qq.x;
+		score += kk.y * qq.y;
 	}
 
 	score = warpreduce_sum(score);
@@ -315,8 +316,9 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb,
 	float res = 0.0f;
 	for (int t = threadIdx.x * 2; t + 1 <= pos; t += warpSize * 2) {
 		float2 vv = __half22float2(*((half2*)&val[t]));
-		res += vv.x * att[t];
-		res += vv.y * att[t + 1];
+		float2 aa = *(float2*)&att[t];
+		res += vv.x * aa.x;
+		res += vv.y * aa.y;
 	}
 
 	if (pos % 2 == 0 && threadIdx.x == 0) {
