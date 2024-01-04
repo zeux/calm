@@ -204,9 +204,9 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, in
 
 __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int d, int kvd, int seq_len) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-	assert(i < d + kvd);
+	assert(i < d + kvd + kv_sink * kvd);
 
-	int j = i < d ? i : i - d;
+	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
 	int head_dim = j & (head_size - 1);
 	float freq = exp2f(-theta_log2 * (head_dim / (float)head_size));
@@ -221,7 +221,7 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 
 		q[j] = rq0;
 		q[j + 1] = rq1;
-	} else {
+	} else if (i < d + kvd) {
 		float k0 = k[j];
 		float k1 = k[j + 1];
 		float rk0 = k0 * fcr - k1 * fci;
@@ -240,21 +240,18 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 		// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
 		vb[kv_pos + seq_len * j] = v0;
 		vb[kv_pos + seq_len * (j + 1)] = v1;
-
+	} else {
 		// rotate sink tokens forward to keep pace with non-sink tokens
-		for (int r = 0; r < kv_sink; r++) {
-			float ok0 = kb[r * kvd + j];
-			float ok1 = kb[r * kvd + j + 1];
+		float k0 = kb[j];
+		float k1 = kb[j + 1];
 
-			float ofcr, ofci;
-			sincosf(freq, &ofci, &ofcr);
+		sincosf(freq, &fci, &fcr);
 
-			float ork0 = ok0 * ofcr - ok1 * ofci;
-			float ork1 = ok0 * ofci + ok1 * ofcr;
+		float rk0 = k0 * fcr - k1 * fci;
+		float rk1 = k0 * fci + k1 * fcr;
 
-			kb[r * kvd + j] = ork0;
-			kb[r * kvd + j + 1] = ork1;
-		}
+		kb[j] = rk0;
+		kb[j + 1] = rk1;
 	}
 }
 
@@ -398,7 +395,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
 		assert((head_size & (head_size - 1)) == 0); // head_size must be a power of 2
-		kernel_rope_qkv<<<(dim + kv_dim) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len);
+		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len);
 		profiler_trigger("rope_qkv", 0);
 
 		// only update kv cache and don't output logits
