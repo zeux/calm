@@ -210,7 +210,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	free(prompt_tokens);
 }
 
-void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const char* path) {
+void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const char* path, int steps) {
 	int max_input_size = 64 * 1024;
 	int max_tokens = tokenizer_bound(max_input_size);
 
@@ -235,8 +235,8 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 
 	free(input);
 
-	printf("# %s: %d tokens (%.3f sec)\n",
-	       path, n_tokens, (double)(mid - start) / 1000);
+	printf("# %s: %d tokens (%.3f sec), chunked with size %d\n",
+	       path, n_tokens, (double)(mid - start) / 1000, steps);
 
 	int vocab_size = transformer->config.vocab_size;
 
@@ -247,9 +247,7 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 			printf("# progress (%d/%d): %.3f\n", i, n_tokens, exp(-sum / den));
 		}
 
-		// for now we reset the context after reaching the end of the window; this will result in artifically higher perplexity
-		// note that this also means we don't get the BOS token which we might need to fix later...
-		int pos = i % transformer->config.seq_len;
+		int pos = steps <= 0 ? i : i % steps;
 		float* logits = transformer->forward(transformer, tokens[i], pos, 0);
 
 		sample_softmax(logits, vocab_size);
@@ -404,7 +402,7 @@ int main(int argc, char* argv[]) {
 
 	// run!
 	if (perplexity) {
-		study(&transformer, &tokenizer, perplexity);
+		study(&transformer, &tokenizer, perplexity, steps);
 	} else {
 		for (int s = 0; s < sequences; ++s) {
 			generate(&transformer, &tokenizer, &sampler, prompt, steps);
