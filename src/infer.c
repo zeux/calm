@@ -123,6 +123,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
 
+	int kv_pos = pos % p->seq_len;
+	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
+
 	// copy the token embedding into x
 	dtype_t* content_row = (dtype_t*)w->token_embedding_table + token * dim;
 	for (int i = 0; i < dim; ++i)
@@ -148,8 +151,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		// update kv cache
 		for (int i = 0; i < kv_dim; i++) {
-			s->key_cache[loff + pos * kv_dim + i] = s->k[i];
-			s->value_cache[loff + pos * kv_dim + i] = s->v[i];
+			s->key_cache[loff + kv_pos * kv_dim + i] = s->k[i];
+			s->value_cache[loff + kv_pos * kv_dim + i] = s->v[i];
 		}
 
 		// multihead attention. iterate over all heads
@@ -161,7 +164,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			// attention scores for this head
 			float* att = s->att + h * p->seq_len;
 			// iterate over all timesteps, including the current one
-			for (int t = 0; t <= pos; t++) {
+			for (int t = 0; t < kv_len; t++) {
 				// get the key vector for this head and at this timestep
 				kvtype_t* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
 				// calculate the attention score as the dot product of q and k
@@ -174,15 +177,15 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				att[t] = score;
 			}
 
-			// softmax the scores to get attention weights, from 0..pos inclusively
-			softmax(att, pos + 1);
+			// softmax the scores to get attention weights over [0..kv_len)
+			softmax(att, kv_len);
 
 			// weighted sum of the values, store back into xb
 			float* xb = s->xb + h * head_size;
 			for (int i = 0; i < head_size; i++) {
 				xb[i] = 0.0f;
 			}
-			for (int t = 0; t <= pos; t++) {
+			for (int t = 0; t < kv_len; t++) {
 				// get the value vector for this head and at this timestep
 				kvtype_t* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
 				// get the attention weight for this timestep

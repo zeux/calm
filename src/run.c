@@ -34,7 +34,7 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	config->n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
 	config->vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
 
-	// for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since we don't implement sliding window attention
+	// for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since window size isn't correctly specified
 	const char* max_seq_len = tensors_metadata_find(tensors, "max_seq_len");
 	config->seq_len = max_seq_len && atoi(max_seq_len) < 4096 ? atoi(max_seq_len) : 4096;
 
@@ -121,14 +121,13 @@ size_t model_bandwidth(struct Config* config, size_t dsize) {
 }
 
 size_t kvcache_bandwidth(struct Config* config, int pos) {
-	assert(pos < config->seq_len);
-
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
+	int kv_len = pos >= config->seq_len ? config->seq_len : pos + 1;
 
 	size_t res = 0;
 
-	res += sizeof(kvtype_t) * config->n_layers * kv_dim * (pos + 1);
-	res += sizeof(kvtype_t) * config->n_layers * kv_dim * (pos + 1);
+	res += sizeof(kvtype_t) * config->n_layers * kv_dim * kv_len;
+	res += sizeof(kvtype_t) * config->n_layers * kv_dim * kv_len;
 
 	return res;
 }
