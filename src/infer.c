@@ -123,8 +123,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
 
-	int kv_pos = pos % p->seq_len;
+	int kv_pos = pos == 0 ? pos : 1 + (pos - 1) % (p->seq_len - 1);
 	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
+	int kv_rot0 = pos < p->seq_len ? -1 : 0;
 
 	// copy the token embedding into x
 	dtype_t* content_row = (dtype_t*)w->token_embedding_table + token * dim;
@@ -153,6 +154,19 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		for (int i = 0; i < kv_dim; i++) {
 			s->key_cache[loff + kv_pos * kv_dim + i] = s->k[i];
 			s->value_cache[loff + kv_pos * kv_dim + i] = s->v[i];
+		}
+
+		// rotate sink tokens forward to keep pace with non-sink tokens
+		if (kv_rot0 >= 0) {
+			for (int i = 0; i < kv_dim; i++) {
+				s->k[i] = s->key_cache[loff + kv_rot0 * kv_dim + i];
+			}
+
+			rope(s->k, kv_dim, head_size, 1, p->rope_theta);
+
+			for (int i = 0; i < kv_dim; i++) {
+				s->key_cache[loff + kv_rot0 * kv_dim + i] = s->k[i];
+			}
 		}
 
 		// multihead attention. iterate over all heads
