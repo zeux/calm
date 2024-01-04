@@ -169,7 +169,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	int token = prompt_tokens[0]; // kick off with the first token in the prompt
 	int pos = 0;                  // position in the sequence
 
-	while (pos < steps) {
+	while (pos < steps || steps < 0) {
 		// forward the transformer to get logits for the next token
 		unsigned flags = pos < num_prompt_tokens - 1 ? FF_UPDATE_KV_ONLY : 0;
 		float* logits = transformer->forward(transformer, token, pos + pos_offset, flags);
@@ -281,7 +281,7 @@ void error_usage() {
 	fprintf(stderr, "  -t <float>  temperature in [0,inf], default 1.0\n");
 	fprintf(stderr, "  -p <float>  p value in top-p (nucleus) sampling in [0,1] default 0.9\n");
 	fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
-	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len\n");
+	fprintf(stderr, "  -n <int>    number of steps to run for, default 256. 0 = max_seq_len, -1 = infinite\n");
 	fprintf(stderr, "  -r <int>    number of sequences to decode, default 1\n");
 	fprintf(stderr, "  -c <int>    context length, default to model-specific maximum\n");
 	fprintf(stderr, "  -i <string> input prompt (- to read from stdin)\n");
@@ -348,8 +348,6 @@ int main(int argc, char* argv[]) {
 		temperature = 0.0;
 	if (topp < 0.0 || 1.0 < topp)
 		topp = 0.9;
-	if (steps < 0)
-		steps = 0;
 
 	if (prompt && strcmp(prompt, "-") == 0) {
 		static char input[32768];
@@ -386,9 +384,6 @@ int main(int argc, char* argv[]) {
 		transformer.forward = forward_cuda;
 	}
 
-	if (steps == 0 || steps > transformer.config.seq_len)
-		steps = transformer.config.seq_len; // ovrerride to ~max length
-
 	// build the Tokenizer via the tokenizer .bin file
 	struct Tokenizer tokenizer;
 	build_tokenizer(&tokenizer, &tensors, transformer.config.vocab_size);
@@ -402,6 +397,10 @@ int main(int argc, char* argv[]) {
 	// when using cuda, this makes sure all kernels are compiled and instantiated
 	transformer.forward(&transformer, 0, 0, 0);
 	profiler_reset();
+
+	// -n 0 means use the full context length
+	if (steps == 0)
+		steps = transformer.config.seq_len;
 
 	// run!
 	if (perplexity) {
