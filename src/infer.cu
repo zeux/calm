@@ -202,7 +202,7 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, in
 	}
 }
 
-__global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_rot0, float theta_log2, int d, int kvd, int seq_len) {
+__global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int d, int kvd, int seq_len) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < d + kvd);
 
@@ -241,10 +241,10 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 		vb[kv_pos + seq_len * j] = v0;
 		vb[kv_pos + seq_len * (j + 1)] = v1;
 
-		// rotate one element forward if asked
-		if (kv_rot0 >= 0) {
-			float ok0 = kb[kv_rot0 * kvd + j];
-			float ok1 = kb[kv_rot0 * kvd + j + 1];
+		// rotate sink tokens forward to keep pace with non-sink tokens
+		for (int r = 0; r < kv_sink; r++) {
+			float ok0 = kb[r * kvd + j];
+			float ok1 = kb[r * kvd + j + 1];
 
 			float ofcr, ofci;
 			sincosf(freq, &ofci, &ofcr);
@@ -252,8 +252,8 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 			float ork0 = ok0 * ofcr - ok1 * ofci;
 			float ork1 = ok0 * ofci + ok1 * ofcr;
 
-			kb[kv_rot0 * kvd + j] = ork0;
-			kb[kv_rot0 * kvd + j + 1] = ork1;
+			kb[r * kvd + j] = ork0;
+			kb[r * kvd + j + 1] = ork1;
 		}
 	}
 }
@@ -365,9 +365,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
 
-	int kv_pos = pos == 0 ? pos : 1 + (pos - 1) % (p->seq_len - 1);
+	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
+	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
+	int kv_pos = kv_sink + (pos - kv_sink) % (p->seq_len - kv_sink);
 	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
-	int kv_rot0 = pos < p->seq_len ? -1 : 0;
 
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
@@ -397,7 +398,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
 		assert((head_size & (head_size - 1)) == 0); // head_size must be a power of 2
-		kernel_rope_qkv<<<(dim + kv_dim) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_rot0, log2(p->rope_theta), dim, kv_dim, p->seq_len);
+		kernel_rope_qkv<<<(dim + kv_dim) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len);
 		profiler_trigger("rope_qkv", 0);
 
 		// only update kv cache and don't output logits

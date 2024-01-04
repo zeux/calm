@@ -16,6 +16,9 @@ typedef _Float16 kvtype_t;
 typedef short kvtype_t;
 #endif
 
+// How many attention sinks to use for rolling buffer
+#define KV_SINKS 2
+
 struct Config {
 	int dim;          // transformer dimension
 	int hidden_dim;   // for ffn layers
