@@ -78,6 +78,16 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 		if (config->arch != Phi) {
 			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
 		}
+
+		if (config->arch == Phi) {
+			weights->bq[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wq.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+			weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
+			weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
+			weights->bo[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wo.bias", l, dt_f32, (int[]){config->n_heads * head_size, 0, 0, 0});
+
+			weights->b1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w1.bias", l, dt_f32, (int[]){config->hidden_dim, 0, 0, 0});
+			weights->b2[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w2.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		}
 	}
 
 	if (config->arch == Phi) {
@@ -88,6 +98,10 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	}
 
 	weights->wcls = tensors_get(tensors, "model.output.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
+
+	if (config->arch == Phi) {
+		weights->bcls = (float*)tensors_get(tensors, "model.output.bias", 0, dt_f32, (int[]){config->vocab_size, 0, 0, 0});
+	}
 }
 
 void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_size) {

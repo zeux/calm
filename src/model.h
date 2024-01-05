@@ -63,6 +63,14 @@ struct Weights {
 	float* rms_final_weight; // (dim,)
 	// classifier weights for the logits, on the last layer
 	void* wcls;
+	// biases for all of the above (phi)
+	float* bq[MAX_LAYERS]; // (dim)
+	float* bk[MAX_LAYERS]; // (dim)
+	float* bv[MAX_LAYERS]; // (dim)
+	float* bo[MAX_LAYERS]; // (dim)
+	float* b1[MAX_LAYERS]; // (hidden_dim)
+	float* b2[MAX_LAYERS]; // (dim)
+	float* bcls;
 };
 
 struct RunState {
