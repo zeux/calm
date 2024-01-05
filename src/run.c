@@ -143,7 +143,9 @@ size_t model_bandwidth(struct Config* config, size_t dsize) {
 	// weights for ffn
 	res += dsize * config->hidden_dim * config->dim * config->n_layers;
 	res += dsize * config->dim * config->hidden_dim * config->n_layers;
-	res += dsize * config->hidden_dim * config->dim * config->n_layers;
+	if (config->arch != Phi) {
+		res += dsize * config->hidden_dim * config->dim * config->n_layers;
+	}
 	// final rmsnorm
 	res += sizeof(float) * config->dim;
 	// classifier weights for the logits, on the last layer

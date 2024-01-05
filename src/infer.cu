@@ -525,7 +525,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		if (p->arch == Phi) {
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
 			kernel_matmul_ffn1_gelu<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
-			profiler_trigger("matmul_ffn1", 2 * hidden_dim * dim * sizeof(T));
+			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
 		} else {
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
