@@ -106,6 +106,8 @@ else:
 for i, t in enumerate(tokens):
     t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
     t = t.replace('\u0120', ' ') # some gpt-based tokenizers use this character as whitespace
+    t = '\n' if t == '\u010a' else t  # some gpt-based tokenizers use this character as newline
+
     b = t.encode('utf-8')
     assert b.count(0) == 0 # no null bytes allowed
 

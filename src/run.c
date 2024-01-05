@@ -169,6 +169,13 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	int token = prompt_tokens[0]; // kick off with the first token in the prompt
 	int pos = 0;                  // position in the sequence
 
+	// print first prompt token since it won't be decoded
+	if (token != tokenizer->bos_id) {
+		char* piece = tokenizer_decode(tokenizer, token, tokenizer->bos_id);
+		printf("%s", piece);
+		fflush(stdout);
+	}
+
 	while (pos < steps || steps < 0) {
 		// forward the transformer to get logits for the next token
 		unsigned flags = pos < num_prompt_tokens - 1 ? FF_UPDATE_KV_ONLY : 0;

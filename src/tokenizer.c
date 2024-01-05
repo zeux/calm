@@ -190,12 +190,12 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 	int n_tokens = 0;
 
 	// add optional BOS token, if desired
-	if (flags & TF_ENCODE_BOS) {
+	if ((flags & TF_ENCODE_BOS) && tokenizer->bos_id >= 0) {
 		tokens[n_tokens++] = tokenizer->bos_id;
 	}
 
 	// assuming add_dummy_prefix is true, prepend a dummy prefix token to the input string, but only if text != ""
-	if (text[0] != '\0') {
+	if (text[0] != '\0' && tokenizer->bos_id >= 0) {
 		int dummy_prefix = str_lookup(" ", tokenizer->sorted_vocab, tokenizer->vocab_size);
 		tokens[n_tokens++] = dummy_prefix;
 	}
