@@ -21,6 +21,9 @@
 #define CUDA_SYNC() CUDA_CHECK(cudaDeviceSynchronize())
 
 static void* cuda_devicecopy(void* host, size_t size) {
+	if (host == NULL) {
+		return NULL;
+	}
 	void* device = NULL;
 	CUDA_CHECK(cudaMalloc(&device, size));
 	CUDA_CHECK(cudaMemcpy(device, host, size, cudaMemcpyHostToDevice));
@@ -59,6 +62,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	for (int l = 0; l < config->n_layers; ++l) {
 		weights->rms_att_weight[l] = (float*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(float));
 		weights->rms_ffn_weight[l] = (float*)cuda_devicecopy(weights->rms_ffn_weight[l], dim * sizeof(float));
+		weights->ln_weight[l] = (float*)cuda_devicecopy(weights->ln_weight[l], dim * sizeof(float));
+		weights->ln_bias[l] = (float*)cuda_devicecopy(weights->ln_bias[l], dim * sizeof(float));
 
 		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * weights->dsize);
 		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * weights->dsize);
@@ -68,14 +73,26 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * weights->dsize);
 		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * weights->dsize);
 		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * weights->dsize);
+
+		weights->bq[l] = (float*)cuda_devicecopy(weights->bq[l], dim * sizeof(float));
+		weights->bk[l] = (float*)cuda_devicecopy(weights->bk[l], kv_dim * sizeof(float));
+		weights->bv[l] = (float*)cuda_devicecopy(weights->bv[l], kv_dim * sizeof(float));
+		weights->bo[l] = (float*)cuda_devicecopy(weights->bo[l], dim * sizeof(float));
+
+		weights->b1[l] = (float*)cuda_devicecopy(weights->b1[l], hidden_dim * sizeof(float));
+		weights->b2[l] = (float*)cuda_devicecopy(weights->b2[l], dim * sizeof(float));
 	}
 
 	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
+	weights->ln_final_weight = (float*)cuda_devicecopy(weights->ln_final_weight, dim * sizeof(float));
+	weights->ln_final_bias = (float*)cuda_devicecopy(weights->ln_final_bias, dim * sizeof(float));
 	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * weights->dsize);
 	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * weights->dsize);
+	weights->bcls = (float*)cuda_devicecopy(weights->bcls, config->vocab_size * sizeof(float));
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
@@ -128,6 +145,48 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	}
 }
 
+__global__ static void kernel_layernorm(float* o, float* x, float* weight, float* bias, int size) {
+	int i = threadIdx.x;
+	int blockSize = blockDim.x;
+
+	// calculate sum (per thread)
+	float ss = 0.0f;
+	for (int j = i; j < size; j += blockSize) {
+		ss += x[j];
+	}
+
+	// sum across threads in block
+	ss = blockreduce_sum(ss);
+
+	float mean = ss / size;
+
+	// calculate sum of squared deltas (per thread)
+	ss = 0.0f;
+	for (int j = i; j < size; j += blockSize) {
+		ss += (x[j] - mean) * (x[j] - mean);
+	}
+
+	// sum across threads in block
+	ss = blockreduce_sum(ss);
+
+	float var = ss / size;
+
+	// compute scale
+	ss = rsqrtf(var + 1e-5f);
+
+	// normalize and scale
+	for (int j = i; j < size; j += blockSize) {
+		o[j] = (x[j] - mean) * ss * weight[j] + bias[j];
+	}
+}
+
+__global__ static void kernel_bias(float* x, float* bias, int size) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(i < size);
+
+	x[i] += bias[i];
+}
+
 template <typename T>
 __global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
@@ -172,7 +231,7 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, T* w, int n, in
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn13(float* xout, float* x, T* w1, T* w3, int n, int d) {
+__global__ static void kernel_matmul_ffn13_silu(float* xout, float* x, T* w1, T* w3, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -183,6 +242,22 @@ __global__ static void kernel_matmul_ffn13(float* xout, float* x, T* w1, T* w3, 
 	float val = v1;
 	val *= 1.0f / (1.0f + expf(-v1));
 	val *= v3;
+
+	if (threadIdx.x == 0) {
+		xout[i] = val;
+	}
+}
+
+template <typename T>
+__global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, float* b1, int n, int d) {
+	int i = blockIdx.x;
+	assert(i < d);
+
+	float v1 = matmul_warppar(x, w1, i, n, n);
+
+	// TODO: reference
+	v1 += b1[i];
+	float val = 0.5f * v1 * (1.0f + tanhf(0.797885f * (v1 + 0.044715f * v1 * v1 * v1)));
 
 	if (threadIdx.x == 0) {
 		xout[i] = val;
@@ -208,7 +283,7 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
-	int head_dim = j & (head_size - 1);
+	int head_dim = j % head_size; // TODO: optimize when head_size is a power of two
 	float freq = exp2f(-theta_log2 * (head_dim / (float)head_size));
 	float fcr, fci;
 	sincosf(pos * freq, &fci, &fcr);
@@ -372,6 +447,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	assert(p->vocab_size % 32 == 0);
 
 	// rmsnorm and softmax require a larger-than-warp block size for efficiency
+	const int layernorm_size = 1024;
 	const int rmsnorm_size = 1024;
 	const int softmax_size = 1024;
 
@@ -384,17 +460,32 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	for (int l = 0; l < p->n_layers; l++) {
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
-		// attention rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_att_weight[l], dim);
-		profiler_trigger("rmsnorm", 0);
+		if (p->arch == Phi) {
+			// input layernorm
+			kernel_layernorm<<<1, layernorm_size>>>(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
+			profiler_trigger("layernorm", 0);
+		} else {
+			// attention rmsnorm
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_att_weight[l], dim);
+			profiler_trigger("rmsnorm", 0);
+		}
 
 		// qkv matmuls for this position
 		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], dim, dim, kv_dim);
 		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(T));
 
+		if (p->arch == Phi) {
+			// inefficient biases
+			kernel_bias<<<dim / 32, 32>>>(s->q, w->bq[l], dim);
+			profiler_trigger("bias", 0);
+			kernel_bias<<<kv_dim / 32, 32>>>(s->k, w->bk[l], kv_dim);
+			profiler_trigger("bias", 0);
+			kernel_bias<<<kv_dim / 32, 32>>>(s->v, w->bv[l], kv_dim);
+			profiler_trigger("bias", 0);
+		}
+
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		assert((head_size & (head_size - 1)) == 0); // head_size must be a power of 2
 		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len);
 		profiler_trigger("rope_qkv", 0);
 
@@ -411,25 +502,44 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		kernel_attn_softmax<<<p->n_heads, softmax_size>>>(s->att, p->n_heads, p->seq_len, kv_len);
 		profiler_trigger("attn_softmax", 0);
 
-		// compute weighted sum of the values into xb
-		assert(head_size % 32 == 0);
-		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul)>>>(s->xb, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		// compute weighted sum of the values into xb2
+		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul)>>>(s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32>>>(x, s->xb, (T*)w->wo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32>>>(x, s->xb2, (T*)w->wo[l], dim, dim);
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
-		// ffn rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_ffn_weight[l], dim);
-		profiler_trigger("rmsnorm", 0);
+		if (p->arch == Phi) {
+			// inefficient biases
+			kernel_bias<<<dim / 32, 32>>>(x, w->bo[l], dim);
+			profiler_trigger("bias", 0);
+		}
 
-		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-		kernel_matmul_ffn13<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
-		profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
+		if (p->arch != Phi) {
+			// ffn rmsnorm
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_ffn_weight[l], dim);
+			profiler_trigger("rmsnorm", 0);
+		}
+
+		if (p->arch == Phi) {
+			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
+			kernel_matmul_ffn1_gelu<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			profiler_trigger("matmul_ffn1", 2 * hidden_dim * dim * sizeof(T));
+		} else {
+			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
+			kernel_matmul_ffn13_silu<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
+		}
 
 		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, (T*)w->w2[l], hidden_dim, dim);
 		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
+
+		if (p->arch == Phi) {
+			// inefficient biases
+			kernel_bias<<<dim / 32, 32>>>(x, w->b2[l], dim);
+			profiler_trigger("bias", 0);
+		}
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
@@ -439,13 +549,24 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		return NULL;
 	}
 
-	// final rmsnorm
-	kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(x, x, w->rms_final_weight, dim);
-	profiler_trigger("rmsnorm", 0);
+	if (p->arch == Phi) {
+		// final layernorm
+		kernel_layernorm<<<1, layernorm_size>>>(x, x, w->ln_final_weight, w->ln_final_bias, dim);
+		profiler_trigger("layernorm", 0);
+	} else {
+		// final rmsnorm
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(x, x, w->rms_final_weight, dim);
+		profiler_trigger("rmsnorm", 0);
+	}
 
 	// classifier into logits
 	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32>>>(s->logits, x, (T*)w->wcls, dim, p->vocab_size);
 	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
+
+	if (p->arch == Phi) {
+		// inefficient biases
+		kernel_bias<<<p->vocab_size / 32, 32>>>(s->logits, w->bcls, p->vocab_size);
+	}
 
 	profiler_endsync();
 
