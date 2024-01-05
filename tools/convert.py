@@ -204,11 +204,11 @@ elif arch == "phi":
         assert wkv_w.shape[0] == 3 * dim and wkv_b.shape[0] == 3 * dim
 
         tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["n_head"]))
-        tensors[f"model.layers.{l}.attn.wq.bias"] = conv(permute_reverse(wkv_b[:dim], config["n_head"]))
+        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["n_head"]).float()
         tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["n_head"]))
-        tensors[f"model.layers.{l}.attn.wk.bias"] = conv(permute_reverse(wkv_b[dim:dim*2], config["n_head"]))
+        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["n_head"]).float()
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wkv_w[dim*2:])
-        tensors[f"model.layers.{l}.attn.wv.bias"] = conv(wkv_b[dim*2:])
+        tensors[f"model.layers.{l}.attn.wv.bias"] = wkv_b[dim*2:].float()
 
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"transformer.h.{l}.mixer.out_proj.weight"])
         tensors[f"model.layers.{l}.attn.wo.bias"] = weights[f"transformer.h.{l}.mixer.out_proj.bias"].float()
