@@ -156,9 +156,13 @@ for fn in args.models:
 # huggingface permutes WQ and WK, this function reverses it
 # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
 def permute_reverse(w, heads):
-    dim1 = w.shape[0]
-    dim2 = w.shape[1]
-    return w.view(heads, 2, dim1 // heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+    if len(w.shape) == 1:
+        dim1 = w.shape[0]
+        return w.view(heads, 2, dim1 // heads // 2).transpose(1, 2).reshape(dim1)
+    else:
+        dim1 = w.shape[0]
+        dim2 = w.shape[1]
+        return w.view(heads, 2, dim1 // heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
 
 # fp8 support requires torch 2.1, but we support other dtypes on earlier versions
 dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None)}[args.dtype]
@@ -168,23 +172,56 @@ assert dtype
 def conv(t):
     return t.to(dtype)
 
-tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
+if arch in ["llama", "mistral"]:
+    tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
-for l in range(config["num_hidden_layers"]):
-    tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
-    tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"]))
-    tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"]))
-    tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
-    tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
+    for l in range(config["num_hidden_layers"]):
+        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"]))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"]))
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
 
-    tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
-    tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
-    tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
-    tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
+        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
-tensors["model.norm.weight"] = weights["model.norm.weight"].float()
-tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+    tensors["model.norm.weight"] = weights["model.norm.weight"].float()
+    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+elif arch == "phi":
+    tensors["model.embed.weight"] = conv(weights["transformer.embd.wte.weight"])
+
+    for l in range(config["n_layer"]):
+        tensors[f"model.layers.{l}.norm.weight"] = weights[f"transformer.h.{l}.ln.weight"].float()
+        tensors[f"model.layers.{l}.norm.bias"] = weights[f"transformer.h.{l}.ln.bias"].float()
+
+        # assume no GQA for now
+        dim = config["n_embd"]
+        wkv_w = weights[f"transformer.h.{l}.mixer.Wqkv.weight"]
+        wkv_b = weights[f"transformer.h.{l}.mixer.Wqkv.bias"]
+        assert wkv_w.shape[0] == 3 * dim and wkv_b.shape[0] == 3 * dim
+
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["n_head"]))
+        tensors[f"model.layers.{l}.attn.wq.bias"] = conv(permute_reverse(wkv_b[:dim], config["n_head"]))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["n_head"]))
+        tensors[f"model.layers.{l}.attn.wk.bias"] = conv(permute_reverse(wkv_b[dim:dim*2], config["n_head"]))
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wkv_w[dim*2:])
+        tensors[f"model.layers.{l}.attn.wv.bias"] = conv(wkv_b[dim*2:])
+
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"transformer.h.{l}.mixer.out_proj.weight"])
+        tensors[f"model.layers.{l}.attn.wo.bias"] = weights[f"transformer.h.{l}.mixer.out_proj.bias"].float()
+
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"transformer.h.{l}.mlp.fc1.weight"])
+        tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"transformer.h.{l}.mlp.fc1.bias"].float()
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"transformer.h.{l}.mlp.fc2.weight"])
+        tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"transformer.h.{l}.mlp.fc2.bias"].float()
+
+    tensors["model.norm.weight"] = weights["lm_head.ln.weight"].float()
+    tensors["model.norm.bias"] = weights["lm_head.ln.bias"].float()
+    tensors["model.output.weight"] = conv(weights["lm_head.linear.weight"])
+    tensors["model.output.bias"] = weights["lm_head.linear.bias"].float()
 
 # in a perfect world, we would just use HF safetensors.torch.save_file
 # however, not only does it not support fp8 (https://github.com/huggingface/safetensors/pull/404), it also copies every tensor
