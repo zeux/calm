@@ -293,7 +293,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	float* att = attb + h * seq_len;
 
 	// find max value per thread (for numerical stability)
-	float max_val = 0.f;
+	float max_val = -FLT_MAX;
 	for (int j = i; j < kv_len; j += blockDim.x) {
 		max_val = max(max_val, att[j]);
 	}
