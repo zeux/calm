@@ -47,27 +47,45 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalM": "llama", "MistralForCausalLM": "mistral"}
+arch_remap = {"LlamaForCausalM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
+arch = arch_remap[arch]
 
-# hardcoded in C
-assert config["hidden_act"] == "silu"
-assert config["rms_norm_eps"] == 1e-5
-
-# customizable
-metadata["arch"] = arch_remap[arch]
+metadata["arch"] = arch
 metadata["dtype"] = args.dtype
-metadata["dim"] = config["hidden_size"]
-metadata["hidden_dim"] = config["intermediate_size"]
-metadata["n_layers"] = config["num_hidden_layers"]
-metadata["n_heads"] = config["num_attention_heads"]
-metadata["n_kv_heads"] = config["num_key_value_heads"]
-metadata["vocab_size"] = config["vocab_size"]
-metadata["max_seq_len"] = config["max_position_embeddings"]
-metadata["bos_token_id"] = config["bos_token_id"]
-metadata["eos_token_id"] = config["eos_token_id"]
-if "rope_theta" in config:
-    metadata["rope_theta"] = config["rope_theta"]
+
+if arch in ["llama", "mistral"]:
+    # hardcoded in C
+    assert config["hidden_act"] == "silu"
+    assert config["rms_norm_eps"] == 1e-5
+
+    # customizable
+    metadata["dim"] = config["hidden_size"]
+    metadata["hidden_dim"] = config["intermediate_size"]
+    metadata["n_layers"] = config["num_hidden_layers"]
+    metadata["n_heads"] = config["num_attention_heads"]
+    metadata["n_kv_heads"] = config["num_key_value_heads"]
+    metadata["vocab_size"] = config["vocab_size"]
+    metadata["max_seq_len"] = config["max_position_embeddings"]
+    metadata["bos_token_id"] = config["bos_token_id"]
+    metadata["eos_token_id"] = config["eos_token_id"]
+    metadata["rope_theta"] = config.get("rope_theta", 10000.0)
+elif arch == "phi":
+    # hardcoded in C
+    assert config["activation_function"] == "gelu_new"
+    assert config["layer_norm_epsilon"] == 1e-5
+
+    # customizable
+    metadata["dim"] = config["n_embd"]
+    metadata["hidden_dim"] = config["n_inner"] or config["n_embd"] * 4
+    metadata["n_layers"] = config["n_layer"]
+    metadata["n_heads"] = config["n_head"]
+    metadata["n_kv_heads"] = config["n_head_kv"] or config["n_head"]
+    metadata["vocab_size"] = config["vocab_size"]
+    metadata["max_seq_len"] = config["n_positions"]
+    metadata["bos_token_id"] = -1
+    metadata["eos_token_id"] = 50256 # todo: read from tokenizer_config
+    metadata["rope_theta"] = 10000.0 # hardcoded in model
 
 # load tokenizer model
 tokens = [""] * config["vocab_size"]
