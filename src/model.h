@@ -19,7 +19,13 @@ typedef short kvtype_t;
 // How many attention sinks to use for rolling buffer
 #define KV_SINKS 2
 
+enum Arch {
+	LlamaLike,
+	Phi
+};
+
 struct Config {
+	enum Arch arch;   // model architecture
 	int dim;          // transformer dimension
 	int hidden_dim;   // for ffn layers
 	int n_layers;     // number of layers
@@ -35,6 +41,9 @@ struct Weights {
 
 	// token embedding table
 	void* token_embedding_table; // (vocab_size, dim)
+	// weights for layernorm (phi)
+	float* ln_weight[MAX_LAYERS]; // (dim,)
+	float* ln_bias[MAX_LAYERS]; // (dim,)
 	// weights for rmsnorms
 	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
 	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
@@ -43,10 +52,13 @@ struct Weights {
 	void* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
 	void* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
 	void* wo[MAX_LAYERS]; // (n_heads * head_size, dim)
-	// weights for ffn
+	// weights for ffn (w3 is absent for phi)
 	void* w1[MAX_LAYERS]; // (hidden_dim, dim)
 	void* w2[MAX_LAYERS]; // (dim, hidden_dim)
 	void* w3[MAX_LAYERS]; // (hidden_dim, dim)
+	// final layernorm (phi)
+	float* ln_final_weight; // (dim,)
+	float* ln_final_bias; // (dim,)
 	// final rmsnorm
 	float* rms_final_weight; // (dim,)
 	// classifier weights for the logits, on the last layer
