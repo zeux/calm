@@ -46,11 +46,16 @@ with open(args.config, "r") as f:
 metadata = {}
 tensors = {}
 
+arch = config["architectures"][0]
+arch_remap = {"LlamaForCausalM": "llama", "MistralForCausalLM": "mistral"}
+assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
+
 # hardcoded in C
 assert config["hidden_act"] == "silu"
 assert config["rms_norm_eps"] == 1e-5
 
 # customizable
+metadata["arch"] = arch_remap[arch]
 metadata["dtype"] = args.dtype
 metadata["dim"] = config["hidden_size"]
 metadata["hidden_dim"] = config["intermediate_size"]
