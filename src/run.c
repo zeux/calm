@@ -205,7 +205,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 
 	// print first prompt token since it won't be decoded
 	if (token != tokenizer->bos_id) {
-		char* piece = tokenizer_decode(tokenizer, token, tokenizer->bos_id);
+		char* piece = tokenizer_decode(tokenizer, tokenizer->bos_id, token);
 		printf("%s", piece);
 		fflush(stdout);
 	}
