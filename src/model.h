@@ -34,6 +34,7 @@ struct Config {
 	int vocab_size;   // vocabulary size, usually 256 (byte-level)
 	int seq_len;      // max sequence length
 	float rope_theta; // RoPE theta
+	int rotary_dim;   // RoPE rotary dimension (elements after that don't get rotated)
 };
 
 struct Weights {

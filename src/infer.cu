@@ -277,14 +277,14 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, in
 	}
 }
 
-__global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int d, int kvd, int seq_len) {
+__global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int d, int kvd, int seq_len, int rotary_dim) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < d + kvd + kv_sink * kvd);
 
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
-	int head_dim = j % head_size; // TODO: optimize when head_size is a power of two
-	float freq = exp2f(-theta_log2 * (head_dim / (float)head_size));
+	int j_head = j % head_size; // TODO: optimize when head_size is a power of two
+	float freq = j_head >= rotary_dim ? 0.f : exp2f(-theta_log2 * (float)j_head / (float)rotary_dim);
 	float fcr, fci;
 	sincosf(pos * freq, &fci, &fcr);
 
@@ -486,7 +486,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len);
+		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len, p->rotary_dim);
 		profiler_trigger("rope_qkv", 0);
 
 		// only update kv cache and don't output logits

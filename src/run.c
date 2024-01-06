@@ -48,6 +48,9 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	const char* rope_theta = tensors_metadata_find(tensors, "rope_theta");
 	config->rope_theta = rope_theta ? atof(rope_theta) : 10000.f;
 
+	const char* rotary_dim = tensors_metadata_find(tensors, "rotary_dim");
+	config->rotary_dim = rotary_dim ? atoi(rotary_dim) : config->dim / config->n_heads;
+
 	int head_size = config->dim / config->n_heads;
 
 	struct Tensor* tensor = tensors_find(tensors, "model.embed.weight", 0);
