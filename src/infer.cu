@@ -141,15 +141,11 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	// sum across threads in block
 	ss = blockreduce_sum(ss);
 
-	// compute scale
-	ss /= size;
-	ss += 1e-5f;
-	ss = 1.0f / sqrtf(ss);
-
 	// normalize and scale
 	// note: blockreduce above implies __syncthreads so xs[] reads are safe
+	float scale = rsqrtf(ss / size + 1e-5f);
 	for (int j = i; j < size; j += blockSize) {
-		o[j] = xs[j] * ss;
+		o[j] = xs[j] * scale;
 	}
 }
 
@@ -179,12 +175,10 @@ __global__ static void kernel_layernorm(float* o, float* x, float* weight, float
 
 	float var = ss / size;
 
-	// compute scale
-	ss = rsqrtf(var + 1e-5f);
-
 	// normalize and scale
+	float scale = rsqrtf(var + 1e-5f);
 	for (int j = i; j < size; j += blockSize) {
-		o[j] = (x[j] - mean) * ss * weight[j] + bias[j];
+		o[j] = (x[j] - mean) * scale * weight[j] + bias[j];
 	}
 }
 

@@ -52,12 +52,10 @@ static void rmsnorm(float* o, float* x, float* weight, int size) {
 	for (int j = 0; j < size; j++) {
 		ss += x[j] * x[j];
 	}
-	ss /= size;
-	ss += 1e-5f;
-	ss = 1.0f / sqrtf(ss);
 	// normalize and scale
+	float scale = 1.0f / sqrtf(ss / size + 1e-5f);
 	for (int j = 0; j < size; j++) {
-		o[j] = weight[j] * (ss * x[j]);
+		o[j] = weight[j] * (scale * x[j]);
 	}
 }
 
@@ -78,12 +76,10 @@ static void layernorm(float* o, float* x, float* weight, float* bias, int size) 
 
 	float var = ss / size;
 
-	// compute scale
-	ss = 1.0f / sqrtf(var + 1e-5f);
-
 	// normalize and scale
+	float scale = 1.0f / sqrtf(var + 1e-5f);
 	for (int j = 0; j < size; j++) {
-		o[j] = (x[j] - mean) * ss * weight[j] + bias[j];
+		o[j] = (x[j] - mean) * scale * weight[j] + bias[j];
 	}
 }
 
