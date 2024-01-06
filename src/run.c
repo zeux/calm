@@ -27,6 +27,9 @@ float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigne
 
 void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors, int context) {
 	// create config
+	const char* arch = tensors_metadata_find(tensors, "arch");
+
+	config->arch = arch && strcmp(arch, "phi") == 0 ? Phi : LlamaLike;
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
 	config->n_layers = atoi(tensors_metadata(tensors, "n_layers"));
@@ -45,6 +48,9 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	const char* rope_theta = tensors_metadata_find(tensors, "rope_theta");
 	config->rope_theta = rope_theta ? atof(rope_theta) : 10000.f;
 
+	const char* rotary_dim = tensors_metadata_find(tensors, "rotary_dim");
+	config->rotary_dim = rotary_dim ? atoi(rotary_dim) : config->dim / config->n_heads;
+
 	int head_size = config->dim / config->n_heads;
 
 	struct Tensor* tensor = tensors_find(tensors, "model.embed.weight", 0);
@@ -56,20 +62,49 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
 
 	for (int l = 0; l < config->n_layers; ++l) {
-		weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		if (config->arch == Phi) {
+			weights->ln_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+			weights->ln_bias[l] = (float*)tensors_get(tensors, "model.layers.%d.norm.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		} else {
+			weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		}
+
 		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, dtype, (int[]){config->dim, config->n_heads * head_size, 0, 0});
 		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, dtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
 		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, dtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
 		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, dtype, (int[]){config->n_heads * head_size, config->dim, 0, 0});
 
-		weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
 		weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, dtype, (int[]){config->dim, config->hidden_dim, 0, 0});
-		weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
+
+		if (config->arch != Phi) {
+			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
+		}
+
+		if (config->arch == Phi) {
+			weights->bq[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wq.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+			weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
+			weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
+			weights->bo[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wo.bias", l, dt_f32, (int[]){config->n_heads * head_size, 0, 0, 0});
+
+			weights->b1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w1.bias", l, dt_f32, (int[]){config->hidden_dim, 0, 0, 0});
+			weights->b2[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w2.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		}
 	}
 
-	weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
+	if (config->arch == Phi) {
+		weights->ln_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 1, dt_f32, (int[]){config->dim, 0, 0, 0});
+		weights->ln_final_bias = (float*)tensors_get(tensors, "model.norm.bias", 1, dt_f32, (int[]){config->dim, 0, 0, 0});
+	} else {
+		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
+	}
+
 	weights->wcls = tensors_get(tensors, "model.output.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
+
+	if (config->arch == Phi) {
+		weights->bcls = (float*)tensors_get(tensors, "model.output.bias", 0, dt_f32, (int[]){config->vocab_size, 0, 0, 0});
+	}
 }
 
 void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_size) {
@@ -111,7 +146,9 @@ size_t model_bandwidth(struct Config* config, size_t dsize) {
 	// weights for ffn
 	res += dsize * config->hidden_dim * config->dim * config->n_layers;
 	res += dsize * config->dim * config->hidden_dim * config->n_layers;
-	res += dsize * config->hidden_dim * config->dim * config->n_layers;
+	if (config->arch != Phi) {
+		res += dsize * config->hidden_dim * config->dim * config->n_layers;
+	}
 	// final rmsnorm
 	res += sizeof(float) * config->dim;
 	// classifier weights for the logits, on the last layer
@@ -171,7 +208,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 
 	// print first prompt token since it won't be decoded
 	if (token != tokenizer->bos_id) {
-		char* piece = tokenizer_decode(tokenizer, token, tokenizer->bos_id);
+		char* piece = tokenizer_decode(tokenizer, tokenizer->bos_id, token);
 		printf("%s", piece);
 		fflush(stdout);
 	}
