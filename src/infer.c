@@ -61,6 +61,38 @@ static void rmsnorm(float* o, float* x, float* weight, int size) {
 	}
 }
 
+static void layernorm(float* o, float* x, float* weight, float* bias, int size) {
+	// calculate sum
+	float ss = 0.0f;
+	for (int j = 0; j < size; j++) {
+		ss += x[j];
+	}
+
+	float mean = ss / size;
+
+	// calculate sum of squared deltas
+	ss = 0.0f;
+	for (int j = 0; j < size; j++) {
+		ss += (x[j] - mean) * (x[j] - mean);
+	}
+
+	float var = ss / size;
+
+	// compute scale
+	ss = 1.0f / sqrtf(var + 1e-5f);
+
+	// normalize and scale
+	for (int j = 0; j < size; j++) {
+		o[j] = (x[j] - mean) * ss * weight[j] + bias[j];
+	}
+}
+
+static void bias(float* x, float* bias, int size) {
+	for (int j = 0; j < size; ++j) {
+		x[j] += bias[j];
+	}
+}
+
 static void softmax(float* x, int size) {
 	// find max value (for numerical stability)
 	float max_val = x[0];
@@ -95,10 +127,10 @@ static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
 	}
 }
 
-static void rope(float* vec, int d, int head_size, int pos, float theta) {
+static void rope(float* vec, int d, int head_size, int pos, float theta, int rotary_dim) {
 	for (int i = 0; i < d; i += 2) {
-		int head_dim = i % head_size;
-		float freq = 1.0f / powf(theta, head_dim / (float)head_size);
+		int j_head = i % head_size;
+		float freq = j_head >= rotary_dim ? 0.f : 1.0f / powf(theta, (float)j_head / (float)rotary_dim);
 		float val = pos * freq;
 		float fcr = cosf(val);
 		float fci = sinf(val);
@@ -136,8 +168,13 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	// forward all the layers
 	for (unsigned long long l = 0; l < p->n_layers; l++) {
 
-		// attention rmsnorm
-		rmsnorm(s->xb, x, w->rms_att_weight[l], dim);
+		if (p->arch == Phi) {
+			// input layernorm
+			layernorm(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
+		} else {
+			// attention rmsnorm
+			rmsnorm(s->xb, x, w->rms_att_weight[l], dim);
+		}
 
 		// key and value point to the kv cache
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
@@ -147,9 +184,16 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		matmul(s->k, s->xb, w->wk[l], dim, kv_dim);
 		matmul(s->v, s->xb, w->wv[l], dim, kv_dim);
 
+		if (p->arch == Phi) {
+			// inefficient biases
+			bias(s->q, w->bq[l], dim);
+			bias(s->k, w->bk[l], kv_dim);
+			bias(s->v, w->bv[l], kv_dim);
+		}
+
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
-		rope(s->q, dim, head_size, pos, p->rope_theta);
-		rope(s->k, kv_dim, head_size, pos, p->rope_theta);
+		rope(s->q, dim, head_size, pos, p->rope_theta, p->rotary_dim);
+		rope(s->k, kv_dim, head_size, pos, p->rope_theta, p->rotary_dim);
 
 		// update kv cache
 		for (int i = 0; i < kv_dim; i++) {
@@ -163,7 +207,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				s->k[i] = s->key_cache[loff + r * kv_dim + i];
 			}
 
-			rope(s->k, kv_dim, head_size, 1, p->rope_theta);
+			rope(s->k, kv_dim, head_size, 1, p->rope_theta, p->rotary_dim);
 
 			for (int i = 0; i < kv_dim; i++) {
 				s->key_cache[loff + r * kv_dim + i] = s->k[i];
@@ -195,10 +239,10 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			// softmax the scores to get attention weights over [0..kv_len)
 			softmax(att, kv_len);
 
-			// weighted sum of the values, store back into xb
-			float* xb = s->xb + h * head_size;
+			// weighted sum of the values, store back into xb2
+			float* xb2 = s->xb2 + h * head_size;
 			for (int i = 0; i < head_size; i++) {
-				xb[i] = 0.0f;
+				xb2[i] = 0.0f;
 			}
 			for (int t = 0; t < kv_len; t++) {
 				// get the value vector for this head and at this timestep
@@ -207,39 +251,62 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				float a = att[t];
 				// accumulate the weighted value into xb
 				for (int i = 0; i < head_size; i++) {
-					xb[i] += a * v[i];
+					xb2[i] += a * v[i];
 				}
 			}
 		}
 
 		// final matmul to get the output of the attention
-		matmul(s->xb2, s->xb, w->wo[l], dim, dim);
+		// TODO: we're using hb as a temporary storage, hacky
+		matmul(s->hb, s->xb2, w->wo[l], dim, dim);
+
+		if (p->arch == Phi) {
+			// inefficient bias
+			bias(s->hb, w->bo[l], dim);
+		}
 
 		// residual connection back into x
 		for (int i = 0; i < dim; i++) {
-			x[i] += s->xb2[i];
+			x[i] += s->hb[i];
 		}
 
-		// ffn rmsnorm
-		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
+		if (p->arch == Phi) {
+			matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
 
-		// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-		// first calculate self.w1(x) and self.w3(x)
-		matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
-		matmul(s->hb2, s->xb, w->w3[l], dim, hidden_dim);
+			// GELU non-linearity
+			for (int i = 0; i < hidden_dim; i++) {
+				float val = s->hb[i];
+				val += w->b1[l][i];
+				val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
+				s->hb[i] = val;
+			}
+		} else {
+			// ffn rmsnorm
+			rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
 
-		// SwiGLU non-linearity
-		for (int i = 0; i < hidden_dim; i++) {
-			float val = s->hb[i];
-			// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-			val *= (1.0f / (1.0f + expf(-val)));
-			// elementwise multiply with w3(x)
-			val *= s->hb2[i];
-			s->hb[i] = val;
+			// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+			// first calculate self.w1(x) and self.w3(x)
+			matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
+			matmul(s->hb2, s->xb, w->w3[l], dim, hidden_dim);
+
+			// SwiGLU non-linearity
+			for (int i = 0; i < hidden_dim; i++) {
+				float val = s->hb[i];
+				// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+				val *= (1.0f / (1.0f + expf(-val)));
+				// elementwise multiply with w3(x)
+				val *= s->hb2[i];
+				s->hb[i] = val;
+			}
 		}
 
 		// final matmul to get the output of the ffn
 		matmul(s->xb, s->hb, w->w2[l], hidden_dim, dim);
+
+		if (p->arch == Phi) {
+			// inefficient bias
+			bias(s->xb, w->b2[l], dim);
+		}
 
 		// residual connection
 		for (int i = 0; i < dim; i++) {
@@ -252,10 +319,21 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		return NULL;
 	}
 
-	// final rmsnorm
-	rmsnorm(x, x, w->rms_final_weight, dim);
+	if (p->arch == Phi) {
+		// final layernorm
+		layernorm(x, x, w->ln_final_weight, w->ln_final_bias, dim);
+	} else {
+		// final rmsnorm
+		rmsnorm(x, x, w->rms_final_weight, dim);
+	}
 
 	// classifier into logits
 	matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+
+	if (p->arch == Phi) {
+		// inefficient biase
+		bias(s->logits, w->bcls, p->vocab_size);
+	}
+
 	return s->logits;
 }
