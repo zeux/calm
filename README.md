@@ -26,7 +26,12 @@ python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct
 
 ## Supported models
 
-calm currently expects models to follow Llama-like architecture (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE). It has been tested on following models:
+calm currently supports the following model architectures:
+
+- Llama-like (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE)
+- Phi2 (LayerNorm normalization, GELU activation, parallel attention mixing, partial RoPE)
+
+It has been tested on following models:
 
 - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
 - Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
@@ -34,8 +39,7 @@ calm currently expects models to follow Llama-like architecture (RMSNorm normali
 - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
 - Yi 34B (01-ai/Yi-34B-Chat)
 - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
-
-calm also has experimental support for Phi-2 model (microsoft/phi-2) which has a different architecture (layernorm, GELU activation, parallel attention mixing, partial RoPE). This support is not fully optimized and is subject to change.
+- Phi2 (microsoft/phi-2)
 
 ## Supported formats
 
