@@ -20,6 +20,8 @@
 
 #define CUDA_SYNC() CUDA_CHECK(cudaDeviceSynchronize())
 
+static cudaStream_t stream;
+
 static void* cuda_devicecopy(void* host, size_t size) {
 	if (host == NULL) {
 		return NULL;
@@ -54,6 +56,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	       devprop.name, devprop.major, devprop.minor, devprop.multiProcessorCount,
 	       (double)devprop.totalGlobalMem / (1024 * 1024 * 1024),
 	       (double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
+
+	CUDA_CHECK(cudaStreamCreate(&stream));
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
@@ -462,7 +466,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32>>>(x, (T*)w->token_embedding_table + token * dim, dim);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table + token * dim, dim);
 	profiler_trigger("embed", 0);
 
 	// forward all the layers
@@ -471,21 +475,21 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (p->arch == Phi) {
 			// input layernorm
-			kernel_layernorm<<<1, layernorm_size>>>(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
+			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
 			profiler_trigger("layernorm", 0);
 		} else {
 			// attention rmsnorm
-			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_att_weight[l], dim);
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim);
 			profiler_trigger("rmsnorm", 0);
 		}
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(T));
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len, p->rotary_dim);
+		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32, 0, stream>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len, p->rotary_dim);
 		profiler_trigger("rope_qkv", 0);
 
 		// only update kv cache and don't output logits
@@ -494,36 +498,36 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		}
 
 		// attention scores for all heads
-		kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul)>>>(s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		profiler_trigger("attn_score", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// softmax the scores to get attention weights over [0..kv_len)
-		kernel_attn_softmax<<<p->n_heads, softmax_size>>>(s->att, p->n_heads, p->seq_len, kv_len);
+		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 		profiler_trigger("attn_softmax", 0);
 
 		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul)>>>(s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32, 0, stream>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
-			kernel_matmul_ffn1_gelu<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, stream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
 		} else {
 			// ffn rmsnorm
-			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(s->xb, x, w->rms_ffn_weight[l], dim);
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 			profiler_trigger("rmsnorm", 0);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-			kernel_matmul_ffn13_silu<<<hidden_dim, 32>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
 		}
 
-		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
+		kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 	}
 
@@ -536,21 +540,21 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	if (p->arch == Phi) {
 		// final layernorm
-		kernel_layernorm<<<1, layernorm_size>>>(x, x, w->ln_final_weight, w->ln_final_bias, dim);
+		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, w->ln_final_weight, w->ln_final_bias, dim);
 		profiler_trigger("layernorm", 0);
 	} else {
 		// final rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float)>>>(x, x, w->rms_final_weight, dim);
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim);
 		profiler_trigger("rmsnorm", 0);
 	}
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32>>>(s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
 
 	profiler_endsync();
 
-	CUDA_SYNC();
+	CUDA_CHECK(cudaStreamSynchronize(stream));
 
 	return s->logits;
 }
