@@ -18,8 +18,6 @@
 		}                                                                                                \
 	} while (0)
 
-#define CUDA_SYNC() CUDA_CHECK(cudaDeviceSynchronize())
-
 static cudaStream_t stream, parstream;
 static cudaEvent_t parsync[2];
 
