@@ -20,7 +20,8 @@
 
 #define CUDA_SYNC() CUDA_CHECK(cudaDeviceSynchronize())
 
-static cudaStream_t stream;
+static cudaStream_t stream, parstream;
+static cudaEvent_t parsync[2];
 
 static void* cuda_devicecopy(void* host, size_t size) {
 	if (host == NULL) {
@@ -58,6 +59,11 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	       (double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6);
 
 	CUDA_CHECK(cudaStreamCreate(&stream));
+	CUDA_CHECK(cudaStreamCreate(&parstream));
+
+	for (int i = 0; i < sizeof(parsync) / sizeof(parsync[0]); ++i) {
+		CUDA_CHECK(cudaEventCreateWithFlags(&parsync[i], cudaEventDisableTiming));
+	}
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
@@ -225,7 +231,7 @@ __global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, 
 }
 
 template <typename T>
-__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b, int n, int d) {
+__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b, int n, int d, bool atomic) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -237,7 +243,11 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b,
 
 	if (threadIdx.x == 0) {
 		// += for residual
-		xout[i] += val;
+		if (atomic) {
+			atomicAdd(&xout[i], val);
+		} else {
+			xout[i] += val;
+		}
 	}
 }
 
@@ -277,7 +287,7 @@ __global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, flo
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* b, int n, int d) {
+__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* b, int n, int d, bool atomic) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -289,7 +299,11 @@ __global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* b,
 
 	if (threadIdx.x == 0) {
 		// += for residual
-		xout[i] += val;
+		if (atomic) {
+			atomicAdd(&xout[i], val);
+		} else {
+			xout[i] += val;
+		}
 	}
 }
 
@@ -477,6 +491,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			// input layernorm
 			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
 			profiler_trigger("layernorm", 0);
+
+			// signal completion of the layernorm to parstream (below)
+			CUDA_CHECK(cudaEventRecord(parsync[0], stream));
 		} else {
 			// attention rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim);
@@ -510,13 +527,23 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32, 0, stream>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32, 0, stream>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim, /* atomic= */ p->arch == Phi);
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
+			// MLP uses layernorm results from main stream, so wait for these to complete
+			CUDA_CHECK(cudaStreamWaitEvent(parstream, parsync[0], 0));
+
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
-			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, stream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, parstream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
+
+			kernel_matmul_ffn2<<<dim, 32, 0, parstream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim, /* atomic= */ true);
+			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
+
+			// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
+			CUDA_CHECK(cudaEventRecord(parsync[1], parstream));
+			CUDA_CHECK(cudaStreamWaitEvent(stream, parsync[1], 0));
 		} else {
 			// ffn rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
@@ -525,10 +552,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
-		}
 
-		kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
-		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
+			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim, /* atomic= */ false);
+			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
+		}
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
