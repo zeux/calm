@@ -180,19 +180,16 @@ __global__ static void kernel_layernorm(float* o, float* x, float* weight, float
 	}
 }
 
-__global__ static void kernel_bias(float* x, float* bias, int size) {
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(i < size);
-
-	x[i] += bias[i];
-}
-
 template <typename T>
-__global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int d) {
+__global__ static void kernel_matmul_cls(float* xout, float* x, T* w, float* b, int n, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
+
+	if (b) {
+		val += b[i];
+	}
 
 	// instead of writing one value per block, we transpose the values and write all results from first warp
 	val = blocktranspose(val, 0.f);
@@ -203,26 +200,36 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, T* w, int n, int
 }
 
 template <typename T>
-__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, int n, int d, int kvd) {
+__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd) {
 	int i = blockIdx.x;
 	assert(i < d + kvd * 2);
 
 	float* out = i < d ? qout : (i < d + kvd ? kout : vout);
 	T* w = i < d ? wq : (i < d + kvd ? wk : wv);
+	float* b = i < d ? bq : (i < d + kvd ? bk : bv);
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
 	float val = matmul_warppar(x, w, j, n, n);
+
+	if (b) {
+		val += b[j];
+	}
+
 	if (threadIdx.x == 0) {
 		out[j] = val;
 	}
 }
 
 template <typename T>
-__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, int n, int d) {
+__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
+
+	if (b) {
+		val += b[i];
+	}
 
 	if (threadIdx.x == 0) {
 		// += for residual
@@ -255,9 +262,10 @@ __global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, flo
 
 	float v1 = matmul_warppar(x, w1, i, n, n);
 
-	// TODO: reference
-	v1 += b1[i];
-	float val = 0.5f * v1 * (1.0f + tanhf(0.797885f * (v1 + 0.044715f * v1 * v1 * v1)));
+	float val = v1 + b1[i];
+
+	// GELU (0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x^3))))
+	val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
 
 	if (threadIdx.x == 0) {
 		xout[i] = val;
@@ -265,11 +273,15 @@ __global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, flo
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, int n, int d) {
+__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* b, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
+
+	if (b) {
+		val += b[i];
+	}
 
 	if (threadIdx.x == 0) {
 		// += for residual
@@ -304,9 +316,6 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 
 		float v0 = v[j];
 		float v1 = v[j + 1];
-
-		k[j] = rk0;
-		k[j + 1] = rk1;
 
 		// update kvcache key/value
 		kb[kv_pos * kvd + j] = rk0;
@@ -471,18 +480,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		}
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], dim, dim, kv_dim);
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(T));
-
-		if (p->arch == Phi) {
-			// inefficient biases
-			kernel_bias<<<dim / 32, 32>>>(s->q, w->bq[l], dim);
-			profiler_trigger("bias", 0);
-			kernel_bias<<<kv_dim / 32, 32>>>(s->k, w->bk[l], kv_dim);
-			profiler_trigger("bias", 0);
-			kernel_bias<<<kv_dim / 32, 32>>>(s->v, w->bv[l], kv_dim);
-			profiler_trigger("bias", 0);
-		}
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
@@ -507,14 +506,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32>>>(x, s->xb2, (T*)w->wo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
-
-		if (p->arch == Phi) {
-			// inefficient biases
-			kernel_bias<<<dim / 32, 32>>>(x, w->bo[l], dim);
-			profiler_trigger("bias", 0);
-		}
 
 		if (p->arch != Phi) {
 			// ffn rmsnorm
@@ -532,14 +525,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
 		}
 
-		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, (T*)w->w2[l], hidden_dim, dim);
+		kernel_matmul_ffn2<<<dim, 32>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 		profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
-
-		if (p->arch == Phi) {
-			// inefficient biases
-			kernel_bias<<<dim / 32, 32>>>(x, w->b2[l], dim);
-			profiler_trigger("bias", 0);
-		}
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
@@ -560,13 +547,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	}
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32>>>(s->logits, x, (T*)w->wcls, dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32>>>(s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
-
-	if (p->arch == Phi) {
-		// inefficient biases
-		kernel_bias<<<p->vocab_size / 32, 32>>>(s->logits, w->bcls, p->vocab_size);
-	}
 
 	profiler_endsync();
 

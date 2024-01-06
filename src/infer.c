@@ -277,6 +277,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			for (int i = 0; i < hidden_dim; i++) {
 				float val = s->hb[i];
 				val += w->b1[l][i];
+				// GELU (0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x^3))))
 				val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
 				s->hb[i] = val;
 			}
