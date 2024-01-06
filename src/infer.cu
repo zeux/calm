@@ -153,27 +153,22 @@ __global__ static void kernel_layernorm(float* o, float* x, float* weight, float
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
-	// calculate sum (per thread)
-	float ss = 0.0f;
+	float K = x[0]; // shifted variance for numerical stability
+
+	// calculate sum and sum of squares (per thread)
+	float sum = 0.0f, ss = 0.0f;
 	for (int j = i; j < size; j += blockSize) {
-		ss += x[j];
+		float v = x[j] - K;
+		sum += v;
+		ss += v * v;
 	}
 
 	// sum across threads in block
+	sum = blockreduce_sum(sum);
 	ss = blockreduce_sum(ss);
 
-	float mean = ss / size;
-
-	// calculate sum of squared deltas (per thread)
-	ss = 0.0f;
-	for (int j = i; j < size; j += blockSize) {
-		ss += (x[j] - mean) * (x[j] - mean);
-	}
-
-	// sum across threads in block
-	ss = blockreduce_sum(ss);
-
-	float var = ss / size;
+	float mean = sum / size + K;
+	float var = (ss - sum * sum / size) / size;
 
 	// normalize and scale
 	float scale = rsqrtf(var + 1e-5f);
