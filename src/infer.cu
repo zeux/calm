@@ -451,6 +451,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
 
+	bool mlp_async = p->arch == Phi;
+
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
 	int kv_pos = kv_sink + (pos - kv_sink) % (p->seq_len - kv_sink);
@@ -479,9 +481,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
 			profiler_trigger("layernorm", 0);
 
-			// wait for layernorm to complete on parstream
-			CUDA_CHECK(cudaEventRecord(parsync[0], stream));
-			CUDA_CHECK(cudaStreamWaitEvent(parstream, parsync[0], 0));
+			if (mlp_async) {
+				// wait for layernorm to complete on parstream
+				CUDA_CHECK(cudaEventRecord(parsync[0], stream));
+				CUDA_CHECK(cudaStreamWaitEvent(parstream, parsync[0], 0));
+			}
 		} else {
 			// attention rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim);
@@ -519,16 +523,20 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
+			cudaStream_t mlpstream = mlp_async ? parstream : stream;
+
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
-			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, parstream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
 
-			kernel_matmul_ffn2<<<dim, 32, 0, parstream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim, /* atomic= */ true);
+			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim, /* atomic= */ true);
 			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 
-			// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
-			CUDA_CHECK(cudaEventRecord(parsync[1], parstream));
-			CUDA_CHECK(cudaStreamWaitEvent(stream, parsync[1], 0));
+			if (mlp_async) {
+				// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
+				CUDA_CHECK(cudaEventRecord(parsync[1], parstream));
+				CUDA_CHECK(cudaStreamWaitEvent(stream, parsync[1], 0));
+			}
 		} else {
 			// ffn rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
