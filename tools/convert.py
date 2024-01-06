@@ -70,6 +70,7 @@ if arch in ["llama", "mistral"]:
     metadata["bos_token_id"] = config["bos_token_id"]
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
+    metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
 elif arch == "phi":
     # hardcoded in C
     assert config["activation_function"] == "gelu_new"
@@ -86,6 +87,7 @@ elif arch == "phi":
     metadata["bos_token_id"] = -1
     metadata["eos_token_id"] = 50256 # todo: read from tokenizer_config
     metadata["rope_theta"] = 10000.0 # hardcoded in model
+    metadata["rotary_dim"] = config["rotary_dim"]
 
 # load tokenizer model
 tokens = [""] * config["vocab_size"]
@@ -155,14 +157,19 @@ for fn in args.models:
 
 # huggingface permutes WQ and WK, this function reverses it
 # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
-def permute_reverse(w, heads):
-    if len(w.shape) == 1:
-        dim1 = w.shape[0]
-        return w.view(heads, 2, dim1 // heads // 2).transpose(1, 2).reshape(dim1)
-    else:
-        dim1 = w.shape[0]
-        dim2 = w.shape[1]
-        return w.view(heads, 2, dim1 // heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+def permute_reverse(w, heads, rotary_dim):
+    head_dim = w.shape[0] // heads
+    w = torch.unflatten(w, 0, (-1, head_dim))
+    # wr is the rotary part, wk is the part kept unrotated
+    wr = w[:, :rotary_dim]
+    wk = w[:, rotary_dim:]
+    # switch wr from outputting two rotary_dim/2 chunks to outputting values interleaved
+    wr = torch.unflatten(wr, 1, (2, -1))
+    wr = wr.transpose(1, 2)
+    wr = wr.flatten(1, 2)
+    # assemble the heads back
+    w = torch.cat([wr, wk], dim=1)
+    return torch.flatten(w, 0, 1)
 
 # fp8 support requires torch 2.1, but we support other dtypes on earlier versions
 dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None)}[args.dtype]
@@ -177,8 +184,11 @@ if arch in ["llama", "mistral"]:
 
     for l in range(config["num_hidden_layers"]):
         tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"]))
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"]))
+
+        head_dim = config["hidden_size"] // config["num_attention_heads"]
+
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"], head_dim))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"], head_dim))
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
 
@@ -197,16 +207,17 @@ elif arch == "phi":
         tensors[f"model.layers.{l}.norm.weight"] = weights[f"transformer.h.{l}.ln.weight"].float()
         tensors[f"model.layers.{l}.norm.bias"] = weights[f"transformer.h.{l}.ln.bias"].float()
 
-        # assume no GQA for now
         dim = config["n_embd"]
+        rotary_dim = config["rotary_dim"]
+
         wkv_w = weights[f"transformer.h.{l}.mixer.Wqkv.weight"]
         wkv_b = weights[f"transformer.h.{l}.mixer.Wqkv.bias"]
         assert wkv_w.shape[0] == 3 * dim and wkv_b.shape[0] == 3 * dim
 
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["n_head"]))
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["n_head"]).float()
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["n_head"]))
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["n_head"]).float()
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["n_head"], rotary_dim))
+        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["n_head"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["n_head"], rotary_dim))
+        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["n_head"], rotary_dim).float()
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wkv_w[dim*2:])
         tensors[f"model.layers.{l}.attn.wv.bias"] = wkv_b[dim*2:].float()
 
