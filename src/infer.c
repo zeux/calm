@@ -87,12 +87,6 @@ static void layernorm(float* o, float* x, float* weight, float* bias, int size) 
 	}
 }
 
-static void bias(float* x, float* bias, int size) {
-	for (int j = 0; j < size; ++j) {
-		x[j] += bias[j];
-	}
-}
-
 static void softmax(float* x, int size) {
 	// find max value (for numerical stability)
 	float max_val = x[0];
@@ -113,7 +107,7 @@ static void softmax(float* x, int size) {
 	}
 }
 
-static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
+static void matmul(float* xout, float* x, dtype_t* w, float* b, int n, int d) {
 	// W (d,n) @ x (n,) -> xout (d,)
 	// by far the most amount of time is spent inside this little function
 	int i;
@@ -122,6 +116,9 @@ static void matmul(float* xout, float* x, dtype_t* w, int n, int d) {
 		float val = 0.0f;
 		for (int j = 0; j < n; j++) {
 			val += w[i * n + j] * x[j];
+		}
+		if (b) {
+			val += b[i];
 		}
 		xout[i] = val;
 	}
@@ -180,16 +177,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
 		// qkv matmuls for this position
-		matmul(s->q, s->xb, w->wq[l], dim, dim);
-		matmul(s->k, s->xb, w->wk[l], dim, kv_dim);
-		matmul(s->v, s->xb, w->wv[l], dim, kv_dim);
-
-		if (p->arch == Phi) {
-			// inefficient biases
-			bias(s->q, w->bq[l], dim);
-			bias(s->k, w->bk[l], kv_dim);
-			bias(s->v, w->bv[l], kv_dim);
-		}
+		matmul(s->q, s->xb, w->wq[l], w->bq[l], dim, dim);
+		matmul(s->k, s->xb, w->wk[l], w->bk[l], dim, kv_dim);
+		matmul(s->v, s->xb, w->wv[l], w->wv[l], dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		rope(s->q, dim, head_size, pos, p->rope_theta, p->rotary_dim);
@@ -258,12 +248,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		// final matmul to get the output of the attention
 		// TODO: we're using hb as a temporary storage, hacky
-		matmul(s->hb, s->xb2, w->wo[l], dim, dim);
-
-		if (p->arch == Phi) {
-			// inefficient bias
-			bias(s->hb, w->bo[l], dim);
-		}
+		matmul(s->hb, s->xb2, w->wo[l], w->bo[l], dim, dim);
 
 		// residual connection back into x
 		for (int i = 0; i < dim; i++) {
@@ -271,12 +256,11 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 
 		if (p->arch == Phi) {
-			matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
+			matmul(s->hb, s->xb, w->w1[l], w->b1[l], dim, hidden_dim);
 
 			// GELU non-linearity
 			for (int i = 0; i < hidden_dim; i++) {
 				float val = s->hb[i];
-				val += w->b1[l][i];
 				// GELU (0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x^3))))
 				val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
 				s->hb[i] = val;
@@ -287,8 +271,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 			// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
 			// first calculate self.w1(x) and self.w3(x)
-			matmul(s->hb, s->xb, w->w1[l], dim, hidden_dim);
-			matmul(s->hb2, s->xb, w->w3[l], dim, hidden_dim);
+			matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim);
+			matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim);
 
 			// SwiGLU non-linearity
 			for (int i = 0; i < hidden_dim; i++) {
@@ -302,12 +286,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 
 		// final matmul to get the output of the ffn
-		matmul(s->xb, s->hb, w->w2[l], hidden_dim, dim);
-
-		if (p->arch == Phi) {
-			// inefficient bias
-			bias(s->xb, w->b2[l], dim);
-		}
+		matmul(s->xb, s->hb, w->w2[l], w->b2[l], hidden_dim, dim);
 
 		// residual connection
 		for (int i = 0; i < dim; i++) {
@@ -329,12 +308,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	}
 
 	// classifier into logits
-	matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
-
-	if (p->arch == Phi) {
-		// inefficient biase
-		bias(s->logits, w->bcls, p->vocab_size);
-	}
+	matmul(s->logits, x, w->wcls, w->bcls, p->dim, p->vocab_size);
 
 	return s->logits;
 }
