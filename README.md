@@ -35,6 +35,8 @@ calm currently expects models to follow Llama-like architecture (RMSNorm normali
 - Yi 34B (01-ai/Yi-34B-Chat)
 - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
 
+calm also has experimental support for Phi-2 model (microsoft/phi-2) which has a different architecture (layernorm, GELU activation, parallel attention mixing, partial RoPE). This support is not fully optimized and is subject to change.
+
 ## Supported formats
 
 Model weights support `fp16` and `fp8` formats; the weight type is specified at conversion time via `--dtype` argument to `convert.py`.
