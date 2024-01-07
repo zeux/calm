@@ -148,7 +148,7 @@ for fn in args.models:
                 assert(k not in weights)
                 weights[k] = f.get_tensor(k)
     elif ext == ".bin":
-        pth = torch.load(fn, weights_only=True)
+        pth = torch.load(fn, map_location="cpu", weights_only=True)
         for k in pth.keys():
             assert(k not in weights)
             weights[k] = pth[k]
