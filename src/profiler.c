@@ -28,6 +28,7 @@ struct ProfilerTrigger {
 };
 
 struct Profiler {
+	cudaStream_t stream;
 	cudaEvent_t start;
 
 	struct ProfilerTrigger triggers[MAX_EVENTS];
@@ -53,7 +54,7 @@ static struct ProfilerKernel* get_kernel(const char* name) {
 	return kernel;
 }
 
-void profiler_begin() {
+int profiler_begin(void* stream) {
 	if (profiler_enabled < 0) {
 		const char* env = getenv("CALM_PROF");
 		profiler_enabled = env && atoi(env);
@@ -68,9 +69,11 @@ void profiler_begin() {
 	}
 
 	if (profiler_enabled <= 0)
-		return;
+		return 0;
 
-	cudaEventRecord(profiler.start, 0);
+	profiler.stream = (cudaStream_t)stream;
+	cudaEventRecord(profiler.start, profiler.stream);
+	return 1;
 }
 
 void profiler_trigger(const char* name, size_t bytes) {
@@ -80,7 +83,7 @@ void profiler_trigger(const char* name, size_t bytes) {
 	assert(profiler.n_triggers < MAX_EVENTS);
 	struct ProfilerTrigger* trigger = &profiler.triggers[profiler.n_triggers++];
 
-	cudaEventRecord(trigger->event, 0);
+	cudaEventRecord(trigger->event, profiler.stream);
 	trigger->name = name;
 	trigger->bytes = bytes;
 }

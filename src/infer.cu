@@ -432,7 +432,7 @@ __global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb,
 
 template <typename T>
 static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
-	profiler_begin();
+	int prof = profiler_begin(stream);
 
 	// a few convenience variables
 	struct Config* p = &transformer->config;
@@ -444,8 +444,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
-
-	bool mlp_async = p->arch == Phi;
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
@@ -475,7 +473,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], w->ln_bias[l], dim);
 			profiler_trigger("layernorm", 0);
 
-			if (mlp_async) {
+			if (!prof) {
 				// wait for layernorm to complete on parstream
 				CUDA_CHECK(cudaEventRecord(parsync[0], stream));
 				CUDA_CHECK(cudaStreamWaitEvent(parstream, parsync[0], 0));
@@ -517,7 +515,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
-			cudaStream_t mlpstream = mlp_async ? parstream : stream;
+			cudaStream_t mlpstream = prof ? stream : parstream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
 			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
@@ -526,7 +524,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 
-			if (mlp_async) {
+			if (!prof) {
 				// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
 				CUDA_CHECK(cudaEventRecord(parsync[1], parstream));
 				CUDA_CHECK(cudaStreamWaitEvent(stream, parsync[1], 0));

@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-void profiler_begin();
+int profiler_begin(void* stream);
 void profiler_trigger(const char* name, size_t bytes);
 void profiler_endsync();
 
