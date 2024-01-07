@@ -155,27 +155,28 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 	int blockSize = blockDim.x;
 
 	float K = x[0] + (acc ? acc[0] : 0.f); // shifted variance for numerical stability
-
-	if (acc) {
-		for (int j = i; j < size; j += blockSize) {
-			x[j] += acc[j];
-		}
-	}
+	__syncthreads();
 
 	// calculate sum and sum of squares (per thread)
 	float sum = 0.0f, ss = 0.0f;
 	for (int j = i; j < size; j += blockSize) {
-		float v = x[j] - K;
-		sum += v;
-		ss += v * v;
+		float v = x[j];
+		if (acc) {
+			v += acc[j];
+			x[j] = v;
+		}
+
+		sum += v - K;
+		ss += (v - K) * (v - K);
 	}
 
 	// sum across threads in block
 	sum = blockreduce_sum(sum);
 	ss = blockreduce_sum(ss);
 
-	float mean = sum / size + K;
-	float var = (ss - sum * sum / size) / size;
+	float rsize = 1.f / size;
+	float mean = sum * rsize + K;
+	float var = (ss - sum * sum * rsize) * rsize;
 
 	// normalize and scale
 	float scale = rsqrtf(var + 1e-5f);
