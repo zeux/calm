@@ -1,7 +1,5 @@
 #include "tensors.h"
 
-#include "jsmn.h"
-
 #include <assert.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -15,58 +13,83 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-static bool json_equal(const char* json, const jsmntok_t* tok, const char* str) {
-	assert(tok->type == JSMN_STRING);
-	size_t len = tok->end - tok->start;
-	return len == strlen(str) && memcmp(json + tok->start, str, len) == 0;
+static char* json_skipws(char* json) {
+	while (*json == ' ' || *json == '\t' || *json == '\n' || *json == '\r') {
+		json++;
+	}
+	return json;
 }
 
-static void json_copy(char* buf, size_t buf_size, const char* json, const jsmntok_t* tok) {
-	assert(tok->type == JSMN_STRING || tok->type == JSMN_PRIMITIVE);
-	size_t len = tok->end - tok->start;
-	size_t res = len < buf_size ? len : buf_size - 1;
-	memcpy(buf, json + tok->start, res);
-	buf[res] = 0;
-}
+static char* json_string(char* json, char** res) {
+	if (*json != '"') {
+		return NULL;
+	}
+	json++;
 
-static long long json_llong(const char* json, const jsmntok_t* tok) {
-	if (tok->type != JSMN_PRIMITIVE) {
-		return -1;
+	*res = json;
+	while (*json != '"') {
+		if (*json == 0 || *json == '\\') {
+			return NULL;
+		}
+		json++;
 	}
 
-	char tmp[128];
-	json_copy(tmp, sizeof(tmp), json, tok);
-	return atoll(tmp);
+	*json = 0;
+	json++;
+
+	return json_skipws(json);
 }
 
-static int json_dtype(const char* json, const jsmntok_t* tok, enum DType* dtype, int* dsize) {
-	assert(tok->type == JSMN_STRING);
+static char* json_key(char* json, char** key) {
+	json = json_string(json, key);
+	if (json == NULL) {
+		return NULL;
+	}
+	if (*json != ':') {
+		return NULL;
+	}
+	return json_skipws(json + 1);
+}
 
-	if (json_equal(json, tok, "F32")) {
+static char* json_llong(char* json, long long* res) {
+	char* end;
+	*res = strtoll(json, &end, 10);
+	if (end == json) {
+		return NULL;
+	}
+	end = json_skipws(end);
+	if (*end != ',' && *end != ']') {
+		return NULL;
+	}
+	return end;
+}
+
+static int json_dtype(const char* str, enum DType* dtype, int* dsize) {
+	if (strcmp(str, "F32") == 0) {
 		*dtype = dt_f32;
 		*dsize = 4;
-	} else if (json_equal(json, tok, "F16")) {
+	} else if (strcmp(str, "F16") == 0) {
 		*dtype = dt_f16;
 		*dsize = 2;
-	} else if (json_equal(json, tok, "BF16")) {
+	} else if (strcmp(str, "BF16") == 0) {
 		*dtype = dt_bf16;
 		*dsize = 2;
-	} else if (json_equal(json, tok, "F8_E5M2")) {
+	} else if (strcmp(str, "F8_E5M2") == 0) {
 		*dtype = dt_f8e5m2;
 		*dsize = 1;
-	} else if (json_equal(json, tok, "F8_E4M3")) {
+	} else if (strcmp(str, "F8_E4M3") == 0) {
 		*dtype = dt_f8e4m3;
 		*dsize = 1;
-	} else if (json_equal(json, tok, "I32")) {
+	} else if (strcmp(str, "I32") == 0) {
 		*dtype = dt_i32;
 		*dsize = 4;
-	} else if (json_equal(json, tok, "I16")) {
+	} else if (strcmp(str, "I16") == 0) {
 		*dtype = dt_i16;
 		*dsize = 2;
-	} else if (json_equal(json, tok, "I8")) {
+	} else if (strcmp(str, "I8") == 0) {
 		*dtype = dt_i8;
 		*dsize = 1;
-	} else if (json_equal(json, tok, "U8")) {
+	} else if (strcmp(str, "U8") == 0) {
 		*dtype = dt_u8;
 		*dsize = 1;
 	} else {
@@ -94,59 +117,114 @@ static bool validate_shape(int dsize, int shape[4], size_t length) {
 	return expected_length * dsize == length;
 }
 
-static int parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, const char* json, const jsmntok_t* tokens, int toki) {
-	assert(tokens[toki].type == JSMN_STRING);
-	json_copy(tensor->name, sizeof(tensor->name), json, &tokens[toki]);
-	toki++;
+static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size, char* name, char* s) {
+	tensor->name = name;
 
-	if (tokens[toki].type != JSMN_OBJECT) {
-		return -1;
+	if (*s != '{') {
+		return NULL;
 	}
-
-	int n_keys = tokens[toki].size;
-	toki++;
+	s = json_skipws(s + 1);
 
 	size_t length = 0;
 	int dsize = 0;
 
-	for (int i = 0; i < n_keys; ++i) {
-		const jsmntok_t* key = &tokens[toki];
+	while (*s && *s != '{') {
+		char* key;
+		s = json_key(s, &key);
+		if (!s) {
+			return NULL;
+		}
 
-		if (json_equal(json, key, "dtype") && tokens[toki + 1].type == JSMN_STRING) {
-			if (json_dtype(json, &tokens[toki + 1], &tensor->dtype, &dsize) != 0) {
-				return -1;
+		if (strcmp(key, "dtype") == 0) {
+			char* val;
+			s = json_string(s, &val);
+			if (!s) {
+				return NULL;
 			}
-			toki += 2;
-		} else if (json_equal(json, key, "shape") && tokens[toki + 1].type == JSMN_ARRAY && tokens[toki + 1].size <= 4) {
-			int shape_len = tokens[toki + 1].size;
-			for (int j = 0; j < shape_len; ++j) {
-				tensor->shape[j] = json_llong(json, &tokens[toki + 2 + j]);
-				if (tensor->shape[j] < 0) {
-					return -1;
+			if (json_dtype(val, &tensor->dtype, &dsize) != 0) {
+				return NULL;
+			}
+		} else if (strcmp(key, "shape") == 0) {
+			if (*s != '[') {
+				return NULL;
+			}
+			s = json_skipws(s + 1);
+
+			for (int j = 0; j < 4; ++j) {
+				long long val;
+				s = json_llong(s, &val);
+				if (!s) {
+					return NULL;
 				}
+				if (val < 0 || val > INT_MAX) {
+					return NULL;
+				}
+				tensor->shape[j] = (int)val;
+
+				if (*s == ']') {
+					break;
+				}
+				if (*s != ',') {
+					return NULL;
+				}
+				s = json_skipws(s + 1);
 			}
-			toki += 2 + shape_len;
-		} else if (json_equal(json, key, "data_offsets") && tokens[toki + 1].type == JSMN_ARRAY && tokens[toki + 1].size == 2) {
-			long long start = json_llong(json, &tokens[toki + 2]);
-			long long end = json_llong(json, &tokens[toki + 3]);
-			toki += 4;
+
+			if (*s != ']') {
+				return NULL;
+			}
+			s = json_skipws(s + 1);
+		} else if (strcmp(key, "data_offsets") == 0) {
+			if (*s != '[') {
+				return NULL;
+			}
+			s = json_skipws(s + 1);
+
+			long long start;
+			s = json_llong(s, &start);
+
+			if (*s != ',') {
+				return NULL;
+			}
+			s = json_skipws(s + 1);
+
+			long long end;
+			s = json_llong(s, &end);
+
+			if (*s != ']') {
+				return NULL;
+			}
+			s = json_skipws(s + 1);
 
 			if (start < 0 || end <= start || end > bytes_size) {
-				return -1;
+				return NULL;
 			}
 
 			tensor->data = (char*)bytes + start;
 			length = end - start;
 		} else {
-			return -1;
+			return NULL;
 		}
+
+		if (*s == '}') {
+			break;
+		}
+		if (*s != ',') {
+			return NULL;
+		}
+		s = json_skipws(s + 1);
 	}
 
 	if (!validate_shape(dsize, tensor->shape, length)) {
-		return -1;
+		return NULL;
 	}
 
-	return toki;
+	if (*s != '}') {
+		return NULL;
+	}
+	s = json_skipws(s + 1);
+
+	return s;
 }
 
 int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
@@ -163,23 +241,44 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 	void* bytes = (char*)data + sizeof(uint64_t) + json_size;
 	size_t bytes_size = size - sizeof(uint64_t) - json_size;
 
-	jsmn_parser parser;
-	jsmntok_t tokens[16384];
-	int tokres = jsmn_parse(&parser, json, json_size, tokens, sizeof(tokens) / sizeof(tokens[0]));
-
-	if (tokres <= 0 || tokens[0].type != JSMN_OBJECT) {
+	char* jsoncopy = malloc(json_size + 1);
+	if (!jsoncopy) {
 		return -1;
 	}
+	memcpy(jsoncopy, json, json_size);
+	jsoncopy[json_size] = 0;
 
-	int toki = 1;
-	while (toki < tokres) {
-		if (json_equal(json, &tokens[toki], "__metadata__") && tokens[toki + 1].type == JSMN_OBJECT) {
-			int n_keys = tokens[toki + 1].size;
-			toki += 2;
+	tensors->json = jsoncopy;
 
-			for (int k = 0; k < n_keys; ++k) {
-				assert(tokens[toki].type == JSMN_STRING);
-				if (tokens[toki + 1].type != JSMN_STRING) {
+	char* s = jsoncopy;
+
+	if (*s != '{') {
+		return -1;
+	}
+	s = json_skipws(s + 1);
+
+	while (*s && *s != '}') {
+		char* key;
+		s = json_key(s, &key);
+		if (!s) {
+			return -1;
+		}
+
+		if (strcmp(key, "__metadata__") == 0) {
+			if (*s != '{') {
+				return -1;
+			}
+			s = json_skipws(s + 1);
+
+			while (*s && *s != '}') {
+				char* metakey;
+				s = json_key(s, &metakey);
+				if (!s) {
+					return -1;
+				}
+				char* metaval;
+				s = json_string(s, &metaval);
+				if (!s) {
 					return -1;
 				}
 
@@ -188,14 +287,25 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 				}
 				struct Metadata* metadata = &tensors->metadata[tensors->n_metadata++];
 
-				json_copy(metadata->key, sizeof(metadata->key), json, &tokens[toki]);
-				json_copy(metadata->value, sizeof(metadata->value), json, &tokens[toki + 1]);
-				toki += 2;
+				metadata->key = metakey;
+				metadata->value = metaval;
+
+				if (*s == '}') {
+					break;
+				}
+				if (*s != ',') {
+					return -1;
+				}
+				s = json_skipws(s + 1);
 			}
+			if (*s != '}') {
+				return -1;
+			}
+			s = json_skipws(s + 1);
 		} else {
 			struct Tensor tensor = {};
-			toki = parse_tensor(&tensor, bytes, bytes_size, json, tokens, toki);
-			if (toki < 0) {
+			s = parse_tensor(&tensor, bytes, bytes_size, key, s);
+			if (s == NULL) {
 				return -1;
 			}
 
@@ -204,6 +314,14 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 			}
 			tensors->tensors[tensors->n_tensors++] = tensor;
 		}
+
+		if (*s == '}') {
+			break;
+		}
+		if (*s != ',') {
+			return -1;
+		}
+		s = json_skipws(s + 1);
 	}
 
 	return 0;
@@ -232,6 +350,7 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 	close(fd); // fd can be closed after mmap returns without invalidating the mapping
 
 	if (tensors_parse(tensors, data, size) != 0) {
+		free(tensors->json);
 		munmap(data, size);
 		return -2;
 	}
@@ -243,6 +362,7 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 }
 
 void tensors_close(struct Tensors* tensors) {
+	free(tensors->json);
 	munmap(tensors->data, tensors->size);
 }
 
@@ -299,6 +419,7 @@ const char* tensors_metadata(struct Tensors* tensors, const char* name) {
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 	struct Tensors tensors = {};
 	tensors_parse(&tensors, (void*)data, size);
+	tensors_close(&tensors);
 	return 0;
 }
 #endif

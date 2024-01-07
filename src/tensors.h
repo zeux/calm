@@ -15,20 +15,22 @@ enum DType {
 };
 
 struct Tensor {
-	char name[64];
+	char* name;
 	enum DType dtype;
 	int shape[4];
 	void* data;
 };
 
 struct Metadata {
-	char key[64];
-	char value[64];
+	char* key;
+	char* value;
 };
 
 struct Tensors {
 	void* data;
 	size_t size;
+
+	char* json;
 
 	struct Metadata metadata[128];
 	int n_metadata;
