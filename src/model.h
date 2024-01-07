@@ -79,6 +79,7 @@ struct RunState {
 	float* x;      // activation at current time stamp (dim,)
 	float* xb;     // same, but inside a residual branch (dim,)
 	float* xb2;    // an additional buffer just for convenience (dim,)
+	float* xa;     // buffer for parallel activation accumulation (dim,)
 	float* hb;     // buffer for hidden dimension in the ffn (hidden_dim,)
 	float* hb2;    // buffer for hidden dimension in the ffn (hidden_dim,)
 	float* q;      // query (dim,)

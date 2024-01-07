@@ -101,6 +101,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->xa = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
@@ -149,11 +150,17 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	}
 }
 
-__global__ static void kernel_layernorm(float* o, float* x, float* weight, float* bias, int size) {
+__global__ static void kernel_layernorm(float* o, float* x, float* acc, float* weight, float* bias, int size) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
-	float K = x[0]; // shifted variance for numerical stability
+	float K = x[0] + (acc ? acc[0] : 0.f); // shifted variance for numerical stability
+
+	if (acc) {
+		for (int j = i; j < size; j += blockSize) {
+			x[j] += acc[j];
+		}
+	}
 
 	// calculate sum and sum of squares (per thread)
 	float sum = 0.0f, ss = 0.0f;
@@ -218,7 +225,7 @@ __global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, 
 }
 
 template <typename T>
-__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b, int n, int d, bool atomic) {
+__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -230,11 +237,7 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b,
 
 	if (threadIdx.x == 0) {
 		// += for residual
-		if (atomic) {
-			atomicAdd(&xout[i], val);
-		} else {
-			xout[i] += val;
-		}
+		xout[i] += val;
 	}
 }
 
@@ -274,23 +277,14 @@ __global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, flo
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* b, int n, int d, bool atomic) {
+__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* acc, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
 
-	if (b) {
-		val += b[i];
-	}
-
 	if (threadIdx.x == 0) {
-		// += for residual
-		if (atomic) {
-			atomicAdd(&xout[i], val);
-		} else {
-			xout[i] += val;
-		}
+		xout[i] = val + acc[i];
 	}
 }
 
@@ -478,7 +472,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (p->arch == Phi) {
 			// input layernorm
-			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim);
+			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], w->ln_bias[l], dim);
 			profiler_trigger("layernorm", 0);
 
 			if (mlp_async) {
@@ -519,7 +513,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32, 0, stream>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim, /* atomic= */ p->arch == Phi);
+		kernel_matmul_attn<<<dim, 32, 0, stream>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
@@ -529,7 +523,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
 
-			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim, /* atomic= */ true);
+			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 
 			if (mlp_async) {
@@ -546,7 +540,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
 
-			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(x, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim, /* atomic= */ false);
+			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
 			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 		}
 	}
@@ -560,7 +554,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	if (p->arch == Phi) {
 		// final layernorm
-		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, w->ln_final_weight, w->ln_final_bias, dim);
+		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, w->ln_final_bias, dim);
 		profiler_trigger("layernorm", 0);
 	} else {
 		// final rmsnorm
