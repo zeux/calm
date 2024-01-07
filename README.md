@@ -29,7 +29,7 @@ python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct
 calm currently supports the following model architectures:
 
 - Llama-like (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE)
-- Phi2 (LayerNorm normalization, GELU activation, parallel attention mixing, partial RoPE)
+- Phi (LayerNorm normalization, GELU activation, parallel attention mixing, partial RoPE)
 
 It has been tested on following models:
 
@@ -40,6 +40,7 @@ It has been tested on following models:
 - Yi 34B (01-ai/Yi-34B-Chat)
 - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
 - Phi2 (microsoft/phi-2)
+- Phi1.5 (microsoft/phi-1_5)
 
 ## Supported formats
 
