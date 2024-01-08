@@ -33,16 +33,21 @@ calm currently supports the following model architectures:
 
 It has been tested on following models:
 
-- Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
-- Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
-- Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
-- SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
-- Yi 34B (01-ai/Yi-34B-Chat)
-- TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
-- LLaMA Pro 8B (TencentARC/LLaMA-Pro-8B-Instruct)
-- Qwen 7B (Qwen/Qwen-7B-Chat)
-- Phi2 (microsoft/phi-2)
-- Phi1.5 (microsoft/phi-1_5)
+- Llama architecture
+  - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+  - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
+  - Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
+  - LLaMA Pro 8B (TencentARC/LLaMA-Pro-8B-Instruct)
+  - Yi 34B (01-ai/Yi-34B-Chat)
+- Mistral architecture
+  - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
+  - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
+- Qwen architecture
+  - Qwen 7B (Qwen/Qwen-7B-Chat)
+  - Qwen 14B (Qwen/Qwen-14B-Chat)
+- Phi architecture
+  - Phi1.5 (microsoft/phi-1_5)
+  - Phi2 (microsoft/phi-2)
 
 ## Supported formats
 
