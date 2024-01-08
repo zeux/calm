@@ -82,12 +82,14 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
 		}
 
-		if (config->arch == Phi) {
+		if (config->arch == Phi || (arch && strcmp(arch, "qwen") == 0)) {
 			weights->bq[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wq.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 			weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
 			weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
-			weights->bo[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wo.bias", l, dt_f32, (int[]){config->n_heads * head_size, 0, 0, 0});
+		}
 
+		if (config->arch == Phi) {
+			weights->bo[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wo.bias", l, dt_f32, (int[]){config->n_heads * head_size, 0, 0, 0});
 			weights->b1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w1.bias", l, dt_f32, (int[]){config->hidden_dim, 0, 0, 0});
 			weights->b2[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w2.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		}
