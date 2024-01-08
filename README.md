@@ -1,6 +1,6 @@
 # 😌 calm
 
-This is an implementation of language model inference, aiming to get maximum single-GPU single-batch hardware utilization for LLM architectures with a minimal implementation and minimal dependencies[^1].
+This is an implementation of language model inference, aiming to get maximum single-GPU single-batch hardware utilization for LLM architectures with a minimal implementation and no dependencies[^1].
 
 The goal of this project is experimentation and prototyping; it does not aim to be production ready or stable. It is heavily work in progress.
 
@@ -66,6 +66,6 @@ RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak high
 
 calm uses [🤗 Safetensors](https://huggingface.co/docs/safetensors/index) to store model files. Note that the models require conversion (see below), because calm stores model hyperparameters in .safetensors metadata and may expect a particular set of tensor names or weight order within tensors that is not always compatible with the source. Tokenizer data is stored as tensors inside the model file as well.
 
-[^1]: CUDA runtime and compiler is used for GPU acceleration, but no other CUDA libraries are used; [jsmn](https://github.com/zserge/jsmn) is used for JSON parsing. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
+[^1]: CUDA runtime and compiler is used for GPU acceleration, but no CUDA or C libraries are used. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
 [^2]: Linux is the only supported OS at the moment.
 [^3]: Based on testing a specific Gigabyte GeForce RTX 4090 where both individual kernels from this repository and cuBLAS peak at about ~955 GB/s.
