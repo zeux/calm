@@ -9,6 +9,10 @@
 #include <omp.h>
 #endif
 
+#if defined(__AVX2__) && defined(__F16C__)
+#include <immintrin.h>
+#endif
+
 // we only support CPU inference when the compiler supports _Float16 type natively
 #if defined(__FLT16_MANT_DIG__)
 typedef _Float16 half;
@@ -29,20 +33,56 @@ typedef float (*dotprod_t)(void* w, int n, int i, float* x);
 
 static float dotprod_fp16(void* w, int n, int i, float* x) {
 	half* r = (half*)w + i * n;
+#if defined(__AVX2__) && defined(__F16C__)
+	assert(n % 16 == 0);
+	__m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+	for (int j = 0; j < n; j += 16) {
+		__m256i rw = _mm256_loadu_si256((__m256i*)&r[j]);
+		__m128i rlo = _mm256_castsi256_si128(rw);
+		__m128i rhi = _mm256_extractf128_si256(rw, 1);
+		__m256 x0 = _mm256_loadu_ps(&x[j]);
+		__m256 x1 = _mm256_loadu_ps(&x[j + 8]);
+		acc0 = _mm256_add_ps(_mm256_mul_ps(x0, _mm256_cvtph_ps(rlo)), acc0);
+		acc1 = _mm256_add_ps(_mm256_mul_ps(x1, _mm256_cvtph_ps(rhi)), acc1);
+	}
+	__m256 acc8 = _mm256_add_ps(acc0, acc1);
+	__m128 acc4 = _mm_add_ps(_mm256_castps256_ps128(acc8), _mm256_extractf128_ps(acc8, 1));
+	__m128 accf = _mm_dp_ps(acc4, _mm_set1_ps(1.0f), 0xf1);
+	return _mm_cvtss_f32(accf);
+#else
 	float val = 0.0f;
 	for (int j = 0; j < n; j++) {
 		val += r[j] * x[j];
 	}
 	return val;
+#endif
 }
 
 static float dotprod_fp8(void* w, int n, int i, float* x) {
 	char* r = (char*)w + i * n;
+#if defined(__AVX2__) && defined(__F16C__)
+	assert(n % 16 == 0);
+	__m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+	for (int j = 0; j < n; j += 16) {
+		__m128i rw = _mm_loadu_si128((__m128i*)&r[j]);
+		__m128i rlo = _mm_unpacklo_epi8(_mm_setzero_si128(), rw);
+		__m128i rhi = _mm_unpackhi_epi8(_mm_setzero_si128(), rw);
+		__m256 x0 = _mm256_loadu_ps(&x[j]);
+		__m256 x1 = _mm256_loadu_ps(&x[j + 8]);
+		acc0 = _mm256_add_ps(_mm256_mul_ps(x0, _mm256_cvtph_ps(rlo)), acc0);
+		acc1 = _mm256_add_ps(_mm256_mul_ps(x1, _mm256_cvtph_ps(rhi)), acc1);
+	}
+	__m256 acc8 = _mm256_add_ps(acc0, acc1);
+	__m128 acc4 = _mm_add_ps(_mm256_castps256_ps128(acc8), _mm256_extractf128_ps(acc8, 1));
+	__m128 accf = _mm_dp_ps(acc4, _mm_set1_ps(1.0f), 0xf1);
+	return _mm_cvtss_f32(accf);
+#else
 	float val = 0.0f;
 	for (int j = 0; j < n; j++) {
 		val += fp82half(r[j]) * x[j];
 	}
 	return val;
+#endif
 }
 
 static dotprod_t dotprod;
