@@ -20,7 +20,7 @@ static char* json_skipws(char* json) {
 	return json;
 }
 
-static char* json_string(char* json, char** res) {
+static char* json_string(char* json, char** res, char cont) {
 	if (*json != '"') {
 		return NULL;
 	}
@@ -35,20 +35,12 @@ static char* json_string(char* json, char** res) {
 	}
 
 	*json = 0;
-	json++;
+	json = json_skipws(json + 1);
 
-	return json_skipws(json);
-}
-
-static char* json_key(char* json, char** key) {
-	json = json_string(json, key);
-	if (json == NULL) {
+	if (cont && *json != cont) {
 		return NULL;
 	}
-	if (*json != ':') {
-		return NULL;
-	}
-	return json_skipws(json + 1);
+	return cont ? json_skipws(json + 1) : json;
 }
 
 static char* json_array(char* json, long long* res, int size) {
@@ -142,16 +134,16 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 	size_t length = 0;
 	int dsize = 0;
 
-	while (*s && *s != '{') {
+	while (*s != '}') {
 		char* key;
-		s = json_key(s, &key);
+		s = json_string(s, &key, ':');
 		if (!s) {
 			return NULL;
 		}
 
 		if (strcmp(key, "dtype") == 0) {
 			char* val;
-			s = json_string(s, &val);
+			s = json_string(s, &val, 0);
 			if (!s) {
 				return NULL;
 			}
@@ -201,12 +193,7 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 		return NULL;
 	}
 
-	if (*s != '}') {
-		return NULL;
-	}
-	s = json_skipws(s + 1);
-
-	return s;
+	return json_skipws(s + 1);
 }
 
 int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
@@ -239,9 +226,9 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 	}
 	s = json_skipws(s + 1);
 
-	while (*s && *s != '}') {
+	while (*s != '}') {
 		char* key;
-		s = json_key(s, &key);
+		s = json_string(s, &key, ':');
 		if (!s) {
 			return -1;
 		}
@@ -252,14 +239,14 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 			}
 			s = json_skipws(s + 1);
 
-			while (*s && *s != '}') {
+			while (*s != '}') {
 				char* metakey;
-				s = json_key(s, &metakey);
+				s = json_string(s, &metakey, ':');
 				if (!s) {
 					return -1;
 				}
 				char* metaval;
-				s = json_string(s, &metaval);
+				s = json_string(s, &metaval, 0);
 				if (!s) {
 					return -1;
 				}
@@ -280,9 +267,7 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 				}
 				s = json_skipws(s + 1);
 			}
-			if (*s != '}') {
-				return -1;
-			}
+
 			s = json_skipws(s + 1);
 		} else {
 			struct Tensor tensor = {};
