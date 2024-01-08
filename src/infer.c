@@ -4,21 +4,49 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// we only support CPU inference for fp16 and only when the compiler supports it natively
+// we only support CPU inference when the compiler supports _Float16 type natively
 #if defined(__FLT16_MANT_DIG__)
-typedef _Float16 dtype_t;
+typedef _Float16 half;
 #else
-typedef short dtype_t;
+typedef short half;
 #endif
+
+static half fp82half(unsigned char v) {
+	union {
+		unsigned short u;
+		half f;
+	} u;
+	u.u = v << 8;
+	return u.f;
+}
+
+typedef float (*dotprod_t)(void* w, int n, int i, float* x);
+
+static float dotprod_fp16(void* w, int n, int i, float* x) {
+	half* r = (half*)w + i * n;
+	float val = 0.0f;
+	for (int j = 0; j < n; j++) {
+		val += r[j] * x[j];
+	}
+	return val;
+}
+
+static float dotprod_fp8(void* w, int n, int i, float* x) {
+	char* r = (char*)w + i * n;
+	float val = 0.0f;
+	for (int j = 0; j < n; j++) {
+		val += fp82half(r[j]) * x[j];
+	}
+	return val;
+}
+
+static dotprod_t dotprod;
 
 void prepare(struct Transformer* transformer) {
 	struct Config* p = &transformer->config;
 	struct RunState* s = &transformer->state;
 
-	if (transformer->weights.dsize != 2) {
-		fprintf(stderr, "FATAL: CPU backend only supports fp16 weights\n");
-		abort();
-	}
+	dotprod = transformer->weights.dsize == 1 ? dotprod_fp8 : dotprod_fp16;
 
 	// we calloc instead of malloc to keep valgrind happy
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
@@ -103,16 +131,13 @@ static void softmax(float* x, int size) {
 	}
 }
 
-static void matmul(float* xout, float* x, dtype_t* w, float* b, int n, int d) {
+static void matmul(float* xout, float* x, void* w, float* b, int n, int d) {
 	// W (d,n) @ x (n,) -> xout (d,)
 	// by far the most amount of time is spent inside this little function
 	int i;
 #pragma omp parallel for private(i)
 	for (i = 0; i < d; i++) {
-		float val = 0.0f;
-		for (int j = 0; j < n; j++) {
-			val += w[i * n + j] * x[j];
-		}
+		float val = dotprod(w, n, i, x);
 		if (b) {
 			val += b[i];
 		}
@@ -154,9 +179,10 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
 
 	// copy the token embedding into x
-	dtype_t* content_row = (dtype_t*)w->token_embedding_table + token * dim;
-	for (int i = 0; i < dim; ++i)
-		x[i] = content_row[i];
+	char* content_row = (char*)w->token_embedding_table + token * dim * w->dsize;
+	for (int i = 0; i < dim; ++i) {
+		x[i] = w->dsize == 1 ? fp82half(content_row[i]) : ((half*)content_row)[i];
+	}
 
 	// forward all the layers
 	for (unsigned long long l = 0; l < p->n_layers; l++) {
