@@ -158,11 +158,6 @@ for i, t in enumerate(tokens):
 
     tokens[i] = b
 
-# add tokenizer tensors
-# note: we concatenate all bytes of all tokens into a single tensor
-tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
-tensors["tokenizer.scores"] = torch.tensor(scores, dtype=torch.float32)
-
 # load model files
 weights = {}
 for fn in args.models:
@@ -288,6 +283,11 @@ elif arch == "phi":
     tensors["model.output.weight"] = conv(weights["lm_head.linear.weight"])
     tensors["model.output.bias"] = weights["lm_head.linear.bias"].float()
 
+# add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
+# note: we concatenate all bytes of all tokens into a single tensor
+tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
+tensors["tokenizer.scores"] = torch.tensor(scores, dtype=torch.float32)
+
 # in a perfect world, we would just use HF safetensors.torch.save_file
 # however, not only does it not support fp8 (https://github.com/huggingface/safetensors/pull/404), it also copies every tensor
 # our models are large, so we'll implement a custom save function. could even materialize converted tensors lazily later.
@@ -303,6 +303,7 @@ def save_file(tensors, filename, metadata=None):
         torch.int8: "I8",
         torch.uint8: "U8",
     }
+    _ALIGN = 256
 
     header = {}
     offset = 0
@@ -314,7 +315,7 @@ def save_file(tensors, filename, metadata=None):
         offset += size
 
     hjson = json.dumps(header).encode("utf-8")
-    hjson += b" " * (-len(hjson) % 8)
+    hjson += b" " * (-(len(hjson) + 8) % _ALIGN)
 
     with open(filename, "wb") as f:
         f.write(len(hjson).to_bytes(8, byteorder="little"))
