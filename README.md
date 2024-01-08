@@ -39,6 +39,8 @@ It has been tested on following models:
 - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
 - Yi 34B (01-ai/Yi-34B-Chat)
 - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+- LLaMA Pro 8B (TencentARC/LLaMA-Pro-8B-Instruct)
+- Qwen 7B (Qwen/Qwen-7B-Chat)
 - Phi2 (microsoft/phi-2)
 - Phi1.5 (microsoft/phi-1_5)
 
