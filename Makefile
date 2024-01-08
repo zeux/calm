@@ -4,14 +4,19 @@ NVCC?=nvcc
 
 BUILD=build
 
-SOURCES=$(wildcard src/*.c) $(wildcard src/*.cu)
+SOURCES=$(wildcard src/*.c)
+SOURCES+=$(wildcard src/*.cu)
 OBJECTS=$(SOURCES:%=$(BUILD)/%.o)
 
 BINARY=$(BUILD)/run
 
-CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math -fopenmp -mf16c -mavx2
-CUFLAGS=-g -O2 -arch compute_80
-LDFLAGS=-lm -fopenmp -lcudart
+CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math -fopenmp
+LDFLAGS=-lm -fopenmp
+
+CFLAGS+=-mf16c -mavx2
+
+CUFLAGS+=-g -O2 -arch compute_80
+LDFLAGS+=-lcudart
 
 ifneq (,$(wildcard /usr/local/cuda))
     CFLAGS+=-I/usr/local/cuda/include
