@@ -1,4 +1,9 @@
-huggingface_hub
+# convert.py
 safetensors
-sentencepiece
 torch
+
+# convert.py, only if using models without HF tokenizer.json
+sentencepiece
+
+# download.py
+huggingface_hub

@@ -6,8 +6,8 @@ import json
 import os.path
 import safetensors
 import safetensors.torch
-import sentencepiece
 import torch
+# optionally imports sentencepiece below when converting models without HF tokenizer.json
 
 argp = argparse.ArgumentParser()
 argp.add_argument("output", type=str)
@@ -25,11 +25,11 @@ if args.input is not None:
         if not os.path.exists(args.config):
             argp.error("no config.json found in {}".format(args.input))
     if args.tokenizer is None:
-        args.tokenizer = os.path.join(args.input, "tokenizer.model")
+        args.tokenizer = os.path.join(args.input, "tokenizer.json")
         if not os.path.exists(args.tokenizer):
-            args.tokenizer = os.path.join(args.input, "tokenizer.json")
+            args.tokenizer = os.path.join(args.input, "tokenizer.model")
         if not os.path.exists(args.tokenizer):
-            argp.error("no tokenizer.model or tokenizer.json found in {}".format(args.input))
+            argp.error("no tokenizer.json or tokenizer.model found in {}".format(args.input))
     if args.models is None:
         files = os.listdir(args.input)
         args.models = [os.path.join(args.input, fn) for fn in files if os.path.splitext(fn)[1] == ".safetensors"]
@@ -94,16 +94,7 @@ tokens = [""] * config["vocab_size"]
 scores = [0] * config["vocab_size"]
 
 ext = os.path.splitext(args.tokenizer)[1]
-if ext == ".model":
-    sp_model = sentencepiece.SentencePieceProcessor(model_file=args.tokenizer)
-    assert sp_model.vocab_size() <= config["vocab_size"]
-    assert sp_model.bos_id() == config["bos_token_id"]
-    assert sp_model.eos_id() == config["eos_token_id"]
-
-    for i in range(sp_model.vocab_size()):
-        tokens[i] = sp_model.id_to_piece(i)
-        scores[i] = sp_model.get_score(i)
-elif ext == ".json":
+if ext == ".json":
     with open(args.tokenizer, "r") as f:
         tokenizer = json.load(f)
 
@@ -119,8 +110,18 @@ elif ext == ".json":
         ti = vocab[t1 + t2]
         if scores[ti] == 0:
             scores[ti] = -(1 + i)
+elif ext == ".model":
+    import sentencepiece
+    sp_model = sentencepiece.SentencePieceProcessor(model_file=args.tokenizer)
+    assert sp_model.vocab_size() <= config["vocab_size"]
+    assert sp_model.bos_id() == config["bos_token_id"]
+    assert sp_model.eos_id() == config["eos_token_id"]
+
+    for i in range(sp_model.vocab_size()):
+        tokens[i] = sp_model.id_to_piece(i)
+        scores[i] = sp_model.get_score(i)
 else:
-    raise Exception("Unknown tokenizer file extension: {}; expected .model".format(ext))
+    raise Exception("Unknown tokenizer file extension: {}; expected .json or .model".format(ext))
 
 # postprocess tokens
 for i, t in enumerate(tokens):
