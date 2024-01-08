@@ -63,6 +63,8 @@ KV cache is using `fp16`.
 
 As of December 2023, with Mistral 7B model and `fp16` weights, `calm` reaches ~63.5 tok/s (921 GB/s) on short sequences and ~60 tok/s (904 GB/s) at the end of the 4096 token context, when using NVidia GeForce RTX 4090. When using `fp8` weights on the same hardware and model, the performance is ~119 tok/s (863 GB/s) on short sequences and ~108 tok/s (840 GB/s) at the end of the context.
 
+As of early January 2023, with Phi2 2.7B model and `fp16` weights, `calm` reaches ~166 tok/s (927 GB/s) on short sequences and ~131 tok/s (815 GB/s) at the end of the 2048 token context, when using NVidia GeForce RTX 4090. When using `fp8` weights on the same hardware and model, the performance is ~301 tok/s (851 GB/s) on short sequences and ~207 tok/s (710 GB/s) at the end of the context.
+
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
 Currently weights support `fp16` and `fp8` formats; in the future, 4-bit quantization is planned. This will allow running inference at higher tok/s, however the main metric is bandwidth utilization and the goal is to keep it as close to peak as possible at all supported weight formats.
