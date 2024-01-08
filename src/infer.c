@@ -1,8 +1,13 @@
 #include "model.h"
 
+#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 // we only support CPU inference when the compiler supports _Float16 type natively
 #if defined(__FLT16_MANT_DIG__)
@@ -67,6 +72,13 @@ void prepare(struct Transformer* transformer) {
 		fprintf(stderr, "malloc failed!\n");
 		abort();
 	}
+
+#if defined(_OPENMP) && defined(__linux__)
+	// avoid SMT overhead by default
+	if (getenv("OMP_NUM_THREADS") == NULL) {
+		omp_set_num_threads(omp_get_num_procs() / 2);
+	}
+#endif
 
 #if !defined(__FLT16_MANT_DIG__)
 	fprintf(stderr, "FATAL: _Float16 compiler support is required for CPU backend\n");
