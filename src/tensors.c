@@ -210,23 +210,16 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 	void* bytes = (char*)data + sizeof(uint64_t) + json_size;
 	size_t bytes_size = size - sizeof(uint64_t) - json_size;
 
-	char* jsoncopy = malloc(json_size + 1);
-	if (!jsoncopy) {
-		return -1;
-	}
-	memcpy(jsoncopy, json, json_size);
-	jsoncopy[json_size] = 0;
+	json[json_size - 1] = 0;
 
-	tensors->json = jsoncopy;
-
-	char* s = jsoncopy;
+	char* s = json;
 
 	if (*s != '{') {
 		return -1;
 	}
 	s = json_skipws(s + 1);
 
-	while (*s != '}') {
+	while (*s && *s != '}') {
 		char* key;
 		s = json_string(s, &key, ':');
 		if (!s) {
@@ -282,7 +275,7 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 			tensors->tensors[tensors->n_tensors++] = tensor;
 		}
 
-		if (*s == '}') {
+		if (*s == '}' || *s == '\0') {
 			break;
 		}
 		if (*s != ',') {
@@ -307,7 +300,7 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 	}
 
 	size_t size = st.st_size;
-	void* data = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+	void* data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
 	if (data == MAP_FAILED) {
 		close(fd);
 		return -1;
@@ -317,7 +310,6 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 	close(fd); // fd can be closed after mmap returns without invalidating the mapping
 
 	if (tensors_parse(tensors, data, size) != 0) {
-		free(tensors->json);
 		munmap(data, size);
 		return -2;
 	}
@@ -329,7 +321,6 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 }
 
 void tensors_close(struct Tensors* tensors) {
-	free(tensors->json);
 	munmap(tensors->data, tensors->size);
 }
 
@@ -385,8 +376,10 @@ const char* tensors_metadata(struct Tensors* tensors, const char* name) {
 #ifdef FUZZING
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 	struct Tensors tensors = {};
-	tensors_parse(&tensors, (void*)data, size);
-	tensors_close(&tensors);
+	void* copy = malloc(size);
+	memcpy(copy, data, size);
+	tensors_parse(&tensors, copy, size);
+	free(copy);
 	return 0;
 }
 #endif

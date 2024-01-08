@@ -30,8 +30,6 @@ struct Tensors {
 	void* data;
 	size_t size;
 
-	char* json;
-
 	struct Metadata metadata[128];
 	int n_metadata;
 
