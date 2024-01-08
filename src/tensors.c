@@ -180,13 +180,10 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 			return NULL;
 		}
 
-		if (*json == '}') {
-			break;
-		}
-		if (*json != ',') {
+		if (*json != '}' && *json != ',') {
 			return NULL;
 		}
-		json = json_skipws(json + 1);
+		json = (*json == ',') ? json_skipws(json + 1) : json;
 	}
 
 	if (!validate_shape(dsize, tensor->shape, length)) {
@@ -218,13 +215,10 @@ static char* parse_metadata(struct Tensors* tensors, char* json) {
 		}
 		tensors->metadata[tensors->n_metadata++] = metadata;
 
-		if (*json == '}') {
-			break;
-		}
-		if (*json != ',') {
+		if (*json != '}' && *json != ',') {
 			return NULL;
 		}
-		json = json_skipws(json + 1);
+		json = (*json == ',') ? json_skipws(json + 1) : json;
 	}
 
 	return json_skipws(json + 1);
@@ -276,13 +270,10 @@ int tensors_parse(struct Tensors* tensors, void* data, size_t size) {
 			tensors->tensors[tensors->n_tensors++] = tensor;
 		}
 
-		if (*json == '}' || *json == '\0') {
-			break;
-		}
-		if (*json != ',') {
+		if (*json != '}' && *json != ',' && *json != '\0') {
 			return -1;
 		}
-		json = json_skipws(json + 1);
+		json = (*json == ',') ? json_skipws(json + 1) : json;
 	}
 
 	return 0;
