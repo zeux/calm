@@ -51,17 +51,32 @@ static char* json_key(char* json, char** key) {
 	return json_skipws(json + 1);
 }
 
-static char* json_llong(char* json, long long* res) {
-	char* end;
-	*res = strtoll(json, &end, 10);
-	if (end == json) {
+static char* json_array(char* json, long long* res, int size) {
+	if (*json != '[') {
 		return NULL;
 	}
-	end = json_skipws(end);
-	if (*end != ',' && *end != ']') {
+	json = json_skipws(json + 1);
+
+	for (int i = 0; i < size; ++i) {
+		char* end;
+		res[i] = strtoll(json, &end, 10);
+		if (end == json) {
+			return NULL;
+		}
+		json = json_skipws(end);
+		if (*json == ']') {
+			return json_skipws(json + 1);
+		}
+		if (*json != ',') {
+			return NULL;
+		}
+		json = json_skipws(json + 1);
+	}
+
+	if (*json != ']') {
 		return NULL;
 	}
-	return end;
+	return json_skipws(json + 1);
 }
 
 static int json_dtype(const char* str, enum DType* dtype, int* dsize) {
@@ -105,7 +120,6 @@ static bool validate_shape(int dsize, int shape[4], size_t length) {
 
 	for (int i = 0; i < 4; ++i) {
 		int dim = shape[i] == 0 ? 1 : shape[i];
-
 		if (dim < 0 || dim > max_elements) {
 			return false;
 		}
@@ -145,63 +159,31 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 				return NULL;
 			}
 		} else if (strcmp(key, "shape") == 0) {
-			if (*s != '[') {
+			long long shape[4] = {};
+			s = json_array(s, shape, 4);
+			if (!s) {
 				return NULL;
 			}
-			s = json_skipws(s + 1);
 
 			for (int j = 0; j < 4; ++j) {
-				long long val;
-				s = json_llong(s, &val);
-				if (!s) {
+				if (shape[j] < 0 || shape[j] > INT_MAX) {
 					return NULL;
 				}
-				if (val < 0 || val > INT_MAX) {
-					return NULL;
-				}
-				tensor->shape[j] = (int)val;
-
-				if (*s == ']') {
-					break;
-				}
-				if (*s != ',') {
-					return NULL;
-				}
-				s = json_skipws(s + 1);
+				tensor->shape[j] = (int)shape[j];
 			}
-
-			if (*s != ']') {
-				return NULL;
-			}
-			s = json_skipws(s + 1);
 		} else if (strcmp(key, "data_offsets") == 0) {
-			if (*s != '[') {
-				return NULL;
-			}
-			s = json_skipws(s + 1);
-
-			long long start;
-			s = json_llong(s, &start);
-
-			if (*s != ',') {
-				return NULL;
-			}
-			s = json_skipws(s + 1);
-
-			long long end;
-			s = json_llong(s, &end);
-
-			if (*s != ']') {
-				return NULL;
-			}
-			s = json_skipws(s + 1);
-
-			if (start < 0 || end <= start || end > bytes_size) {
+			long long offsets[2] = {};
+			s = json_array(s, offsets, 2);
+			if (!s) {
 				return NULL;
 			}
 
-			tensor->data = (char*)bytes + start;
-			length = end - start;
+			if (offsets[0] < 0 || offsets[1] <= offsets[0] || offsets[1] > bytes_size) {
+				return NULL;
+			}
+
+			tensor->data = (char*)bytes + offsets[0];
+			length = offsets[1] - offsets[0];
 		} else {
 			return NULL;
 		}
