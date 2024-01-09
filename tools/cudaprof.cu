@@ -24,9 +24,9 @@ struct KernelInfo {
 	const char* name;
 
 	float total_time;
-	float min_time;
-	float peak_bw;
 	int calls;
+	float call_avg;
+	float call_m2;
 };
 
 static KernelInfo kernels[MAX_KERNELS];
@@ -70,9 +70,13 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 
 			float time = (float)(activity->end - activity->start) / 1e6;
 
-			info->calls++;
-			info->min_time = info->calls == 1 ? time : fminf(info->min_time, time);
 			info->total_time += time;
+
+			// Welford's algorithm
+			float delta = time - info->call_avg;
+			info->calls++;
+			info->call_avg += delta / info->calls;
+			info->call_m2 += delta * (time - info->call_avg);
 			break;
 		}
 		default:
@@ -95,8 +99,8 @@ static void atexit_handler(void) {
 
 	if (n_kernels) {
 		printf("\n");
-		printf("%20s%20s%20s%20s%20s%20s\n", "Kernel", "Total Time (%)", "Calls", "Avg Time (us)", "Min Time (us)", "Peak BW (GB/s)");
-		printf("%20s%20s%20s%20s%20s%20s\n", "---", "---", "---", "---", "---", "---");
+		printf("%20s%15s%20s%15s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls");
+		printf("%20s%15s%20s%15s\n", "---", "---", "---", "---");
 
 		float total_time = 0;
 		for (int i = 0; i < n_kernels; i++) {
@@ -109,19 +113,26 @@ static void atexit_handler(void) {
 			const char* name = kernel->name;
 			size_t length = strlen(name);
 
-			if (strncmp(name, "_Z", 2) == 0) {
+			if (strncmp(name, "_Z", 2) == 0 && length >= 2) {
 				name += 2;
 				char* end;
 				length = strtoul(name, &end, 10);
 				name = end;
+				length = length > strlen(name) ? strlen(name) : length;
 			}
 
-			if (strncmp(name, "kernel_", 7) == 0) {
+			if (strncmp(name, "kernel_", 7) == 0 && length >= 7) {
 				name += 7;
 				length -= 7;
 			}
 
-			printf("%20.*s%19.1f%%%20d%20.1f%20.1f%20.2f\n", (int)length, name, kernel->total_time / total_time * 100, kernel->calls, kernel->total_time / kernel->calls * 1e3, kernel->min_time * 1e3, kernel->peak_bw);
+			char avgtime[64];
+			snprintf(avgtime, sizeof(avgtime), "%.2f ± %.2f",
+			         kernel->call_avg * 1e3,
+			         sqrtf(kernel->call_m2 / kernel->calls) * 1e3);
+
+			printf("%20.*s%14.1f%%%21s%15d\n", (int)length, name,
+			       kernel->total_time / total_time * 100, avgtime, kernel->calls);
 		}
 	}
 }
@@ -137,5 +148,4 @@ extern "C" int InitializeInjection(void) {
 }
 
 int main() {
-
 }
