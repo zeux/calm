@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "helpers.cuh"
@@ -17,6 +18,8 @@
 			abort();                                                                                     \
 		}                                                                                                \
 	} while (0)
+
+#define PROF_TOKEN(bytes) ((0xCDAFull << 48) | (bytes))
 
 static cudaStream_t stream, parstream;
 static cudaEvent_t parsync[2];
@@ -186,7 +189,7 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 }
 
 template <typename T>
-__global__ static void kernel_matmul_cls(float* xout, float* x, T* w, float* b, int n, int d) {
+__global__ static void kernel_matmul_cls(uint64_t, float* xout, float* x, T* w, float* b, int n, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
@@ -205,7 +208,7 @@ __global__ static void kernel_matmul_cls(float* xout, float* x, T* w, float* b, 
 }
 
 template <typename T>
-__global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd) {
+__global__ static void kernel_matmul_qkv(uint64_t, float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd) {
 	int i = blockIdx.x;
 	assert(i < d + kvd * 2);
 
@@ -226,7 +229,7 @@ __global__ static void kernel_matmul_qkv(float* qout, float* kout, float* vout, 
 }
 
 template <typename T>
-__global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b, int n, int d) {
+__global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w, float* b, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -243,7 +246,7 @@ __global__ static void kernel_matmul_attn(float* xout, float* x, T* w, float* b,
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn13_silu(float* xout, float* x, T* w1, T* w3, int n, int d) {
+__global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x, T* w1, T* w3, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -261,7 +264,7 @@ __global__ static void kernel_matmul_ffn13_silu(float* xout, float* x, T* w1, T*
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, float* b1, int n, int d) {
+__global__ static void kernel_matmul_ffn1_gelu(uint64_t, float* xout, float* x, T* w1, float* b1, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -278,7 +281,7 @@ __global__ static void kernel_matmul_ffn1_gelu(float* xout, float* x, T* w1, flo
 }
 
 template <typename T>
-__global__ static void kernel_matmul_ffn2(float* xout, float* x, T* w, float* acc, int n, int d) {
+__global__ static void kernel_matmul_ffn2(uint64_t, float* xout, float* x, T* w, float* acc, int n, int d) {
 	int i = blockIdx.x;
 	assert(i < d);
 
@@ -339,7 +342,7 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 	}
 }
 
-__global__ static void kernel_attn_score(float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = blockIdx.x;
 	assert(t < kv_len);
 
@@ -400,7 +403,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 }
 
-__global__ static void kernel_attn_mix(float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int i = blockIdx.x;
 	assert(i < head_size);
 
@@ -486,7 +489,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		}
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(PROF_TOKEN((dim + kv_dim * 2) * dim * sizeof(T)),
+			s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(T));
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
@@ -499,8 +503,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			break;
 		}
 
+		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(kvtype_t);
+
 		// attention scores for all heads
-		kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
+			s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		profiler_trigger("attn_score", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// softmax the scores to get attention weights over [0..kv_len)
@@ -508,21 +515,25 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		profiler_trigger("attn_softmax", 0);
 
 		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
+			s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32, 0, stream>>>(x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * dim * sizeof(T)),
+			x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
 			cudaStream_t mlpstream = prof ? stream : parstream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
-			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(PROF_TOKEN(hidden_dim * dim * sizeof(T)),
+				s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
 
-			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
+			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(PROF_TOKEN(dim * hidden_dim * sizeof(T)),
+				s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 
 			if (!prof) {
@@ -536,10 +547,12 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			profiler_trigger("rmsnorm", 0);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(PROF_TOKEN(2 * hidden_dim * dim * sizeof(T)),
+				s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
 
-			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
+			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * hidden_dim * sizeof(T)),
+				x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
 			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 		}
 	}
@@ -562,7 +575,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	}
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(PROF_TOKEN(p->vocab_size * dim * sizeof(T)),
+		s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
 
 	profiler_endsync();
