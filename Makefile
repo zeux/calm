@@ -23,10 +23,10 @@ ifeq ($(UNAME),Darwin)
   LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
 else
   CFLAGS+=-fopenmp -mf16c -mavx2
-  LDFLAGS=-fopenmp
+  LDFLAGS+=-fopenmp
 endif
 
-ifdef CALM_CUDA
+ifneq ($(UNAME),Darwin)
   CUFLAGS+=-g -O2 -arch compute_80
   LDFLAGS+=-lcudart
 endif
