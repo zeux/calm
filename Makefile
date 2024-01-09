@@ -19,7 +19,6 @@ CUFLAGS+=-g -O2 -arch compute_80
 LDFLAGS+=-lcudart
 
 ifneq (,$(wildcard /usr/local/cuda))
-    CFLAGS+=-I/usr/local/cuda/include
     LDFLAGS+=-L/usr/local/cuda/lib64
 endif
 

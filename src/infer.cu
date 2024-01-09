@@ -1,7 +1,5 @@
 #include "model.h"
 
-#include "profiler.h"
-
 #include <assert.h>
 #include <math.h>
 #include <stdint.h>
@@ -436,8 +434,6 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 
 template <typename T>
 static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
-	int prof = profiler_begin(stream);
-
 	// a few convenience variables
 	struct Config* p = &transformer->config;
 	struct Weights* w = &transformer->weights;
@@ -466,7 +462,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
 	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table + token * dim, dim);
-	profiler_trigger("embed", 0);
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
@@ -475,9 +470,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		if (p->arch == Phi) {
 			// input layernorm
 			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], w->ln_bias[l], dim);
-			profiler_trigger("layernorm", 0);
 
-			if (!prof) {
+			if (parstream) {
 				// wait for layernorm to complete on parstream
 				CUDA_CHECK(cudaEventRecord(parsync[0], stream));
 				CUDA_CHECK(cudaStreamWaitEvent(parstream, parsync[0], 0));
@@ -485,18 +479,15 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		} else {
 			// attention rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim);
-			profiler_trigger("rmsnorm", 0);
 		}
 
 		// qkv matmuls for this position
 		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(PROF_TOKEN((dim + kv_dim * 2) * dim * sizeof(T)),
 			s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
-		profiler_trigger("matmul_qkv", (dim + kv_dim * 2) * dim * sizeof(T));
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
 		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32, 0, stream>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len, p->rotary_dim);
-		profiler_trigger("rope_qkv", 0);
 
 		// only update kv cache and don't output logits
 		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
@@ -508,35 +499,29 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// attention scores for all heads
 		kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
 			s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
-		profiler_trigger("attn_score", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
-		profiler_trigger("attn_softmax", 0);
 
 		// compute weighted sum of the values into xb2
 		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
 			s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
-		profiler_trigger("attn_mix", p->n_kv_heads * kv_len * head_size * sizeof(kvtype_t));
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * dim * sizeof(T)),
 			x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
-		profiler_trigger("matmul_attn", dim * dim * sizeof(T));
 
 		if (p->arch == Phi) {
-			cudaStream_t mlpstream = prof ? stream : parstream;
+			cudaStream_t mlpstream = parstream ? parstream : stream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
 			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(PROF_TOKEN(hidden_dim * dim * sizeof(T)),
 				s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
-			profiler_trigger("matmul_ffn1", hidden_dim * dim * sizeof(T));
 
 			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(PROF_TOKEN(dim * hidden_dim * sizeof(T)),
 				s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
-			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 
-			if (!prof) {
+			if (parstream) {
 				// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
 				CUDA_CHECK(cudaEventRecord(parsync[1], parstream));
 				CUDA_CHECK(cudaStreamWaitEvent(stream, parsync[1], 0));
@@ -544,42 +529,32 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		} else {
 			// ffn rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
-			profiler_trigger("rmsnorm", 0);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(PROF_TOKEN(2 * hidden_dim * dim * sizeof(T)),
 				s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
-			profiler_trigger("matmul_ffn13", 2 * hidden_dim * dim * sizeof(T));
 
 			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * hidden_dim * sizeof(T)),
 				x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
-			profiler_trigger("matmul_ffn2", dim * hidden_dim * sizeof(T));
 		}
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
-		profiler_endsync();
-
 		return NULL;
 	}
 
 	if (p->arch == Phi) {
 		// final layernorm
 		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, w->ln_final_bias, dim);
-		profiler_trigger("layernorm", 0);
 	} else {
 		// final rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim);
-		profiler_trigger("rmsnorm", 0);
 	}
 
 	// classifier into logits
 	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(PROF_TOKEN(p->vocab_size * dim * sizeof(T)),
 		s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
-	profiler_trigger("matmul_cls", p->vocab_size * dim * sizeof(T));
-
-	profiler_endsync();
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 

@@ -11,7 +11,6 @@
 #include <time.h>
 
 #include "model.h"
-#include "profiler.h"
 #include "sampler.h"
 #include "tensors.h"
 #include "tokenizer.h"
@@ -440,7 +439,6 @@ int main(int argc, char* argv[]) {
 	// when using cpu, this makes sure tensors are loaded into memory (via mmap)
 	// when using cuda, this makes sure all kernels are compiled and instantiated
 	transformer.forward(&transformer, 0, 0, 0);
-	profiler_reset();
 
 	// -n 0 means use the full context length
 	if (steps == 0)
@@ -454,8 +452,6 @@ int main(int argc, char* argv[]) {
 			generate(&transformer, &tokenizer, &sampler, prompt, steps);
 		}
 	}
-
-	profiler_dump();
 
 	// memory and file handles cleanup
 	// TODO: free transformer.state and transformer.weights for CUDA
