@@ -74,7 +74,6 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 
 			float time = (float)(activity->end - activity->start) / 1e6;
 			uint64_t token = tokens[activity->correlationId % MAX_TOKENS];
-			// printf("tok kern %llx\n", token);
 
 			info->total_time += time;
 
