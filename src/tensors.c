@@ -296,7 +296,11 @@ int tensors_open(struct Tensors* tensors, const char* filename) {
 		return -1;
 	}
 
+#ifdef __linux__
+	// increases readahead buffer size, resulting in faster cold loads
 	posix_fadvise(fd, 0, size, POSIX_FADV_SEQUENTIAL);
+#endif
+
 	close(fd); // fd can be closed after mmap returns without invalidating the mapping
 
 	if (tensors_parse(tensors, data, size) != 0) {

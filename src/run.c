@@ -417,14 +417,18 @@ int main(int argc, char* argv[]) {
 	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024,
 	       (int)sizeof(kvtype_t) * 8);
 
+#ifdef __linux__
 	char* cpu = getenv("CALM_CPU");
-
-	if (cpu && atoi(cpu)) {
-		prepare(&transformer);
-		transformer.forward = forward;
-	} else {
+	if (!cpu || atoi(cpu) == 0) {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
+	}
+#endif
+
+	// CPU fallback
+	if (!transformer.forward) {
+		prepare(&transformer);
+		transformer.forward = forward;
 	}
 
 	// build the Tokenizer via the tokenizer .bin file

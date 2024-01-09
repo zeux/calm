@@ -1,25 +1,38 @@
 MAKEFLAGS+=-r -j
 
+UNAME=$(shell uname)
+
 NVCC?=nvcc
 
 BUILD=build
 
 SOURCES=$(wildcard src/*.c)
-SOURCES+=$(wildcard src/*.cu)
-OBJECTS=$(SOURCES:%=$(BUILD)/%.o)
 
+ifneq ($(UNAME),Darwin)
+SOURCES+=$(wildcard src/*.cu)
+endif
+
+OBJECTS=$(SOURCES:%=$(BUILD)/%.o)
 BINARY=$(BUILD)/run
 
-CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math -fopenmp
-LDFLAGS=-lm -fopenmp
+CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math
+LDFLAGS=-lm
 
-CFLAGS+=-mf16c -mavx2
+ifeq ($(UNAME),Darwin)
+  CFLAGS+=-Xclang -fopenmp  -I/opt/homebrew/opt/libomp/include
+  LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
+else
+  CFLAGS+=-fopenmp -mf16c -mavx2
+  LDFLAGS=-fopenmp
+endif
 
-CUFLAGS+=-g -O2 -arch compute_80
-LDFLAGS+=-lcudart
+ifdef CALM_CUDA
+  CUFLAGS+=-g -O2 -arch compute_80
+  LDFLAGS+=-lcudart
+endif
 
 ifneq (,$(wildcard /usr/local/cuda))
-    LDFLAGS+=-L/usr/local/cuda/lib64
+  LDFLAGS+=-L/usr/local/cuda/lib64
 endif
 
 all: $(BINARY)
