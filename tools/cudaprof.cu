@@ -17,7 +17,8 @@
 		}                                                            \
 	} while (0)
 
-#define BUFFER_SIZE 8 * 1024 * 1024
+#define BUFFER_SIZE (8 * 1024 * 1024)
+#define MAX_TOKENS (1024 * 1024)
 #define MAX_KERNELS 1024
 
 struct KernelInfo {
@@ -27,7 +28,10 @@ struct KernelInfo {
 	int calls;
 	float call_avg;
 	float call_m2;
+	float peak_bw;
 };
+
+static uint64_t tokens[MAX_TOKENS];
 
 static KernelInfo kernels[MAX_KERNELS];
 static int n_kernels;
@@ -65,10 +69,12 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 		switch (record->kind) {
 		case CUPTI_ACTIVITY_KIND_KERNEL:
 		case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-			CUpti_ActivityKernel8* activity = (CUpti_ActivityKernel8*)record;
+			CUpti_ActivityKernel9* activity = (CUpti_ActivityKernel9*)record;
 			KernelInfo* info = get_kernel(activity->name);
 
 			float time = (float)(activity->end - activity->start) / 1e6;
+			uint64_t token = tokens[activity->correlationId % MAX_TOKENS];
+			// printf("tok kern %llx\n", token);
 
 			info->total_time += time;
 
@@ -77,6 +83,13 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 			info->calls++;
 			info->call_avg += delta / info->calls;
 			info->call_m2 += delta * (time - info->call_avg);
+
+			// update peak bandwidth for kernel calls that specify profiling token as the first argument
+			if ((token >> 48) == 0xCDAF) {
+				uint64_t bytes = token & ((1ull << 48) - 1);
+				float bw = ((double)bytes / 1e9) / (time / 1e3);
+				info->peak_bw = fmaxf(info->peak_bw, bw);
+			}
 			break;
 		}
 		default:
@@ -94,13 +107,36 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 	}
 }
 
+static void CUPTIAPI callback_handler(void* userdata, CUpti_CallbackDomain domain, CUpti_CallbackId cbid, const void* cbdata) {
+	const CUpti_CallbackData* cbinfo = (CUpti_CallbackData*)cbdata;
+
+	switch (domain) {
+	case CUPTI_CB_DOMAIN_RUNTIME_API: {
+		switch (cbid) {
+		case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000: {
+			if (cbinfo->callbackSite == CUPTI_API_ENTER) {
+				cudaLaunchKernel_v7000_params* params = (cudaLaunchKernel_v7000_params*)cbinfo->functionParams;
+				tokens[cbinfo->correlationId % MAX_TOKENS] = *(uint64_t*)*params->args;
+			}
+			break;
+		}
+		default:
+			break;
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
+
 static void atexit_handler(void) {
 	CUPTI_CHECK(cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED));
 
 	if (n_kernels) {
 		printf("\n");
-		printf("%20s%15s%20s%15s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls");
-		printf("%20s%15s%20s%15s\n", "---", "---", "---", "---");
+		printf("%20s%15s%20s%15s%15s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)");
+		printf("%20s%15s%20s%15s%15s\n", "---", "---", "---", "---", "---");
 
 		float total_time = 0;
 		for (int i = 0; i < n_kernels; i++) {
@@ -131,14 +167,18 @@ static void atexit_handler(void) {
 			         kernel->call_avg * 1e3,
 			         sqrtf(kernel->call_m2 / kernel->calls) * 1e3);
 
-			printf("%20.*s%14.1f%%%21s%15d\n", (int)length, name,
-			       kernel->total_time / total_time * 100, avgtime, kernel->calls);
+			printf("%20.*s%14.1f%%%21s%15d%15.1f\n", (int)length, name,
+			       kernel->total_time / total_time * 100, avgtime, kernel->calls, kernel->peak_bw);
 		}
 	}
 }
 
 extern "C" int InitializeInjection(void) {
 	atexit(&atexit_handler);
+
+	CUpti_SubscriberHandle subscriber;
+	CUPTI_CHECK(cuptiSubscribe(&subscriber, callback_handler, NULL));
+	CUPTI_CHECK(cuptiEnableCallback(1, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API, CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000));
 
 	const char* sync = getenv("PROF_SYNC");
 
@@ -151,7 +191,4 @@ extern "C" int InitializeInjection(void) {
 
 	CUPTI_CHECK(cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed));
 	return 1;
-}
-
-int main() {
 }
