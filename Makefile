@@ -31,7 +31,7 @@ format:
 $(BUILD)/fuzz-tensors: src/tensors.c
 	clang $(CFLAGS) -DFUZZING -O1 -fsanitize=address,fuzzer -o $@ $^
 
-$(BUILD)/perftest-cuda: tools/perftest.cu
+$(BUILD)/cudabench: tools/cudabench.cu
 	$(NVCC) $< $(CUFLAGS) -MMD -MP -o $@
 
 $(BINARY): $(OBJECTS)
@@ -46,7 +46,7 @@ $(BUILD)/%.cu.o: %.cu
 	$(NVCC) $< $(CUFLAGS) -c -MMD -MP -o $@
 
 -include $(OBJECTS:.o=.d)
--include $(BUILD)/perftest-cuda.d
+-include $(BUILD)/cudabench.d
 
 clean:
 	rm -rf $(BUILD)
