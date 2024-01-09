@@ -34,6 +34,9 @@ $(BUILD)/fuzz-tensors: src/tensors.c
 $(BUILD)/cudabench: tools/cudabench.cu
 	$(NVCC) $< $(CUFLAGS) -MMD -MP -o $@
 
+$(BUILD)/cudaprof: tools/cudaprof.cu
+	$(NVCC) $< $(CUFLAGS) -Xcompiler -fPIC -shared -lcupti -MMD -MP -o $@
+
 $(BINARY): $(OBJECTS)
 	$(CC) $^ $(LDFLAGS) -o $@
 
@@ -47,6 +50,7 @@ $(BUILD)/%.cu.o: %.cu
 
 -include $(OBJECTS:.o=.d)
 -include $(BUILD)/cudabench.d
+-include $(BUILD)/cudaprof.d
 
 clean:
 	rm -rf $(BUILD)
