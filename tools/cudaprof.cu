@@ -140,8 +140,14 @@ static void atexit_handler(void) {
 extern "C" int InitializeInjection(void) {
 	atexit(&atexit_handler);
 
+	const char* sync = getenv("PROF_SYNC");
+
 	// note: KIND_KERNEL serializes kernel launches; KIND_CONCURRENT_KERNEL does not but it results in less stable timings
-	CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL));
+	if (sync && atoi(sync)) {
+		CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+	} else {
+		CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL));
+	}
 
 	CUPTI_CHECK(cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed));
 	return 1;
