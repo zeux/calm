@@ -51,6 +51,7 @@ static float dotprod_fp16(void* w, int n, int i, float* x) {
 	return _mm_cvtss_f32(accf);
 #else
 	float val = 0.0f;
+#pragma omp simd reduction(+ : val) simdlen(32)
 	for (int j = 0; j < n; j++) {
 		val += r[j] * x[j];
 	}
@@ -78,6 +79,7 @@ static float dotprod_fp8(void* w, int n, int i, float* x) {
 	return _mm_cvtss_f32(accf);
 #else
 	float val = 0.0f;
+#pragma omp simd reduction(+ : val) simdlen(32)
 	for (int j = 0; j < n; j++) {
 		val += fp82half(r[j]) * x[j];
 	}
