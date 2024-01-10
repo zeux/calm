@@ -22,7 +22,7 @@ ifeq ($(UNAME),Darwin)
   CFLAGS+=-Xclang -fopenmp  -I/opt/homebrew/opt/libomp/include
   LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
 else
-  CFLAGS+=-fopenmp -mf16c -mavx2
+  CFLAGS+=-fopenmp -mf16c -mavx2 -mfma
   LDFLAGS+=-fopenmp
 endif
 
