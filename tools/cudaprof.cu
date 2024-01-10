@@ -69,7 +69,7 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 		switch (record->kind) {
 		case CUPTI_ACTIVITY_KIND_KERNEL:
 		case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-			CUpti_ActivityKernel9* activity = (CUpti_ActivityKernel9*)record;
+			CUpti_ActivityKernel5* activity = (CUpti_ActivityKernel5*)record;
 			KernelInfo* info = get_kernel(activity->name);
 
 			float time = (float)(activity->end - activity->start) / 1e6;
