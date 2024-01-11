@@ -526,8 +526,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		}
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(PROF_TOKEN((dim + kv_dim * 2) * dim * sizeof(T)),
-			s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
+		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(
+		    PROF_TOKEN((dim + kv_dim * 2) * dim * sizeof(T)), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
@@ -542,34 +542,34 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (fmha && atoi(fmha)) {
 			// fused attention: compute weighted value sum, where weights are softmax (over sequence) of dot products of q and k
-			kernel_attn_fused<<<dim3(1, p->n_kv_heads), dim3(1, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
-			 	s->xb2, s->att, s->q, s->key_cache + loff, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+			kernel_attn_fused<<<dim3(1, p->n_kv_heads), dim3(1, kv_mul), 0, stream>>>(
+			    PROF_TOKEN(kvbw), s->xb2, s->att, s->q, s->key_cache + loff, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		} else {
 			// attention scores for all heads
-			kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
-				s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+			kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
+			    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 			// softmax the scores to get attention weights over [0..kv_len)
 			kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 			// compute weighted sum of the values into xb2
-			kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
-				s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+			kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
+			    PROF_TOKEN(kvbw), s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		}
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * dim * sizeof(T)),
-			x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		kernel_matmul_attn<<<dim, 32, 0, stream>>>(
+		    PROF_TOKEN(dim * dim * sizeof(T)), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 
 		if (p->arch == Phi) {
 			cudaStream_t mlpstream = parstream ? parstream : stream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
-			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(PROF_TOKEN(hidden_dim * dim * sizeof(T)),
-				s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(
+			    PROF_TOKEN(hidden_dim * dim * sizeof(T)), s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 
-			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(PROF_TOKEN(dim * hidden_dim * sizeof(T)),
-				s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
+			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(
+			    PROF_TOKEN(dim * hidden_dim * sizeof(T)), s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 
 			if (parstream) {
 				// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
@@ -581,11 +581,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(PROF_TOKEN(2 * hidden_dim * dim * sizeof(T)),
-				s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(
+			    PROF_TOKEN(2 * hidden_dim * dim * sizeof(T)), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 
-			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * hidden_dim * sizeof(T)),
-				x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
+			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(
+			    PROF_TOKEN(dim * hidden_dim * sizeof(T)), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
 		}
 	}
 
@@ -603,8 +603,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	}
 
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(PROF_TOKEN(p->vocab_size * dim * sizeof(T)),
-		s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(
+	    PROF_TOKEN(p->vocab_size * dim * sizeof(T)), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
