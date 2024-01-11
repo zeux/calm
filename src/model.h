@@ -86,7 +86,6 @@ struct RunState {
 	float* k;      // key (dim,)
 	float* v;      // value (dim,)
 	float* att;    // buffer for scores/attention values (n_heads, seq_len)
-	float* attlse; // buffer for log-sum-exp of scores/attention values (n_heads, seq_len/32)
 	float* logits; // output logits
 	// kv cache
 	kvtype_t* key_cache;   // (layer, seq_len, dim)
