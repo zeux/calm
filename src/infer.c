@@ -1,6 +1,7 @@
 #include "model.h"
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,26 +166,6 @@ static void layernorm(float* o, float* x, float* weight, float* bias, int size) 
 	}
 }
 
-static void softmax(float* x, int size) {
-	// find max value (for numerical stability)
-	float max_val = x[0];
-	for (int i = 1; i < size; i++) {
-		if (x[i] > max_val) {
-			max_val = x[i];
-		}
-	}
-	// exp and sum
-	float sum = 0.0f;
-	for (int i = 0; i < size; i++) {
-		x[i] = expf(x[i] - max_val);
-		sum += x[i];
-	}
-	// normalize
-	for (int i = 0; i < size; i++) {
-		x[i] /= sum;
-	}
-}
-
 static void matmul(float* xout, float* x, void* w, float* b, int n, int d) {
 	// W (d,n) @ x (n,) -> xout (d,)
 	// by far the most amount of time is spent inside this little function
@@ -211,6 +192,37 @@ static void rope(float* vec, int d, int head_size, int pos, float theta, int rot
 		float v1 = vec[i + 1];
 		vec[i] = v0 * fcr - v1 * fci;
 		vec[i + 1] = v0 * fci + v1 * fcr;
+	}
+}
+
+static void attn(float* xout, float* atth, float* qh, kvtype_t* kh, kvtype_t* vh, int head_size, int kv_dim, int kv_len) {
+	float score_max = -FLT_MAX;
+
+	// calculate attention scores as dot products of q and k; also track score max for this head
+	for (int t = 0; t < kv_len; ++t) {
+		float score = 0.0f;
+		for (int j = 0; j < head_size; ++j) {
+			score += qh[j] * kh[t * kv_dim + j];
+		}
+		score /= sqrtf(head_size);
+		score_max = (score_max < score) ? score : score_max;
+		atth[t] = score;
+	}
+
+	// softmax the scores to get attention weights over [0..kv_len)
+	float score_sum = 0.f;
+	for (int t = 0; t < kv_len; ++t) {
+		atth[t] = expf(atth[t] - score_max);
+		score_sum += atth[t];
+	}
+
+	// mix values with attention weights
+	for (int j = 0; j < head_size; ++j) {
+		float res = 0.f;
+		for (int t = 0; t < kv_len; ++t) {
+			res += (atth[t] / score_sum) * vh[t * kv_dim + j];
+		}
+		xout[j] = res;
 	}
 }
 
@@ -284,42 +296,12 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		int h;
 #pragma omp parallel for private(h)
 		for (h = 0; h < p->n_heads; h++) {
-			// get the query vector for this head
-			float* q = s->q + h * head_size;
-			// attention scores for this head
-			float* att = s->att + h * p->seq_len;
-			// iterate over all timesteps, including the current one
-			for (int t = 0; t < kv_len; t++) {
-				// get the key vector for this head and at this timestep
-				kvtype_t* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-				// calculate the attention score as the dot product of q and k
-				float score = 0.0f;
-				for (int i = 0; i < head_size; i++) {
-					score += q[i] * k[i];
-				}
-				score /= sqrtf(head_size);
-				// save the score to the attention buffer
-				att[t] = score;
-			}
+			float* qh = s->q + h * head_size;
+			float* atth = s->att + h * p->seq_len;
+			kvtype_t* kh = s->key_cache + loff + (h / kv_mul) * head_size;
+			kvtype_t* vh = s->value_cache + loff + (h / kv_mul) * head_size;
 
-			// softmax the scores to get attention weights over [0..kv_len)
-			softmax(att, kv_len);
-
-			// weighted sum of the values, store back into xb2
-			float* xb2 = s->xb2 + h * head_size;
-			for (int i = 0; i < head_size; i++) {
-				xb2[i] = 0.0f;
-			}
-			for (int t = 0; t < kv_len; t++) {
-				// get the value vector for this head and at this timestep
-				kvtype_t* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-				// get the attention weight for this timestep
-				float a = att[t];
-				// accumulate the weighted value into xb
-				for (int i = 0; i < head_size; i++) {
-					xb2[i] += a * v[i];
-				}
-			}
+			attn(s->xb2 + h * head_size, atth, qh, kh, vh, head_size, kv_dim, kv_len);
 		}
 
 		// final matmul to get the output of the attention
