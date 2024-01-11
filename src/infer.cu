@@ -108,6 +108,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->v = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
+	state->attlse = (float*)cuda_devicealloc(config->n_heads * (config->seq_len / 32) * sizeof(float));
 
 	state->key_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
 	state->value_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
@@ -344,11 +345,12 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 	}
 }
 
-__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
-	int t = blockIdx.x * blockDim.x + threadIdx.x;
-	if (t >= kv_len) {
+__global__ static void kernel_attn_score(uint64_t, float* attb, float* attlse, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+	if (blockIdx.x * blockDim.x >= kv_len) {
 		return;
 	}
+
+	int t = blockIdx.x * blockDim.x + threadIdx.x;
 
 	int kvh = blockIdx.y;
 	assert(kvh < n_kv_heads);
@@ -360,51 +362,32 @@ __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtyp
 	float* atth = attb + h * seq_len;
 
 	float score = 0.0f;
-	for (int j = 0; j < head_size; j += 2) {
-		float2 kk = __half22float2(*((half2*)&kh[j * seq_len + t * 2]));
-		float2 qq = *(float2*)&qh[j];
-		score += kk.x * qq.x;
-		score += kk.y * qq.y;
+
+	if (t < kv_len) {
+		for (int j = 0; j < head_size; j += 2) {
+			float2 kk = __half22float2(*((half2*)&kh[j * seq_len + t * 2]));
+			float2 qq = *(float2*)&qh[j];
+			score += kk.x * qq.x;
+			score += kk.y * qq.y;
+		}
+
+		score /= sqrtf(head_size);
+	} else {
+		score = -FLT_MAX;
 	}
 
-	score /= sqrtf(head_size);
+	float score_max = warpreduce_max(score);
+	float score_exp = expf(score - score_max);
+	float score_sum = warpreduce_sum(score_exp);
 
-	atth[t] = score;
-}
+	atth[t] = score_exp / score_sum;
 
-__global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int kv_len) {
-	int i = threadIdx.x;
-
-	int h = blockIdx.x;
-	assert(h < n_heads);
-
-	float* att = attb + h * seq_len;
-
-	// find max value per thread (for numerical stability)
-	float max_val = -FLT_MAX;
-	for (int j = i; j < kv_len; j += blockDim.x) {
-		max_val = max(max_val, att[j]);
-	}
-
-	// max across threads in block
-	max_val = blockreduce_max(max_val);
-
-	// exp and sum per thread
-	float sum = 0.0f;
-	for (int j = i; j < kv_len; j += blockDim.x) {
-		sum += expf(att[j] - max_val);
-	}
-
-	// sum across threads in block
-	sum = blockreduce_sum(sum);
-
-	// output normalized values
-	for (int j = i; j < kv_len; j += blockDim.x) {
-		att[j] = expf(att[j] - max_val) / sum;
+	if (threadIdx.x == 0) {
+		attlse[h * (seq_len / 32) + t / 32] = score_max + logf(score_sum);
 	}
 }
 
-__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, float* attlse, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int i = blockIdx.x;
 	assert(i < head_size);
 
@@ -413,19 +396,50 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 
 	int h = kvh * kv_mul + threadIdx.y;
 
-	float* att = attb + h * seq_len;
-	kvtype_t* val = valb + (kvh * head_size + i) * seq_len;
+	float* atth = attb + h * seq_len;
+	kvtype_t* vh = valb + kvh * head_size * seq_len;
+
+	kvtype_t* val = vh + i * seq_len;
 
 	float res = 0.0f;
+
+	float* attlseh = attlse + h * (seq_len / 32);
+
+	extern __shared__ float attlses[];
+	float* attlsehs = attlses + threadIdx.y * (seq_len / 32);
+
+	float lse_max = -FLT_MAX;
+	for (int tg = threadIdx.x; tg < (kv_len + 31) / 32; tg += warpSize) {
+		float lse = attlseh[tg];
+		lse_max = fmaxf(lse_max, lse);
+		attlsehs[tg] = lse;
+	}
+	lse_max = warpreduce_max(lse_max);
+
+	float lse_sum = 0.f;
+	for (int tg = threadIdx.x; tg < (kv_len + 31) / 32; tg += warpSize) {
+		float lse = attlsehs[tg];
+		float lsee = expf(lse - lse_max);
+		attlsehs[tg] = lsee;
+		lse_sum += lsee;
+	}
+	lse_sum = warpreduce_sum(lse_sum);
+
+	__syncthreads();
+
+	float lse_scale = 1 / lse_sum;
+
 	for (int t = threadIdx.x * 2; t < kv_len - 1; t += warpSize * 2) {
 		float2 vv = __half22float2(*((half2*)&val[t]));
-		float2 aa = *(float2*)&att[t];
-		res += vv.x * aa.x;
-		res += vv.y * aa.y;
+		float2 aa = *(float2*)&atth[t];
+		float as = attlsehs[t / 32] * lse_scale;
+		res += vv.x * (aa.x * as);
+		res += vv.y * (aa.y * as);
 	}
 
 	if (kv_len % 2 == 1 && threadIdx.x == 0) {
-		res += att[kv_len - 1] * float(val[kv_len - 1]);
+		float as = attlsehs[(kv_len - 1) / 32] * lse_scale;
+		res += float(val[kv_len - 1]) * (atth[kv_len - 1] * as);
 	}
 
 	res = warpreduce_sum(res);
@@ -456,11 +470,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 	assert(p->vocab_size % 32 == 0);
+	assert(p->seq_len % 32 == 0);
 
 	// rmsnorm and softmax require a larger-than-warp block size for efficiency
 	const int layernorm_size = 1024;
 	const int rmsnorm_size = 1024;
-	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
@@ -499,16 +513,15 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(kvtype_t);
 
+		float* attlse = s->attlse;
+
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((kv_len + 31) / 32, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
-
-		// softmax the scores to get attention weights over [0..kv_len)
-		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
+		    PROF_TOKEN(kvbw), s->att, attlse, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), kv_mul * (p->seq_len / 32) * sizeof(float), stream>>>(
+		    PROF_TOKEN(kvbw), s->xb2, s->att, attlse, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32, 0, stream>>>(
