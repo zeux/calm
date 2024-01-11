@@ -319,54 +319,57 @@ __global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* k
 		float v1 = v[j + 1];
 
 		// update kvcache key/value
-		kb[kv_pos * kvd + j] = rk0;
-		kb[kv_pos * kvd + j + 1] = rk1;
-
+		// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
 		// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
-		vb[kv_pos + seq_len * j] = v0;
+		kb[kv_pos * 2 + 0 + seq_len * j] = rk0;
+		kb[kv_pos * 2 + 1 + seq_len * j] = rk1;
+		vb[kv_pos + seq_len * (j + 0)] = v0;
 		vb[kv_pos + seq_len * (j + 1)] = v1;
 	} else {
 		// rotate sink tokens forward to keep pace with non-sink tokens
-		float k0 = kb[j];
-		float k1 = kb[j + 1];
+		// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
+		int t = j / kvd;
+		int o = t * 2 + seq_len * (j % kvd);
+
+		float k0 = kb[o];
+		float k1 = kb[o + 1];
 
 		sincosf(freq, &fci, &fcr);
 
 		float rk0 = k0 * fcr - k1 * fci;
 		float rk1 = k0 * fci + k1 * fcr;
 
-		kb[j] = rk0;
-		kb[j + 1] = rk1;
+		kb[o] = rk0;
+		kb[o + 1] = rk1;
 	}
 }
 
 __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
-	int t = blockIdx.x;
-	assert(t < kv_len);
+	int t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= kv_len) {
+		return;
+	}
 
 	int kvh = blockIdx.y;
 	assert(kvh < n_kv_heads);
 
 	int h = kvh * kv_mul + threadIdx.y;
 
-	float* q = qb + h * head_size;
-	kvtype_t* k = kb + t * kv_dim + kvh * head_size;
-	float* att = attb + h * seq_len;
+	float* qh = qb + h * head_size;
+	kvtype_t* kh = kb + kvh * head_size * seq_len;
+	float* atth = attb + h * seq_len;
 
 	float score = 0.0f;
-	for (int j = threadIdx.x * 2; j < head_size; j += warpSize * 2) {
-		float2 kk = __half22float2(*((half2*)&k[j]));
-		float2 qq = *(float2*)&q[j];
+	for (int j = 0; j < head_size; j += 2) {
+		float2 kk = __half22float2(*((half2*)&kh[j * seq_len + t * 2]));
+		float2 qq = *(float2*)&qh[j];
 		score += kk.x * qq.x;
 		score += kk.y * qq.y;
 	}
 
-	score = warpreduce_sum(score);
 	score /= sqrtf(head_size);
 
-	if (threadIdx.x == 0) {
-		att[t] = score;
-	}
+	atth[t] = score;
 }
 
 __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int kv_len) {
@@ -439,7 +442,7 @@ __global__ static void kernel_attn_fused(uint64_t, float* xout, float* attb, flo
 	int h = kvh * kv_mul + threadIdx.y;
 
 	float* qh = qb + h * head_size;
-	kvtype_t* kh = kb + kvh * head_size;
+	kvtype_t* kh = kb + kvh * head_size * seq_len;
 	kvtype_t* vh = vb + kvh * head_size * seq_len;
 	float* atth = attb + h * seq_len;
 
@@ -447,8 +450,9 @@ __global__ static void kernel_attn_fused(uint64_t, float* xout, float* attb, flo
 
 	for (int t = 0; t < kv_len; ++t) {
 		float score = 0.0f;
-		for (int j = 0; j < head_size; ++j) {
-			score += qh[j] * float(kh[t * kv_dim + j]);
+		for (int j = 0; j < head_size; j += 2) {
+			score += qh[j + 0] * float(kh[j * seq_len + t * 2 + 0]);
+			score += qh[j + 1] * float(kh[j * seq_len + t * 2 + 1]);
 		}
 		score /= sqrtf(head_size);
 		score_max = max(score_max, score);
@@ -546,7 +550,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			    PROF_TOKEN(kvbw), s->xb2, s->att, s->q, s->key_cache + loff, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 		} else {
 			// attention scores for all heads
-			kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
+			kernel_attn_score<<<dim3((kv_len + 31) / 32, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
 			    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 			// softmax the scores to get attention weights over [0..kv_len)
