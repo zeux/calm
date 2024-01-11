@@ -61,9 +61,18 @@ KV cache is using `fp16`.
 
 ## Performance
 
-As of December 2023, with Mistral 7B model and `fp16` weights, `calm` reaches ~63.5 tok/s (921 GB/s) on short sequences and ~60 tok/s (904 GB/s) at the end of the 4096 token context, when using NVidia GeForce RTX 4090. When using `fp8` weights on the same hardware and model, the performance is ~119 tok/s (863 GB/s) on short sequences and ~108 tok/s (840 GB/s) at the end of the context.
+Auto-regressive prediction for a single sequence needs to read the entire model and the entire KV cache (until current token) for every token. As such, given an optimal implementation we'd expect the process to be bandwidth bound. Note that the cost of token generation at the beginning of the sequence should be smaller than the cost at the end of the sequence due to the need to read data from KV cache.
 
-As of early January 2023, with Phi2 2.7B model and `fp16` weights, `calm` reaches ~166 tok/s (927 GB/s) on short sequences and ~131 tok/s (815 GB/s) at the end of the 2048 token context, when using NVidia GeForce RTX 4090. When using `fp8` weights on the same hardware and model, the performance is ~301 tok/s (851 GB/s) on short sequences and ~207 tok/s (710 GB/s) at the end of the context.
+When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16` and `fp8` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts and 4000 for 4096 contexts):
+
+| Model (context)     | Performance (first 32 tokens) | Performance (last 32 tokens)
+| ----------- | ----------- | ----------- |
+| Llama2 7B (4096), fp16 | 66 tok/s (895 GB/s) | 58 tok/s (905 GB/s) |
+| Llama2 7B (4096), fp8 | 123 tok/s (833 GB/s) | 97 tok/s (860 GB/s) |
+| Mistral 7B (4096), fp16 | 62 tok/s (905 GB/s) | 60 tok/s (902 GB/s) |
+| Mistral 7B (4096), fp8 | 117 tok/s (850 GB/s) | 109 tok/s (848 GB/s) |
+| Phi 2.7B (2048), fp16 | 165 tok/s (922 GB/s) | 147 tok/s (917 GB/s) |
+| Phi 2.7B (2048), fp8 | 307 tok/s (856 GB/s) | 250 tok/s (866 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
