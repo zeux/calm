@@ -117,11 +117,11 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 }
 
 template <typename T>
-__global__ static void kernel_embed(float* o, T* weight, int size) {
+__global__ static void kernel_embed(float* o, T* weight, int token, int n) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(i < size);
+	assert(i < n);
 
-	o[i] = float(weight[i]);
+	o[i] = float(weight[token * n + i]);
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
@@ -464,7 +464,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table + token * dim, dim);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
