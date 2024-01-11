@@ -173,7 +173,7 @@ size_t kvcache_bandwidth(struct Config* config, int pos) {
 // ----------------------------------------------------------------------------
 // generation loop
 
-void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* prompt, int steps) {
+void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* prompt, int steps, int pos_offset) {
 	char* empty_prompt = "";
 	if (prompt == NULL) {
 		prompt = empty_prompt;
@@ -194,10 +194,6 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 		}
 		printf("\n");
 	}
-
-	// hack for profiling: offset pos to make sure we need to use most of kv cache
-	char* pos_offset_env = getenv("CALM_POSO");
-	int pos_offset = pos_offset_env ? atoi(pos_offset_env) : 0;
 
 	// start the main loop
 	size_t read_bytes = 0;
@@ -439,10 +435,14 @@ int main(int argc, char* argv[]) {
 	struct Sampler sampler;
 	sampler_init(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
 
+	// hack for profiling: offset pos to make sure we need to use most of kv cache
+	char* pos_offset_env = getenv("CALM_POSO");
+	int pos_offset = pos_offset_env ? atoi(pos_offset_env) : 0;
+
 	// do one inference as warmup
 	// when using cpu, this makes sure tensors are loaded into memory (via mmap)
 	// when using cuda, this makes sure all kernels are compiled and instantiated
-	transformer.forward(&transformer, 0, 0, 0);
+	transformer.forward(&transformer, 0, pos_offset, 0);
 
 	// -n 0 means use the full context length
 	if (steps == 0)
@@ -453,7 +453,7 @@ int main(int argc, char* argv[]) {
 		study(&transformer, &tokenizer, perplexity, steps);
 	} else {
 		for (int s = 0; s < sequences; ++s) {
-			generate(&transformer, &tokenizer, &sampler, prompt, steps);
+			generate(&transformer, &tokenizer, &sampler, prompt, steps, pos_offset);
 		}
 	}
 
