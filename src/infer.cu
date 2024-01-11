@@ -432,6 +432,50 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 	}
 }
 
+__global__ static void kernel_attn_fused(uint64_t, float* xout, float* attb, float* qb, kvtype_t* kb, kvtype_t* vb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+	int kvh = blockIdx.y;
+	assert(kvh < n_kv_heads);
+
+	int h = kvh * kv_mul + threadIdx.y;
+
+	float* qh = qb + h * head_size;
+	kvtype_t* kh = kb + kvh * head_size;
+	kvtype_t* vh = vb + kvh * head_size * seq_len;
+	float* atth = attb + h * seq_len;
+
+	float score_max = -FLT_MAX;
+
+	for (int t = 0; t < kv_len; ++t) {
+		float score = 0.0f;
+		for (int j = 0; j < head_size; ++j) {
+			score += qh[j] * float(kh[t * kv_dim + j]);
+		}
+		score /= sqrtf(head_size);
+		score_max = max(score_max, score);
+		atth[t] = score;
+	}
+
+	float score_sum = 0.f;
+
+	for (int t = 0; t < kv_len; ++t) {
+		score_sum += expf(atth[t] - score_max);
+	}
+
+	for (int t = 0; t < kv_len; ++t) {
+		atth[t] = expf(atth[t] - score_max) / score_sum;
+	}
+
+	for (int j = 0; j < head_size; ++j) {
+		float res = 0.f;
+		for (int t = 0; t < kv_len; ++t) {
+			res += atth[t] * float(vh[j * seq_len + t]);
+		}
+		xout[h * head_size + j] = res;
+	}
+}
+
+static char* fmha = getenv("CALM_FMHA");
+
 template <typename T>
 static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	// a few convenience variables
@@ -496,16 +540,22 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(kvtype_t);
 
-		// attention scores for all heads
-		kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
-			s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		if (fmha && atoi(fmha)) {
+			// fused attention: compute weighted value sum, where weights are softmax (over sequence) of dot products of q and k
+			kernel_attn_fused<<<dim3(1, p->n_kv_heads), dim3(1, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
+			 	s->xb2, s->att, s->q, s->key_cache + loff, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		} else {
+			// attention scores for all heads
+			kernel_attn_score<<<dim3(kv_len, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
+				s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
-		// softmax the scores to get attention weights over [0..kv_len)
-		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
+			// softmax the scores to get attention weights over [0..kv_len)
+			kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
-		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
-			s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+			// compute weighted sum of the values into xb2
+			kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(PROF_TOKEN(kvbw),
+				s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		}
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32, 0, stream>>>(PROF_TOKEN(dim * dim * sizeof(T)),
