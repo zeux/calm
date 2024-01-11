@@ -417,7 +417,7 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 	kvtype_t* val = valb + (kvh * head_size + i) * seq_len;
 
 	float res = 0.0f;
-	for (int t = threadIdx.x * 2; t + 1 < kv_len; t += warpSize * 2) {
+	for (int t = threadIdx.x * 2; t < kv_len - 1; t += warpSize * 2) {
 		float2 vv = __half22float2(*((half2*)&val[t]));
 		float2 aa = *(float2*)&att[t];
 		res += vv.x * aa.x;
