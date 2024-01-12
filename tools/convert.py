@@ -16,7 +16,7 @@ argp.add_argument("input", type=str, nargs="?")
 argp.add_argument("--config", type=str)
 argp.add_argument("--tokenizer", type=str)
 argp.add_argument("--models", type=str, nargs="+")
-argp.add_argument("--dtype", type=str, default="fp16", choices=["fp16", "fp8"])
+argp.add_argument("--dtype", type=str, default="fp8", choices=["fp16", "fp8"])
 args = argp.parse_args()
 
 if args.input is not None:
