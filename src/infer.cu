@@ -378,12 +378,12 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	int h = blockIdx.x;
 	assert(h < n_heads);
 
-	float* att = attb + h * seq_len;
+	float* atth = attb + h * seq_len;
 
 	// find max value per thread (for numerical stability)
 	float max_val = -FLT_MAX;
 	for (int j = i; j < kv_len; j += blockDim.x) {
-		max_val = max(max_val, att[j]);
+		max_val = max(max_val, atth[j]);
 	}
 
 	// max across threads in block
@@ -392,7 +392,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	// exp and sum per thread
 	float sum = 0.0f;
 	for (int j = i; j < kv_len; j += blockDim.x) {
-		sum += expf(att[j] - max_val);
+		sum += expf(atth[j] - max_val);
 	}
 
 	// sum across threads in block
@@ -400,7 +400,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 
 	// output normalized values
 	for (int j = i; j < kv_len; j += blockDim.x) {
-		att[j] = expf(att[j] - max_val) / sum;
+		atth[j] = expf(atth[j] - max_val) / sum;
 	}
 }
 
@@ -413,19 +413,20 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 
 	int h = kvh * kv_mul + threadIdx.y;
 
-	float* att = attb + h * seq_len;
-	kvtype_t* val = valb + (kvh * head_size + i) * seq_len;
+	float* atth = attb + h * seq_len;
+	kvtype_t* vh = valb + kvh * head_size * seq_len;
+	kvtype_t* val = vh + i * seq_len;
 
 	float res = 0.0f;
 	for (int t = threadIdx.x * 2; t < kv_len - 1; t += warpSize * 2) {
 		float2 vv = __half22float2(*((half2*)&val[t]));
-		float2 aa = *(float2*)&att[t];
+		float2 aa = *(float2*)&atth[t];
 		res += vv.x * aa.x;
 		res += vv.y * aa.y;
 	}
 
 	if (kv_len % 2 == 1 && threadIdx.x == 0) {
-		res += att[kv_len - 1] * float(val[kv_len - 1]);
+		res += atth[kv_len - 1] * float(val[kv_len - 1]);
 	}
 
 	res = warpreduce_sum(res);
