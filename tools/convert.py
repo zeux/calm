@@ -100,7 +100,7 @@ elif arch == "phi":
     metadata["max_seq_len"] = config["max_position_embeddings"]
     metadata["bos_token_id"] = -1
     metadata["eos_token_id"] = config["eos_token_id"] or 50256 # todo: read from tokenizer_config
-    metadata["rope_theta"] = 10000.0 # hardcoded in model
+    metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = int(config["hidden_size"] / config["num_attention_heads"] * config["partial_rotary_factor"])
 
 # load tokenizer model
