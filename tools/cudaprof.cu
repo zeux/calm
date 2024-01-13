@@ -158,7 +158,7 @@ static void atexit_handler(void) {
 
 	if (n_kernels) {
 		printf("\n");
-		printf("%20s%15s%20s%15s%15s%25s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)", "Utilization");
+		printf("%20s%15s%20s%15s%15s%25s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)", "Utilization (limit)");
 		printf("%20s%15s%20s%15s%15s%25s\n", "---", "---", "---", "---", "---", "---");
 
 		float total_time = 0;
