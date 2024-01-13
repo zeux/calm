@@ -29,7 +29,11 @@ struct KernelInfo {
 	float call_avg;
 	float call_m2;
 	float peak_bw;
+	float peak_util;
+	float peak_occ;
 };
+
+static CUpti_ActivityDevice3 device;
 
 static uint64_t tokens[MAX_TOKENS];
 
@@ -67,6 +71,11 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 		CUPTI_CHECK(status);
 
 		switch (record->kind) {
+		case CUPTI_ACTIVITY_KIND_DEVICE: {
+			device = *(CUpti_ActivityDevice3*)record;
+			break;
+		}
+
 		case CUPTI_ACTIVITY_KIND_KERNEL:
 		case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
 			CUpti_ActivityKernel5* activity = (CUpti_ActivityKernel5*)record;
@@ -89,6 +98,21 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 				float bw = ((double)bytes / 1e9) / (time / 1e3);
 				info->peak_bw = fmaxf(info->peak_bw, bw);
 			}
+
+			int blocks = activity->gridX * activity->gridY * activity->gridZ;
+			int blocks_rounded = (blocks + device.numMultiprocessors - 1) / device.numMultiprocessors * device.numMultiprocessors;
+			info->peak_util = fmaxf(info->peak_util, (float)blocks / blocks_rounded);
+
+			int block_size = activity->blockX * activity->blockY * activity->blockZ;
+			int block_size_warps = (block_size + device.numThreadsPerWarp - 1) / device.numThreadsPerWarp;
+
+			int occ_limit_blocks = device.maxBlocksPerMultiprocessor;
+			int occ_limit_warps = device.maxWarpsPerMultiprocessor / block_size_warps;
+			int occ_limit_smem = (activity->sharedMemoryExecuted) / (activity->staticSharedMemory + activity->dynamicSharedMemory + 1024);
+			int occ_limit_regs = device.maxRegistersPerMultiprocessor / (((activity->registersPerThread * device.numThreadsPerWarp + 255) & ~255) * block_size_warps);
+			int occ_limit = min(occ_limit_blocks, min(occ_limit_warps, min(occ_limit_smem, occ_limit_regs)));
+
+			info->peak_occ = fmaxf(info->peak_occ, (float)occ_limit * block_size_warps);
 			break;
 		}
 		default:
@@ -134,8 +158,8 @@ static void atexit_handler(void) {
 
 	if (n_kernels) {
 		printf("\n");
-		printf("%20s%15s%20s%15s%15s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)");
-		printf("%20s%15s%20s%15s%15s\n", "---", "---", "---", "---", "---");
+		printf("%20s%15s%20s%15s%15s%25s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)", "Utilization");
+		printf("%20s%15s%20s%15s%15s%25s\n", "---", "---", "---", "---", "---", "---");
 
 		float total_time = 0;
 		for (int i = 0; i < n_kernels; i++) {
@@ -166,8 +190,11 @@ static void atexit_handler(void) {
 			         kernel->call_avg * 1e3,
 			         sqrtf(kernel->call_m2 / kernel->calls) * 1e3);
 
-			printf("%20.*s%14.1f%%%21s%15d%15.1f\n", (int)length, name,
-			       kernel->total_time / total_time * 100, avgtime, kernel->calls, kernel->peak_bw);
+			char util[64];
+			snprintf(util, sizeof(util), "%.0f%% SMs, %.0f wrp/SM", kernel->peak_util * 100, kernel->peak_occ);
+
+			printf("%20.*s%14.1f%%%21s%15d%15.1f%25s\n", (int)length, name,
+			       kernel->total_time / total_time * 100, avgtime, kernel->calls, kernel->peak_bw, util);
 		}
 	}
 }
@@ -187,6 +214,8 @@ extern "C" int InitializeInjection(void) {
 	} else {
 		CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL));
 	}
+
+	CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_DEVICE));
 
 	CUPTI_CHECK(cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed));
 	return 1;
