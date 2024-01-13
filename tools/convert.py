@@ -87,21 +87,21 @@ elif arch == "qwen":
     metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
 elif arch == "phi":
     # hardcoded in C
-    assert config["activation_function"] == "gelu_new"
-    assert config["layer_norm_epsilon"] == 1e-5
+    assert config["hidden_act"] == "gelu_new"
+    assert config["layer_norm_eps"] == 1e-5
 
     # customizable
-    metadata["dim"] = config["n_embd"]
-    metadata["hidden_dim"] = config["n_inner"] or config["n_embd"] * 4
-    metadata["n_layers"] = config["n_layer"]
-    metadata["n_heads"] = config["n_head"]
-    metadata["n_kv_heads"] = config["n_head_kv"] or config["n_head"]
+    metadata["dim"] = config["hidden_size"]
+    metadata["hidden_dim"] = config["intermediate_size"]
+    metadata["n_layers"] = config["num_hidden_layers"]
+    metadata["n_heads"] = config["num_attention_heads"]
+    metadata["n_kv_heads"] = config["num_key_value_heads"] or config["num_attention_heads"]
     metadata["vocab_size"] = config["vocab_size"]
-    metadata["max_seq_len"] = config["n_positions"]
+    metadata["max_seq_len"] = config["max_position_embeddings"]
     metadata["bos_token_id"] = -1
-    metadata["eos_token_id"] = 50256 # todo: read from tokenizer_config
+    metadata["eos_token_id"] = config["eos_token_id"] or 50256 # todo: read from tokenizer_config
     metadata["rope_theta"] = 10000.0 # hardcoded in model
-    metadata["rotary_dim"] = config["rotary_dim"]
+    metadata["rotary_dim"] = int(config["hidden_size"] / config["num_attention_heads"] * config["partial_rotary_factor"])
 
 # load tokenizer model
 tokens = [""] * config["vocab_size"]
@@ -250,38 +250,34 @@ elif arch == "qwen":
     tensors["model.norm.weight"] = weights["transformer.ln_f.weight"].float()
     tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "phi":
-    tensors["model.embed.weight"] = conv(weights["transformer.embd.wte.weight"])
+    tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
-    for l in range(config["n_layer"]):
-        tensors[f"model.layers.{l}.norm.weight"] = weights[f"transformer.h.{l}.ln.weight"].float()
-        tensors[f"model.layers.{l}.norm.bias"] = weights[f"transformer.h.{l}.ln.bias"].float()
+    for l in range(config["num_hidden_layers"]):
+        tensors[f"model.layers.{l}.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
+        tensors[f"model.layers.{l}.norm.bias"] = weights[f"model.layers.{l}.input_layernorm.bias"].float()
 
-        dim = config["n_embd"]
-        rotary_dim = config["rotary_dim"]
+        dim = config["hidden_size"]
+        rotary_dim = metadata["rotary_dim"]
 
-        wkv_w = weights[f"transformer.h.{l}.mixer.Wqkv.weight"]
-        wkv_b = weights[f"transformer.h.{l}.mixer.Wqkv.bias"]
-        assert wkv_w.shape[0] == 3 * dim and wkv_b.shape[0] == 3 * dim
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"], rotary_dim))
+        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], config["num_attention_heads"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_attention_heads"], rotary_dim))
+        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_attention_heads"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
+        tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
 
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["n_head"], rotary_dim))
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["n_head"], rotary_dim).float()
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["n_head"], rotary_dim))
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["n_head"], rotary_dim).float()
-        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wkv_w[dim*2:])
-        tensors[f"model.layers.{l}.attn.wv.bias"] = wkv_b[dim*2:].float()
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.dense.weight"])
+        tensors[f"model.layers.{l}.attn.wo.bias"] = weights[f"model.layers.{l}.self_attn.dense.bias"].float()
 
-        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"transformer.h.{l}.mixer.out_proj.weight"])
-        tensors[f"model.layers.{l}.attn.wo.bias"] = weights[f"transformer.h.{l}.mixer.out_proj.bias"].float()
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.fc1.weight"])
+        tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"model.layers.{l}.mlp.fc1.bias"].float()
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.fc2.weight"])
+        tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"model.layers.{l}.mlp.fc2.bias"].float()
 
-        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"transformer.h.{l}.mlp.fc1.weight"])
-        tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"transformer.h.{l}.mlp.fc1.bias"].float()
-        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"transformer.h.{l}.mlp.fc2.weight"])
-        tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"transformer.h.{l}.mlp.fc2.bias"].float()
-
-    tensors["model.norm.weight"] = weights["lm_head.ln.weight"].float()
-    tensors["model.norm.bias"] = weights["lm_head.ln.bias"].float()
-    tensors["model.output.weight"] = conv(weights["lm_head.linear.weight"])
-    tensors["model.output.bias"] = weights["lm_head.linear.bias"].float()
+    tensors["model.norm.weight"] = weights["model.final_layernorm.weight"].float()
+    tensors["model.norm.bias"] = weights["model.final_layernorm.bias"].float()
+    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+    tensors["model.output.bias"] = weights["lm_head.bias"].float()
 
 # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
 # note: we concatenate all bytes of all tokens into a single tensor
