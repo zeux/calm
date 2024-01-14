@@ -17,6 +17,6 @@ struct Sampler {
 void sampler_init(struct Sampler* sampler, int vocab_size, float temperature, float minp, unsigned long long rng_seed);
 void sampler_free(struct Sampler* sampler);
 
-void sample_softmax(float* x, int size);
+float sample_softmax(float* x, int size, float scale);
 
 int sample(struct Sampler* sampler, float* logits);

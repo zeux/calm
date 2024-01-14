@@ -291,7 +291,7 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 		int pos = steps <= 0 ? i : i % steps;
 		float* logits = transformer->forward(transformer, tokens[i], pos, 0);
 
-		sample_softmax(logits, vocab_size);
+		sample_softmax(logits, vocab_size, 1.0f);
 
 		float prob = logits[tokens[i + 1]];
 
