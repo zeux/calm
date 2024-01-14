@@ -383,10 +383,6 @@ int main(int argc, char* argv[]) {
 	// parameter validation/overrides
 	if (rng_seed <= 0)
 		rng_seed = (unsigned int)time(NULL);
-	if (temperature < 0.0)
-		temperature = 0.0;
-	if (topp < 0.0 || 1.0 < topp)
-		topp = 0.9;
 
 	if (prompt && strcmp(prompt, "-") == 0) {
 		static char input[32768];
