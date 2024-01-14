@@ -55,23 +55,23 @@ static int sample_cutoff(float* probabilities, int n, float cutoff, struct ProbI
 	float cumulative_prob = 0.0f;
 	for (int i = 0; i < n; i++) {
 		if (probabilities[i] >= cutoff) {
-			probindex[n0].index = i;
-			probindex[n0].prob = probabilities[i];
 			cumulative_prob += probabilities[i];
-			n0++;
+			n0 = i; // for fallback due to rounding errors
+		} else {
+			probabilities[i] = 0.0f;
 		}
 	}
 
 	// sample from the truncated list
 	float r = coin * cumulative_prob;
 	float cdf = 0.0f;
-	for (int i = 0; i < n0; i++) {
-		cdf += probindex[i].prob;
+	for (int i = 0; i < n; i++) {
+		cdf += probabilities[i];
 		if (r < cdf) {
-			return probindex[i].index;
+			return i;
 		}
 	}
-	return probindex[n0 - 1].index; // in case of rounding errors
+	return n0; // in case of rounding errors
 }
 
 void sampler_init(struct Sampler* sampler, int vocab_size, float temperature, float minp, unsigned long long rng_seed) {
