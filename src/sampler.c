@@ -51,12 +51,12 @@ static int sample_argmax(float* probabilities, int n) {
 }
 
 static int sample_cutoff(float* probabilities, int n, float cutoff, float coin) {
-	int n0 = 0;
+	int fallback = 0;
 	float cumulative_prob = 0.0f;
 	for (int i = 0; i < n; i++) {
 		if (probabilities[i] >= cutoff) {
 			cumulative_prob += probabilities[i];
-			n0 = i; // for fallback due to rounding errors
+			fallback = i; // for fallback due to rounding errors
 		} else {
 			probabilities[i] = 0.0f;
 		}
@@ -71,7 +71,7 @@ static int sample_cutoff(float* probabilities, int n, float cutoff, float coin) 
 			return i;
 		}
 	}
-	return n0; // in case of rounding errors
+	return fallback; // in case of rounding errors
 }
 
 int sample(struct Sampler* sampler, float* logits) {
