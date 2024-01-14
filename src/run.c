@@ -429,7 +429,7 @@ int main(int argc, char* argv[]) {
 
 	// build the Sampler
 	struct Sampler sampler;
-	sampler_init(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
+	sampler_init(&sampler, transformer.config.vocab_size, temperature, topp, topp < 0 ? -topp : 0, rng_seed);
 
 	// hack for profiling: offset pos to make sure we need to use most of kv cache
 	char* pos_offset_env = getenv("CALM_POSO");

@@ -114,10 +114,42 @@ static int sample_topp(float* probabilities, int n, float topp, struct ProbIndex
 	return probindex[last_idx].index; // in case of rounding errors
 }
 
-void sampler_init(struct Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
+static int sample_minp(float* probabilities, int n, float minp, struct ProbIndex* probindex, float coin) {
+	float maxprob = 0.f;
+	for (int i = 0; i < n; ++i) {
+		maxprob = maxprob < probabilities[i] ? probabilities[i] : maxprob;
+	}
+
+	float cutoff = maxprob * minp;
+
+	int n0 = 0;
+	float cumulative_prob = 0.0f;
+	for (int i = 0; i < n; i++) {
+		if (probabilities[i] >= cutoff) {
+			probindex[n0].index = i;
+			probindex[n0].prob = probabilities[i];
+			cumulative_prob += probabilities[i];
+			n0++;
+		}
+	}
+
+	// sample from the truncated list
+	float r = coin * cumulative_prob;
+	float cdf = 0.0f;
+	for (int i = 0; i < n0; i++) {
+		cdf += probindex[i].prob;
+		if (r < cdf) {
+			return probindex[i].index;
+		}
+	}
+	return probindex[n0 - 1].index; // in case of rounding errors
+}
+
+void sampler_init(struct Sampler* sampler, int vocab_size, float temperature, float topp, float minp, unsigned long long rng_seed) {
 	sampler->vocab_size = vocab_size;
 	sampler->temperature = temperature;
 	sampler->topp = topp;
+	sampler->minp = minp;
 	sampler->rng_state = rng_seed;
 	// buffer only used with nucleus sampling; may not need but it's ~small
 	sampler->probindex = malloc(sampler->vocab_size * sizeof(struct ProbIndex));
@@ -143,7 +175,10 @@ int sample(struct Sampler* sampler, float* logits) {
 		// flip a (float) coin (this is our source of entropy for sampling)
 		float coin = random_f32(&sampler->rng_state);
 		// we sample from this distribution to get the next token
-		if (sampler->topp <= 0 || sampler->topp >= 1) {
+		if (sampler->minp > 0 && sampler->minp < 1) {
+			// min-p (cutoff) sampling, clamping the least likely tokens to zero
+			next = sample_minp(logits, sampler->vocab_size, sampler->minp, sampler->probindex, coin);
+		} else if (sampler->topp <= 0 || sampler->topp >= 1) {
 			// simply sample from the predicted probability distribution
 			next = sample_mult(logits, sampler->vocab_size, coin);
 		} else {
