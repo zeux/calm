@@ -428,8 +428,7 @@ int main(int argc, char* argv[]) {
 	build_tokenizer(&tokenizer, &tensors, transformer.config.vocab_size);
 
 	// build the Sampler
-	struct Sampler sampler;
-	sampler_init(&sampler, transformer.config.vocab_size, temperature, minp, rng_seed);
+	struct Sampler sampler = {transformer.config.vocab_size, rng_seed, temperature, minp};
 
 	// hack for profiling: offset pos to make sure we need to use most of kv cache
 	char* pos_offset_env = getenv("CALM_POSO");
@@ -455,7 +454,6 @@ int main(int argc, char* argv[]) {
 
 	// memory and file handles cleanup
 	// TODO: free transformer.state and transformer.weights for CUDA
-	sampler_free(&sampler);
 	tokenizer_free(&tokenizer);
 	tensors_close(&tensors);
 	return 0;

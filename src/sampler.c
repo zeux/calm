@@ -50,7 +50,7 @@ static int sample_argmax(float* probabilities, int n) {
 	return max_i;
 }
 
-static int sample_cutoff(float* probabilities, int n, float cutoff, struct ProbIndex* probindex, float coin) {
+static int sample_cutoff(float* probabilities, int n, float cutoff, float coin) {
 	int n0 = 0;
 	float cumulative_prob = 0.0f;
 	for (int i = 0; i < n; i++) {
@@ -74,19 +74,6 @@ static int sample_cutoff(float* probabilities, int n, float cutoff, struct ProbI
 	return n0; // in case of rounding errors
 }
 
-void sampler_init(struct Sampler* sampler, int vocab_size, float temperature, float minp, unsigned long long rng_seed) {
-	sampler->vocab_size = vocab_size;
-	sampler->temperature = temperature;
-	sampler->minp = minp;
-	sampler->rng_state = rng_seed;
-	// buffer only used with nucleus sampling; may not need but it's ~small
-	sampler->probindex = malloc(sampler->vocab_size * sizeof(struct ProbIndex));
-}
-
-void sampler_free(struct Sampler* sampler) {
-	free(sampler->probindex);
-}
-
 int sample(struct Sampler* sampler, float* logits) {
 	if (sampler->temperature == 0.0f || sampler->minp >= 1.0f) {
 		// greedy argmax sampling: take the token with the highest probability
@@ -97,6 +84,6 @@ int sample(struct Sampler* sampler, float* logits) {
 		// flip a (float) coin (this is our source of entropy for sampling)
 		float coin = random_f32(&sampler->rng_state);
 		// min-p (cutoff) sampling, clamping the least likely tokens to zero
-		return sample_cutoff(logits, sampler->vocab_size, sampler->minp * maxp, sampler->probindex, coin);
+		return sample_cutoff(logits, sampler->vocab_size, sampler->minp * maxp, coin);
 	}
 }
