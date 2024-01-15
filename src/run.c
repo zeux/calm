@@ -27,6 +27,7 @@ float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigne
 void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors, int context) {
 	// create config
 	const char* arch = tensors_metadata_find(tensors, "arch");
+	const char* dtype = tensors_metadata(tensors, "dtype");
 
 	config->arch = arch && strcmp(arch, "phi") == 0 ? Phi : LlamaLike;
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
@@ -44,21 +45,17 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 		config->seq_len = context;
 	}
 
-	const char* rope_theta = tensors_metadata_find(tensors, "rope_theta");
-	config->rope_theta = rope_theta ? atof(rope_theta) : 10000.f;
-
-	const char* rotary_dim = tensors_metadata_find(tensors, "rotary_dim");
-	config->rotary_dim = rotary_dim ? atoi(rotary_dim) : config->dim / config->n_heads;
+	config->rope_theta = atof(tensors_metadata(tensors, "rope_theta"));
+	config->rotary_dim = atoi(tensors_metadata(tensors, "rotary_dim"));
 
 	int head_size = config->dim / config->n_heads;
 
-	struct Tensor* tensor = tensors_find(tensors, "model.embed.weight", 0);
-	weights->dsize = tensor && tensor->dtype == dt_f8e5m2 ? 1 : 2;
+	weights->dsize = strcmp(dtype, "fp8") == 0 ? 1 : 2;
 
 	// get tensor data
-	enum DType dtype = (weights->dsize == 1) ? dt_f8e5m2 : dt_f16;
+	enum DType wtype = strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16;
 
-	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
+	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, wtype, (int[]){config->vocab_size, config->dim, 0, 0});
 
 	for (int l = 0; l < config->n_layers; ++l) {
 		if (config->arch == Phi) {
@@ -69,16 +66,16 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		}
 
-		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, dtype, (int[]){config->dim, config->n_heads * head_size, 0, 0});
-		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, dtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
-		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, dtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
-		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, dtype, (int[]){config->n_heads * head_size, config->dim, 0, 0});
+		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->dim, config->n_heads * head_size, 0, 0});
+		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
+		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
+		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->n_heads * head_size, config->dim, 0, 0});
 
-		weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
-		weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, dtype, (int[]){config->dim, config->hidden_dim, 0, 0});
+		weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->hidden_dim, config->dim, 0, 0});
+		weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim, 0, 0});
 
 		if (config->arch != Phi) {
-			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, dtype, (int[]){config->hidden_dim, config->dim, 0, 0});
+			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim, 0, 0});
 		}
 
 		if (config->arch == Phi || (arch && strcmp(arch, "qwen") == 0)) {
@@ -101,7 +98,7 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	}
 
-	weights->wcls = tensors_get(tensors, "model.output.weight", 0, dtype, (int[]){config->vocab_size, config->dim, 0, 0});
+	weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim, 0, 0});
 
 	if (config->arch == Phi) {
 		weights->bcls = (float*)tensors_get(tensors, "model.output.bias", 0, dt_f32, (int[]){config->vocab_size, 0, 0, 0});
