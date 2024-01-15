@@ -50,7 +50,7 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 
 	int head_size = config->dim / config->n_heads;
 
-	weights->dsize = strcmp(dtype, "fp8") == 0 ? 1 : 2;
+	weights->dbits = strcmp(dtype, "fp8") == 0 ? 8 : 16;
 
 	// get tensor data
 	enum DType wtype = strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16;

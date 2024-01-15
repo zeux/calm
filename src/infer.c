@@ -94,7 +94,11 @@ void prepare(struct Transformer* transformer) {
 	struct Config* p = &transformer->config;
 	struct RunState* s = &transformer->state;
 
-	dotprod = transformer->weights.dsize == 1 ? dotprod_fp8 : dotprod_fp16;
+	if (transformer->weights.dbits != 8 && transformer->weights.dbits != 16) {
+		assert(!"Unsupported dbits: must be 8 or 16 for CPU");
+	}
+
+	dotprod = transformer->weights.dbits == 8 ? dotprod_fp8 : dotprod_fp16;
 
 	// we calloc instead of malloc to keep valgrind happy
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
@@ -124,8 +128,7 @@ void prepare(struct Transformer* transformer) {
 #endif
 
 #if !defined(__FLT16_MANT_DIG__)
-	fprintf(stderr, "FATAL: _Float16 compiler support is required for CPU backend\n");
-	abort();
+	assert(!"_Float16 compiler support is required for CPU backend\n");
 #endif
 }
 
@@ -245,9 +248,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
 
 	// copy the token embedding into x
-	char* content_row = (char*)w->token_embedding_table + token * dim * w->dsize;
+	char* content_row = (char*)w->token_embedding_table + token * dim * (w->dbits / 8);
 	for (int i = 0; i < dim; ++i) {
-		x[i] = w->dsize == 1 ? fp82half(content_row[i]) : ((half*)content_row)[i];
+		x[i] = w->dbits == 8 ? fp82half(content_row[i]) : ((half*)content_row)[i];
 	}
 
 	// forward all the layers

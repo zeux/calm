@@ -74,14 +74,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		weights->ln_weight[l] = (float*)cuda_devicecopy(weights->ln_weight[l], dim * sizeof(float));
 		weights->ln_bias[l] = (float*)cuda_devicecopy(weights->ln_bias[l], dim * sizeof(float));
 
-		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * weights->dsize);
-		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * weights->dsize);
-		weights->wv[l] = cuda_devicecopy(weights->wv[l], dim * kv_dim * weights->dsize);
-		weights->wo[l] = cuda_devicecopy(weights->wo[l], dim * dim * weights->dsize);
+		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * weights->dbits / 8);
+		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * weights->dbits / 8);
+		weights->wv[l] = cuda_devicecopy(weights->wv[l], dim * kv_dim * weights->dbits / 8);
+		weights->wo[l] = cuda_devicecopy(weights->wo[l], dim * dim * weights->dbits / 8);
 
-		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * weights->dsize);
-		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * weights->dsize);
-		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * weights->dsize);
+		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * weights->dbits / 8);
+		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * weights->dbits / 8);
+		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * weights->dbits / 8);
 
 		weights->bq[l] = (float*)cuda_devicecopy(weights->bq[l], dim * sizeof(float));
 		weights->bk[l] = (float*)cuda_devicecopy(weights->bk[l], kv_dim * sizeof(float));
@@ -95,8 +95,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
 	weights->ln_final_weight = (float*)cuda_devicecopy(weights->ln_final_weight, dim * sizeof(float));
 	weights->ln_final_bias = (float*)cuda_devicecopy(weights->ln_final_bias, dim * sizeof(float));
-	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * weights->dsize);
-	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * weights->dsize);
+	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * weights->dbits / 8);
+	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * weights->dbits / 8);
 	weights->bcls = (float*)cuda_devicecopy(weights->bcls, config->vocab_size * sizeof(float));
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
@@ -566,12 +566,13 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
-	switch (transformer->weights.dsize) {
-	case 1:
+	switch (transformer->weights.dbits) {
+	case 8:
 		return forward<__nv_fp8_e5m2>(transformer, token, pos, flags);
-	case 2:
+	case 16:
 		return forward<half>(transformer, token, pos, flags);
 	default:
+		assert(!"Unsupported dbits: must be 8 or 16 for CUDA");
 		return NULL;
 	}
 }
