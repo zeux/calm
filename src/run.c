@@ -281,11 +281,12 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 
 	int vocab_size = transformer->config.vocab_size;
 
-	double sum = 0, den = 0;
+	double sum = 0, ss = 0, den = 0;
+	double ppl = 0, pplerr = 0;
 
 	for (int i = 0; i + 1 < n_tokens; i++) {
 		if (i != 0 && i % 1000 == 0) {
-			printf("# progress (%d/%d): %.3f\n", i, n_tokens, exp(-sum / den));
+			printf("# progress (%d/%d): %.3f ± %.3f\n", i, n_tokens, ppl, pplerr);
 		}
 
 		int pos = steps <= 0 ? i : i % steps;
@@ -293,20 +294,25 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 
 		sample_softmax(logits, vocab_size, 1.0f);
 
-		float prob = logits[tokens[i + 1]];
+		double logprob = log(logits[tokens[i + 1]]);
 
-		sum += log(prob);
+		// update stats for mean/std
+		sum += logprob;
+		ss += logprob * logprob;
 		den += 1;
+
+		// update ppl and ppl error using standard error of the mean
+		ppl = exp(-sum / den);
+		pplerr = ppl * sqrt((ss - sum * sum / den) / den / den);;
 	}
+
 
 	long end = time_in_ms();
 
 	free(tokens);
 
-	double ppl = exp(-sum / den);
-
-	printf("# perplexity: %.3f (%.2f sec, %.2f tok/s)\n",
-	       ppl, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
+	printf("# perplexity: %.3f ± %.3f (%.2f sec, %.2f tok/s)\n",
+	       ppl, pplerr, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
 }
 
 // ----------------------------------------------------------------------------
