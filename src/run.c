@@ -393,12 +393,12 @@ int main(int argc, char* argv[]) {
 	build_transformer(&transformer.config, &transformer.weights, &tensors, context);
 	count_params(&tensors, "model.", &transformer.n_params, &transformer.n_bytes);
 
-	printf("# %s: %d layers, %d context, weights %.1f GiB (fp%d), KV cache %.1f GiB (fp%d)\n",
-	       checkpoint_path, transformer.config.n_layers, transformer.config.seq_len,
-	       (double)transformer.n_bytes / 1024 / 1024 / 1024,
-	       transformer.weights.dsize * 8,
-	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024,
-	       (int)sizeof(kvtype_t) * 8);
+	printf("# %s: %.1fB params (%.1f GiB @ %.2f bpw), %d context (kvcache %.1f GiB)\n",
+	       checkpoint_path,
+	       (double)transformer.n_params / 1e9, (double)transformer.n_bytes / 1024 / 1024 / 1024,
+	       (double)transformer.n_bytes * 8 / (double)transformer.n_params,
+	       transformer.config.seq_len,
+	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
 
 #ifdef __linux__
 	char* cpu = getenv("CALM_CPU");
