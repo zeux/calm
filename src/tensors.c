@@ -126,7 +126,6 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 	}
 	json = json_skipws(json + 1);
 
-	size_t length = 0;
 	int dsize = 0;
 
 	while (*json != '}') {
@@ -171,7 +170,7 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 			}
 
 			tensor->data = (char*)bytes + offsets[0];
-			length = offsets[1] - offsets[0];
+			tensor->size = offsets[1] - offsets[0];
 		} else {
 			return NULL;
 		}
@@ -182,7 +181,7 @@ static char* parse_tensor(struct Tensor* tensor, void* bytes, size_t bytes_size,
 		json = (*json == ',') ? json_skipws(json + 1) : json;
 	}
 
-	if (!validate_shape(dsize, tensor->shape, length)) {
+	if (!validate_shape(dsize, tensor->shape, tensor->size)) {
 		return NULL;
 	}
 

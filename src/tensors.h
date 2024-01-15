@@ -19,6 +19,7 @@ struct Tensor {
 	enum DType dtype;
 	int shape[4];
 	void* data;
+	size_t size;
 };
 
 struct Metadata {
