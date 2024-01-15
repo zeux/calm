@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #ifdef __CUDACC__
 #include <cuda_fp16.h>
 #endif
@@ -96,6 +98,7 @@ struct Transformer {
 	struct Config config;   // the hyperparameters of the architecture (the blueprint)
 	struct Weights weights; // the weights of the model
 	struct RunState state;  // buffers for the "wave" of activations in the forward pass
+	size_t n_params, n_bytes;
 	float* (*forward)(struct Transformer* transformer, int token, int pos, unsigned flags);
 };
 

@@ -120,6 +120,24 @@ void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_siz
 	tokenizer_init(t, tokens, scores, bos_id, eos_id, vocab_size);
 }
 
+void count_params(struct Tensors* tensors, const char* prefix, size_t* out_params, size_t* out_bytes) {
+	*out_params = 0;
+	*out_bytes = 0;
+
+	for (int i = 0; i < tensors->n_tensors; ++i) {
+		struct Tensor* tensor = &tensors->tensors[i];
+		if (strncmp(tensor->name, prefix, strlen(prefix)) != 0) {
+			continue;
+		}
+		int params = 1;
+		for (int j = 0; j < 4 && tensor->shape[j] != 0; ++j) {
+			params *= tensor->shape[j];
+		}
+		*out_params += params;
+		*out_bytes += tensor->size;
+	}
+}
+
 // ----------------------------------------------------------------------------
 // utilities: time
 
@@ -130,44 +148,10 @@ long time_in_ms() {
 	return time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }
 
-size_t model_bandwidth(struct Config* config, size_t dsize) {
-	int head_size = config->dim / config->n_heads;
-
-	size_t res = 0;
-
-	// token embedding table (vocab_size, dim)
-	res += dsize * config->vocab_size * config->dim;
-	// weights for rmsnorms (dim) x 2 x layers
-	res += sizeof(float) * config->dim * 2 * config->n_layers;
-	// weights for matmuls
-	res += dsize * config->dim * config->n_heads * head_size * config->n_layers;
-	res += dsize * config->dim * config->n_kv_heads * head_size * config->n_layers;
-	res += dsize * config->dim * config->n_kv_heads * head_size * config->n_layers;
-	res += dsize * config->dim * config->n_heads * head_size * config->n_layers;
-	// weights for ffn
-	res += dsize * config->hidden_dim * config->dim * config->n_layers;
-	res += dsize * config->dim * config->hidden_dim * config->n_layers;
-	if (config->arch != Phi) {
-		res += dsize * config->hidden_dim * config->dim * config->n_layers;
-	}
-	// final rmsnorm
-	res += sizeof(float) * config->dim;
-	// classifier weights for the logits, on the last layer
-	res += dsize * config->vocab_size * config->dim;
-
-	return res;
-}
-
 size_t kvcache_bandwidth(struct Config* config, int pos) {
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
 	int kv_len = pos >= config->seq_len ? config->seq_len : pos + 1;
-
-	size_t res = 0;
-
-	res += sizeof(kvtype_t) * config->n_layers * kv_dim * kv_len;
-	res += sizeof(kvtype_t) * config->n_layers * kv_dim * kv_len;
-
-	return res;
+	return 2 * sizeof(kvtype_t) * config->n_layers * kv_dim * kv_len;
 }
 
 // ----------------------------------------------------------------------------
@@ -215,7 +199,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 		unsigned flags = pos < num_prompt_tokens - 1 ? FF_UPDATE_KV_ONLY : 0;
 		float* logits = transformer->forward(transformer, token, pos + pos_offset, flags);
 
-		read_bytes += model_bandwidth(&transformer->config, transformer->weights.dsize);
+		read_bytes += transformer->n_bytes;
 		read_bytes += kvcache_bandwidth(&transformer->config, pos + pos_offset);
 
 		// advance the state machine
@@ -407,10 +391,11 @@ int main(int argc, char* argv[]) {
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
 	build_transformer(&transformer.config, &transformer.weights, &tensors, context);
+	count_params(&tensors, "model.", &transformer.n_params, &transformer.n_bytes);
 
 	printf("# %s: %d layers, %d context, weights %.1f GiB (fp%d), KV cache %.1f GiB (fp%d)\n",
 	       checkpoint_path, transformer.config.n_layers, transformer.config.seq_len,
-	       (double)model_bandwidth(&transformer.config, transformer.weights.dsize) / 1024 / 1024 / 1024,
+	       (double)transformer.n_bytes / 1024 / 1024 / 1024,
 	       transformer.weights.dsize * 8,
 	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024,
 	       (int)sizeof(kvtype_t) * 8);
