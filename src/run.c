@@ -50,12 +50,13 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 
 	int head_size = config->dim / config->n_heads;
 
-	weights->dbits = strcmp(dtype, "fp8") == 0 ? 8 : 16;
-
 	// get tensor data
-	enum DType wtype = strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16;
+	enum DType wtype = strcmp(dtype, "gf4") == 0 ? dt_i32 : strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16;
+	int gsize =  strcmp(dtype, "gf4") == 0 ? 8 : 1;
 
-	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, wtype, (int[]){config->vocab_size, config->dim, 0, 0});
+	weights->dbits = strcmp(dtype, "gf4") == 0 ? 4 : strcmp(dtype, "fp8") == 0 ? 8 : 16;
+
+	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
 
 	for (int l = 0; l < config->n_layers; ++l) {
 		if (config->arch == Phi) {
@@ -66,16 +67,16 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		}
 
-		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->dim, config->n_heads * head_size, 0, 0});
-		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
-		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim, 0, 0});
-		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->n_heads * head_size, config->dim, 0, 0});
+		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->dim, config->n_heads * head_size / gsize, 0, 0});
+		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim / gsize, 0, 0});
+		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim / gsize, 0, 0});
+		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->n_heads * head_size, config->dim / gsize, 0, 0});
 
-		weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->hidden_dim, config->dim, 0, 0});
-		weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim, 0, 0});
+		weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
+		weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim / gsize, 0, 0});
 
 		if (config->arch != Phi) {
-			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim, 0, 0});
+			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 		}
 
 		if (config->arch == Phi || (arch && strcmp(arch, "qwen") == 0)) {
@@ -98,7 +99,7 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	}
 
-	weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim, 0, 0});
+	weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
 
 	if (config->arch == Phi) {
 		weights->bcls = (float*)tensors_get(tensors, "model.output.bias", 0, dt_f32, (int[]){config->vocab_size, 0, 0, 0});
@@ -126,7 +127,7 @@ void count_params(struct Tensors* tensors, const char* prefix, size_t* out_param
 		if (strncmp(tensor->name, prefix, strlen(prefix)) != 0) {
 			continue;
 		}
-		int params = 1;
+		int params = tensor->dtype == dt_i32 ? 8 : 1; // gsize hack for gf4
 		for (int j = 0; j < 4 && tensor->shape[j] != 0; ++j) {
 			params *= tensor->shape[j];
 		}

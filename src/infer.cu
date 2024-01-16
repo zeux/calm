@@ -124,6 +124,16 @@ __global__ static void kernel_embed(float* o, T* weight, int token, int n) {
 	o[i] = float(weight[token * n + i]);
 }
 
+__global__ static void kernel_embed(float* o, uint32_t* weight, int token, int n) {
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	assert(i < n);
+
+	uint32_t wg = weight[token * n / 8 + i / 8];
+	float wgs = -fp8_e5m2_ff(wg & 0xff) / 4.f;
+
+	o[i] = (int((wg >> (8 + (i % 8) * 3)) & 7) - 4) * wgs;
+}
+
 __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
@@ -487,7 +497,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// qkv matmuls for this position
 		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(
-		    PROF_TOKEN((dim + kv_dim * 2) * dim * sizeof(T)), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
+		    PROF_TOKEN((dim + kv_dim * 2) * dim * w->dbits / 8), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
@@ -513,17 +523,17 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32, 0, stream>>>(
-		    PROF_TOKEN(dim * dim * sizeof(T)), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		    PROF_TOKEN(dim * dim * w->dbits / 8), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 
 		if (p->arch == Phi) {
 			cudaStream_t mlpstream = parstream ? parstream : stream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
 			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(
-			    PROF_TOKEN(hidden_dim * dim * sizeof(T)), s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			    PROF_TOKEN(hidden_dim * dim * w->dbits / 8), s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 
 			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(
-			    PROF_TOKEN(dim * hidden_dim * sizeof(T)), s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
+			    PROF_TOKEN(dim * hidden_dim * w->dbits / 8), s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 
 			if (parstream) {
 				// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
@@ -536,10 +546,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(
-			    PROF_TOKEN(2 * hidden_dim * dim * sizeof(T)), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			    PROF_TOKEN(2 * hidden_dim * dim * w->dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 
 			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(
-			    PROF_TOKEN(dim * hidden_dim * sizeof(T)), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
+			    PROF_TOKEN(dim * hidden_dim * w->dbits / 8), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
 		}
 	}
 
@@ -558,7 +568,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// classifier into logits
 	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(
-	    PROF_TOKEN(p->vocab_size * dim * sizeof(T)), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+	    PROF_TOKEN(p->vocab_size * dim * w->dbits / 8), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -567,12 +577,14 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	switch (transformer->weights.dbits) {
+	case 4:
+		return forward<uint32_t>(transformer, token, pos, flags);
 	case 8:
 		return forward<__nv_fp8_e5m2>(transformer, token, pos, flags);
 	case 16:
 		return forward<half>(transformer, token, pos, flags);
 	default:
-		assert(!"Unsupported dbits: must be 8 or 16 for CUDA");
+		assert(!"Unsupported dbits: must be 4, 8 or 16 for CUDA");
 		return NULL;
 	}
 }

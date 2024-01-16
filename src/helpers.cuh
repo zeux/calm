@@ -61,6 +61,15 @@ __device__ inline float4 fp8x4_e5m2_ff(__nv_fp8x4_e5m2 v) {
 #endif
 }
 
+__device__ inline float fp8_e5m2_ff(uint8_t v) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+    __half_raw h = __nv_cvt_fp8_to_halfraw(v, __NV_E5M2);
+#else
+    __half_raw h = {(unsigned short)(v << 8)};
+#endif
+    return __internal_halfraw_to_float(h);
+}
+
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
 template <typename T>
 __device__ inline float matmul(float* x, T* w, int i, int n) {
@@ -99,6 +108,31 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n,
 		val += ww.y * xx.y;
 		val += ww.z * xx.z;
 		val += ww.w * xx.w;
+	}
+	return warpreduce_sum(val);
+}
+
+// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
+// specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
+__device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int stride) {
+	assert(n % 8 == 0);
+	int lane = threadIdx.x % warpSize;
+	float val = 0.0f;
+	for (int j = lane * 8; j < n; j += warpSize * 8) {
+		uint32_t wg = w[i * stride / 8 + j / 8];
+		float wgs = -fp8_e5m2_ff(wg & 0xff) / 4.f;
+
+		float4 xx0 = *(float4*)&x[j];
+		float4 xx1 = *(float4*)&x[j + 4];
+
+		val += (int((wg >> (8 + 0 * 3)) & 7) - 4) * wgs * xx0.x;
+		val += (int((wg >> (8 + 1 * 3)) & 7) - 4) * wgs * xx0.y;
+		val += (int((wg >> (8 + 2 * 3)) & 7) - 4) * wgs * xx0.z;
+		val += (int((wg >> (8 + 3 * 3)) & 7) - 4) * wgs * xx0.w;
+		val += (int((wg >> (8 + 4 * 3)) & 7) - 4) * wgs * xx1.x;
+		val += (int((wg >> (8 + 5 * 3)) & 7) - 4) * wgs * xx1.y;
+		val += (int((wg >> (8 + 6 * 3)) & 7) - 4) * wgs * xx1.z;
+		val += (int((wg >> (8 + 7 * 3)) & 7) - 4) * wgs * xx1.w;
 	}
 	return warpreduce_sum(val);
 }

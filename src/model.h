@@ -40,7 +40,7 @@ struct Config {
 };
 
 struct Weights {
-	int dbits; // 8 for fp8, 16 for fp16; determines type of void* below
+	int dbits; // 4 for gf4, 8 for fp8, 16 for fp16; determines type of void* below
 
 	// token embedding table
 	void* token_embedding_table; // (vocab_size, dim)
