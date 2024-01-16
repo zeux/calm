@@ -115,24 +115,43 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n,
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int stride) {
-	assert(n % 8 == 0);
+	assert(n % (warpSize * 16) == 0);
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
-	for (int j = lane * 8; j < n; j += warpSize * 8) {
-		uint32_t wg = w[i * stride / 8 + j / 8];
-		float wgs = -fp8_e5m2_ff(wg & 0xff) / 4.f;
+	for (int j = lane * 8; j < n; j += warpSize * 16) {
+		uint32_t wg0 = w[i * stride / 8 + j / 8];
+		uint32_t wg1 = w[i * stride / 8 + j / 8 + warpSize];
+
+		float wgs0 = -fp8_e5m2_ff(wg0 & 0xff) / 4.f;
+		float wgs1 = -fp8_e5m2_ff(wg1 & 0xff) / 4.f;
 
 		float4 xx0 = *(float4*)&x[j];
+
+		val += (int((wg0 >> (8 + 0 * 3)) & 7) - 4) * wgs0 * xx0.x;
+		val += (int((wg0 >> (8 + 1 * 3)) & 7) - 4) * wgs0 * xx0.y;
+		val += (int((wg0 >> (8 + 2 * 3)) & 7) - 4) * wgs0 * xx0.z;
+		val += (int((wg0 >> (8 + 3 * 3)) & 7) - 4) * wgs0 * xx0.w;
+
 		float4 xx1 = *(float4*)&x[j + 4];
 
-		val += (int((wg >> (8 + 0 * 3)) & 7) - 4) * wgs * xx0.x;
-		val += (int((wg >> (8 + 1 * 3)) & 7) - 4) * wgs * xx0.y;
-		val += (int((wg >> (8 + 2 * 3)) & 7) - 4) * wgs * xx0.z;
-		val += (int((wg >> (8 + 3 * 3)) & 7) - 4) * wgs * xx0.w;
-		val += (int((wg >> (8 + 4 * 3)) & 7) - 4) * wgs * xx1.x;
-		val += (int((wg >> (8 + 5 * 3)) & 7) - 4) * wgs * xx1.y;
-		val += (int((wg >> (8 + 6 * 3)) & 7) - 4) * wgs * xx1.z;
-		val += (int((wg >> (8 + 7 * 3)) & 7) - 4) * wgs * xx1.w;
+		val += (int((wg0 >> (8 + 4 * 3)) & 7) - 4) * wgs0 * xx1.x;
+		val += (int((wg0 >> (8 + 5 * 3)) & 7) - 4) * wgs0 * xx1.y;
+		val += (int((wg0 >> (8 + 6 * 3)) & 7) - 4) * wgs0 * xx1.z;
+		val += (int((wg0 >> (8 + 7 * 3)) & 7) - 4) * wgs0 * xx1.w;
+
+		float4 xx2 = *(float4*)&x[j + warpSize * 8];
+
+		val += (int((wg1 >> (8 + 0 * 3)) & 7) - 4) * wgs1 * xx2.x;
+		val += (int((wg1 >> (8 + 1 * 3)) & 7) - 4) * wgs1 * xx2.y;
+		val += (int((wg1 >> (8 + 2 * 3)) & 7) - 4) * wgs1 * xx2.z;
+		val += (int((wg1 >> (8 + 3 * 3)) & 7) - 4) * wgs1 * xx2.w;
+
+		float4 xx3 = *(float4*)&x[j + 4 + warpSize * 8];
+
+		val += (int((wg1 >> (8 + 4 * 3)) & 7) - 4) * wgs1 * xx3.x;
+		val += (int((wg1 >> (8 + 5 * 3)) & 7) - 4) * wgs1 * xx3.y;
+		val += (int((wg1 >> (8 + 6 * 3)) & 7) - 4) * wgs1 * xx3.z;
+		val += (int((wg1 >> (8 + 7 * 3)) & 7) - 4) * wgs1 * xx3.w;
 	}
 	return warpreduce_sum(val);
 }
