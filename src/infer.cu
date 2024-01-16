@@ -67,6 +67,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
+	size_t dbits = weights->dbits; // size_t prevents integer overflow in multiplications below
 
 	for (int l = 0; l < config->n_layers; ++l) {
 		weights->rms_att_weight[l] = (float*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(float));
@@ -74,14 +75,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		weights->ln_weight[l] = (float*)cuda_devicecopy(weights->ln_weight[l], dim * sizeof(float));
 		weights->ln_bias[l] = (float*)cuda_devicecopy(weights->ln_bias[l], dim * sizeof(float));
 
-		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * weights->dbits / 8);
-		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * weights->dbits / 8);
-		weights->wv[l] = cuda_devicecopy(weights->wv[l], dim * kv_dim * weights->dbits / 8);
-		weights->wo[l] = cuda_devicecopy(weights->wo[l], dim * dim * weights->dbits / 8);
+		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * dbits / 8);
+		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * dbits / 8);
+		weights->wv[l] = cuda_devicecopy(weights->wv[l], dim * kv_dim * dbits / 8);
+		weights->wo[l] = cuda_devicecopy(weights->wo[l], dim * dim * dbits / 8);
 
-		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * weights->dbits / 8);
-		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * weights->dbits / 8);
-		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * weights->dbits / 8);
+		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * dbits / 8);
+		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * dbits / 8);
+		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * dbits / 8);
 
 		weights->bq[l] = (float*)cuda_devicecopy(weights->bq[l], dim * sizeof(float));
 		weights->bk[l] = (float*)cuda_devicecopy(weights->bk[l], kv_dim * sizeof(float));
@@ -95,8 +96,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
 	weights->ln_final_weight = (float*)cuda_devicecopy(weights->ln_final_weight, dim * sizeof(float));
 	weights->ln_final_bias = (float*)cuda_devicecopy(weights->ln_final_bias, dim * sizeof(float));
-	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * weights->dbits / 8);
-	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * weights->dbits / 8);
+	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * (size_t)dbits / 8);
+	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * (size_t)dbits / 8);
 	weights->bcls = (float*)cuda_devicecopy(weights->bcls, config->vocab_size * sizeof(float));
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
@@ -458,6 +459,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
+	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
@@ -497,7 +499,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// qkv matmuls for this position
 		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(
-		    PROF_TOKEN((dim + kv_dim * 2) * dim * w->dbits / 8), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
+		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
 		assert(dim % 64 == 0 && kv_dim % 64 == 0);
@@ -523,17 +525,17 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim, 32, 0, stream>>>(
-		    PROF_TOKEN(dim * dim * w->dbits / 8), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 
 		if (p->arch == Phi) {
 			cudaStream_t mlpstream = parstream ? parstream : stream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
 			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(
-			    PROF_TOKEN(hidden_dim * dim * w->dbits / 8), s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
+			    PROF_TOKEN(hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 
 			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(
-			    PROF_TOKEN(dim * hidden_dim * w->dbits / 8), s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
+			    PROF_TOKEN(dim * hidden_dim * dbits / 8), s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 
 			if (parstream) {
 				// MLP atomically aggregates results into x[] which is used by main stream on next iteration, so wait for that
@@ -546,10 +548,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(
-			    PROF_TOKEN(2 * hidden_dim * dim * w->dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			    PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 
 			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(
-			    PROF_TOKEN(dim * hidden_dim * w->dbits / 8), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
+			    PROF_TOKEN(dim * hidden_dim * dbits / 8), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
 		}
 	}
 
@@ -568,7 +570,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// classifier into logits
 	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(
-	    PROF_TOKEN(p->vocab_size * dim * w->dbits / 8), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 
