@@ -16,7 +16,7 @@ argp.add_argument("input", type=str, nargs="?")
 argp.add_argument("--config", type=str)
 argp.add_argument("--tokenizer", type=str)
 argp.add_argument("--models", type=str, nargs="+")
-argp.add_argument("--dtype", type=str, default="fp8", choices=["fp16", "fp8"])
+argp.add_argument("--dtype", type=str, default="fp8", choices=["fp16", "fp8", "gf4"])
 args = argp.parse_args()
 
 if args.input is not None:
@@ -192,8 +192,25 @@ def permute_reverse(w, heads, rotary_dim):
     return torch.flatten(w, 0, 1)
 
 # fp8 support requires torch 2.1, but we support other dtypes on earlier versions
-dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None)}[args.dtype]
+dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None), "gf4": torch.uint8}[args.dtype]
 assert dtype
+
+# gf4 quantization: 8 values get quantized to 32 bits, 3-bit normalized int per value + shared fp8 scale factor
+# int range is asymmetric; we use this fact to encode the max value as -4 to expand the range a little bit
+def gf4(t):
+    # groups of 8 values
+    gt = t.unflatten(-1, (-1, 8))
+    # max (abs) of each group
+    _, gmaxi = gt.abs().max(-1)
+    gmax = gt.gather(-1, gmaxi.unsqueeze(-1))
+    # normalize each group by -max ([-1, 1]) and quantize to [0, 8)
+    # note that 8 needs to be clamped to 7 since positive half of the range is shorter
+    gtq = ((gt / -gmax) * 4 + 4).clamp(0, 7).round().to(torch.int32)
+    # assemble the results
+    gtr = gmax.squeeze(-1).to(torch.float8_e5m2).view(torch.uint8).to(torch.int32)
+    for i in range(8):
+        gtr |= gtq[..., i] << (8 + i * 3)
+    return gtr
 
 # convert weights
 progress = 0
@@ -201,7 +218,7 @@ def conv(t):
     global progress
     progress += 1
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
-    return t.to(dtype)
+    return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
 if arch in ["llama", "mistral"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
