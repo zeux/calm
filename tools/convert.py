@@ -196,7 +196,11 @@ dtype = {"fp16": torch.float16, "fp8": getattr(torch, "float8_e5m2", None)}[args
 assert dtype
 
 # convert weights
+progress = 0
 def conv(t):
+    global progress
+    progress += 1
+    print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return t.to(dtype)
 
 if arch in ["llama", "mistral"]:
@@ -283,6 +287,8 @@ elif arch == "phi":
 # note: we concatenate all bytes of all tokens into a single tensor
 tensors["tokenizer.tokens"] = torch.cat([torch.tensor([x for x in b] + [0], dtype=torch.uint8) for b in tokens])
 tensors["tokenizer.scores"] = torch.tensor(scores, dtype=torch.float32)
+
+print(f"\rSaving {len(tensors)} tensors..." + " " * 40)
 
 # in a perfect world, we would just use HF safetensors.torch.save_file
 # however, not only does it not support fp8 (https://github.com/huggingface/safetensors/pull/404), it also copies every tensor
