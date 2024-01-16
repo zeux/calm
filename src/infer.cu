@@ -218,7 +218,7 @@ __global__ static void kernel_matmul_cls(uint64_t, float* xout, float* x, T* w, 
 
 template <typename T>
 __global__ static void kernel_matmul_qkv(uint64_t, float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d + kvd * 2);
 
 	float* out = i < d ? qout : (i < d + kvd ? kout : vout);
@@ -232,14 +232,14 @@ __global__ static void kernel_matmul_qkv(uint64_t, float* qout, float* kout, flo
 		val += b[j];
 	}
 
-	if (threadIdx.x == 0) {
+	if (threadIdx.x % warpSize == 0) {
 		out[j] = val;
 	}
 }
 
 template <typename T>
 __global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w, float* b, int n, int d) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
@@ -248,7 +248,7 @@ __global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w,
 		val += b[i];
 	}
 
-	if (threadIdx.x == 0) {
+	if (threadIdx.x % warpSize == 0) {
 		// += for residual
 		xout[i] += val;
 	}
@@ -256,7 +256,7 @@ __global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w,
 
 template <typename T>
 __global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x, T* w1, T* w3, int n, int d) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float v1 = matmul_warppar(x, w1, i, n, n);
@@ -267,14 +267,14 @@ __global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x,
 	val *= 1.0f / (1.0f + expf(-v1));
 	val *= v3;
 
-	if (threadIdx.x == 0) {
+	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
 	}
 }
 
 template <typename T>
 __global__ static void kernel_matmul_ffn1_gelu(uint64_t, float* xout, float* x, T* w1, float* b1, int n, int d) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float v1 = matmul_warppar(x, w1, i, n, n);
@@ -284,19 +284,19 @@ __global__ static void kernel_matmul_ffn1_gelu(uint64_t, float* xout, float* x, 
 	// GELU (0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x^3))))
 	val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
 
-	if (threadIdx.x == 0) {
+	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
 	}
 }
 
 template <typename T>
 __global__ static void kernel_matmul_ffn2(uint64_t, float* xout, float* x, T* w, float* acc, int n, int d) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
 
-	if (threadIdx.x == 0) {
+	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val + acc[i];
 	}
 }
