@@ -71,10 +71,10 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | ----------- | ----------- | ----------- |
 | Llama2 7B (4096), fp16 | 67 tok/s (905 GB/s) | 58 tok/s (910 GB/s) |
 | Llama2 7B (4096), fp8 | 126 tok/s (850 GB/s) | 98 tok/s (870 GB/s) |
-| Llama2 7B (4096), gf4 | 210 tok/s (711 GB/s) | 144 tok/s (789 GB/s) |
+| Llama2 7B (4096), gf4 | 222 tok/s (750 GB/s) | 148 tok/s (815 GB/s) |
 | Mistral 7B (4096), fp16 | 63 tok/s (914 GB/s) | 61 tok/s (914 GB/s) |
 | Mistral 7B (4096), fp8 | 119 tok/s (865 GB/s) | 111 tok/s (869 GB/s) |
-| Mistral 7B (4096), gf4 | 209 tok/s (757 GB/s) | 186 tok/s (771 GB/s) |
+| Mistral 7B (4096), gf4 | 214 tok/s (778 GB/s) | 190 tok/s (790 GB/s) |
 | Phi 2.7B (2048), fp16 | 167 tok/s (932 GB/s) | 149 tok/s (930 GB/s) |
 | Phi 2.7B (2048), fp8 | 313 tok/s (874 GB/s) | 256 tok/s (881 GB/s) |
 | Phi 2.7B (2048), gf4 | 551 tok/s (771 GB/s) | 395 tok/s (811 GB/s) |
