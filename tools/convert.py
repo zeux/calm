@@ -198,6 +198,7 @@ assert dtype
 # gf4 quantization: 8 values get quantized to 32 bits, 3-bit normalized int per value + shared fp8 scale factor
 # int range is asymmetric; we use this fact to encode the max value as -4 to expand the range a little bit
 def gf4(t):
+    t = t.cuda()
     # groups of 8 values
     gt = t.unflatten(-1, (-1, 8))
     # max (abs) of each group
@@ -210,9 +211,9 @@ def gf4(t):
     gtq = ((gt / -gmax) * 4 + 4).clamp(0, 7).round().to(torch.int32)
     # assemble the results
     gtr = gmax.squeeze(-1).to(torch.float8_e5m2).view(torch.uint8).to(torch.int32)
-    gtq <<= torch.tensor([8 + i * 3 for i in range(8)], dtype=torch.int32)
+    gtq <<= torch.tensor([8 + i * 3 for i in range(8)], dtype=torch.int32, device=gtq.device)
     gtr += gtq.sum(-1)
-    return gtr
+    return gtr.cpu()
 
 # convert weights
 progress = 0
