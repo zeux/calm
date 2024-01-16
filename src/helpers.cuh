@@ -112,6 +112,11 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n,
 	return warpreduce_sum(val);
 }
 
+union float8 {
+	float4 g[2];
+	float v[8];
+};
+
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int stride) {
@@ -126,33 +131,17 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 			float wgs0 = -fp8_e5m2_ff(wg0 & 0xff) / 4.f;
 			float wgs1 = -fp8_e5m2_ff(wg1 & 0xff) / 4.f;
 
-			float4 xx0 = *(float4*)&x[j];
+			float8 xx0 = *(float8*)&x[j];
+#pragma unroll
+			for (int k = 0; k < 8; ++k) {
+				val += (int((wg0 >> (8 + k * 3)) & 7) - 4) * wgs0 * xx0.v[k];
+			}
 
-			val += (int((wg0 >> (8 + 0 * 3)) & 7) - 4) * wgs0 * xx0.x;
-			val += (int((wg0 >> (8 + 1 * 3)) & 7) - 4) * wgs0 * xx0.y;
-			val += (int((wg0 >> (8 + 2 * 3)) & 7) - 4) * wgs0 * xx0.z;
-			val += (int((wg0 >> (8 + 3 * 3)) & 7) - 4) * wgs0 * xx0.w;
-
-			float4 xx1 = *(float4*)&x[j + 4];
-
-			val += (int((wg0 >> (8 + 4 * 3)) & 7) - 4) * wgs0 * xx1.x;
-			val += (int((wg0 >> (8 + 5 * 3)) & 7) - 4) * wgs0 * xx1.y;
-			val += (int((wg0 >> (8 + 6 * 3)) & 7) - 4) * wgs0 * xx1.z;
-			val += (int((wg0 >> (8 + 7 * 3)) & 7) - 4) * wgs0 * xx1.w;
-
-			float4 xx2 = *(float4*)&x[j + warpSize * 8];
-
-			val += (int((wg1 >> (8 + 0 * 3)) & 7) - 4) * wgs1 * xx2.x;
-			val += (int((wg1 >> (8 + 1 * 3)) & 7) - 4) * wgs1 * xx2.y;
-			val += (int((wg1 >> (8 + 2 * 3)) & 7) - 4) * wgs1 * xx2.z;
-			val += (int((wg1 >> (8 + 3 * 3)) & 7) - 4) * wgs1 * xx2.w;
-
-			float4 xx3 = *(float4*)&x[j + 4 + warpSize * 8];
-
-			val += (int((wg1 >> (8 + 4 * 3)) & 7) - 4) * wgs1 * xx3.x;
-			val += (int((wg1 >> (8 + 5 * 3)) & 7) - 4) * wgs1 * xx3.y;
-			val += (int((wg1 >> (8 + 6 * 3)) & 7) - 4) * wgs1 * xx3.z;
-			val += (int((wg1 >> (8 + 7 * 3)) & 7) - 4) * wgs1 * xx3.w;
+			float8 xx1 = *(float8*)&x[j + warpSize * 8];
+#pragma unroll
+			for (int k = 0; k < 8; ++k) {
+				val += (int((wg1 >> (8 + k * 3)) & 7) - 4) * wgs1 * xx1.v[k];
+			}
 		}
 		return warpreduce_sum(val);
 	} else {
@@ -161,19 +150,11 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 			uint32_t wg = w[i * stride / 8 + j / 8];
 			float wgs = -fp8_e5m2_ff(wg & 0xff) / 4.f;
 
-			float4 xx0 = *(float4*)&x[j];
-
-			val += (int((wg >> (8 + 0 * 3)) & 7) - 4) * wgs * xx0.x;
-			val += (int((wg >> (8 + 1 * 3)) & 7) - 4) * wgs * xx0.y;
-			val += (int((wg >> (8 + 2 * 3)) & 7) - 4) * wgs * xx0.z;
-			val += (int((wg >> (8 + 3 * 3)) & 7) - 4) * wgs * xx0.w;
-
-			float4 xx1 = *(float4*)&x[j + 4];
-
-			val += (int((wg >> (8 + 4 * 3)) & 7) - 4) * wgs * xx1.x;
-			val += (int((wg >> (8 + 5 * 3)) & 7) - 4) * wgs * xx1.y;
-			val += (int((wg >> (8 + 6 * 3)) & 7) - 4) * wgs * xx1.z;
-			val += (int((wg >> (8 + 7 * 3)) & 7) - 4) * wgs * xx1.w;
+			float8 xx = *(float8*)&x[j];
+#pragma unroll
+			for (int k = 0; k < 8; ++k) {
+				val += (int((wg >> (8 + k * 3)) & 7) - 4) * wgs * xx.v[k];
+			}
 		}
 		return warpreduce_sum(val);
 	}
