@@ -475,6 +475,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	const int rmsnorm_size = 1024;
 	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
+	// gf4 kernels need a little more parallelism to saturate the GPU
+	const int matmul_par = w->dbits == 4 ? 2 : 1;
+
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
 	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
@@ -498,7 +501,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		}
 
 		// qkv matmuls for this position
-		kernel_matmul_qkv<<<dim + kv_dim * 2, 32, 0, stream>>>(
+		kernel_matmul_qkv<<<(dim + kv_dim * 2) / matmul_par, 32 * matmul_par, 0, stream>>>(
 		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
@@ -524,17 +527,17 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		    PROF_TOKEN(kvbw), s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim, 32, 0, stream>>>(
+		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
 		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
 
 		if (p->arch == Phi) {
 			cudaStream_t mlpstream = parstream ? parstream : stream;
 
 			// self.w2(F.gelu(self.w1(x))) + pre-rmsnorm residual
-			kernel_matmul_ffn1_gelu<<<hidden_dim, 32, 0, mlpstream>>>(
+			kernel_matmul_ffn1_gelu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, mlpstream>>>(
 			    PROF_TOKEN(hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], w->b1[l], dim, hidden_dim);
 
-			kernel_matmul_ffn2<<<dim, 32, 0, mlpstream>>>(
+			kernel_matmul_ffn2<<<dim / matmul_par, 32 * matmul_par, 0, mlpstream>>>(
 			    PROF_TOKEN(dim * hidden_dim * dbits / 8), s->xa, s->hb, (T*)w->w2[l], w->b2[l], hidden_dim, dim);
 
 			if (parstream) {
@@ -547,10 +550,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-			kernel_matmul_ffn13_silu<<<hidden_dim, 32, 0, stream>>>(
+			kernel_matmul_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
 			    PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
 
-			kernel_matmul_ffn2<<<dim, 32, 0, stream>>>(
+			kernel_matmul_ffn2<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
 			    PROF_TOKEN(dim * hidden_dim * dbits / 8), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
 		}
 	}
