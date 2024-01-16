@@ -203,6 +203,8 @@ def gf4(t):
     # max (abs) of each group
     _, gmaxi = gt.abs().max(-1)
     gmax = gt.gather(-1, gmaxi.unsqueeze(-1))
+    # round gmax to fp8 to make sure we're quantizing to the right range
+    gmax = gmax.to(torch.float8_e5m2).float()
     # normalize each group by -max ([-1, 1]) and quantize to [0, 8)
     # note that 8 needs to be clamped to 7 since positive half of the range is shorter
     gtq = ((gt / -gmax) * 4 + 4).clamp(0, 7).round().to(torch.int32)
