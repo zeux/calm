@@ -210,8 +210,8 @@ def gf4(t):
     gtq = ((gt / -gmax) * 4 + 4).clamp(0, 7).round().to(torch.int32)
     # assemble the results
     gtr = gmax.squeeze(-1).to(torch.float8_e5m2).view(torch.uint8).to(torch.int32)
-    for i in range(8):
-        gtr |= gtq[..., i] << (8 + i * 3)
+    gtq <<= torch.tensor([8 + i * 3 for i in range(8)], dtype=torch.int32)
+    gtr += gtq.sum(-1)
     return gtr
 
 # convert weights
