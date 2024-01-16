@@ -205,14 +205,14 @@ def gf4(t):
     _, gmaxi = gt.abs().max(-1)
     gmax = gt.gather(-1, gmaxi.unsqueeze(-1))
     # round gmax to fp8 to make sure we're quantizing to the right range
-    gmax = gmax.to(torch.float8_e5m2).float()
+    gmax = gmax.to(torch.float8_e5m2).to(gmax.dtype)
     # normalize each group by -max ([-1, 1]) and quantize to [0, 8)
     # note that 8 needs to be clamped to 7 since positive half of the range is shorter
-    gtq = ((gt / -gmax) * 4 + 4).clamp(0, 7).round().to(torch.int32)
+    gtq = ((gt / gmax).to(torch.float16) * -4 + 4).clamp(0, 7).round().to(torch.int32)
     # assemble the results
-    gtr = gmax.squeeze(-1).to(torch.float8_e5m2).view(torch.uint8).to(torch.int32)
     gtq <<= torch.tensor([8 + i * 3 for i in range(8)], dtype=torch.int32, device=gtq.device)
-    gtr += gtq.sum(-1)
+    gtr = gtq.sum(-1, dtype=torch.int32)
+    gtr += gmax.squeeze(-1).to(torch.float8_e5m2).view(torch.uint8)
     return gtr.cpu()
 
 # convert weights
