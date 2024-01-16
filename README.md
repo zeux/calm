@@ -51,11 +51,13 @@ It has been tested on following models:
 
 ## Supported formats
 
-Model weights support `fp16` and `fp8` formats; the weight type is specified at conversion time via `--dtype` argument to `convert.py`, and defaults to `fp8`.
+Model weights support `fp16`, `fp8` and `gf4` formats; the weight type is specified at conversion time via `--dtype` argument to `convert.py`, and defaults to `fp8`.
 
 `fp16` corresponds to 16-bit floating point (e5m10). Note that some models store weights in bf16 which will be automatically converted.
 
 `fp8` corresponds to 8-bit floating point (e5m2). Using `fp8` carries a ~0.5% perplexity penalty at almost double the inference speed and half the model size. e4m3 variant of `fp8` would result in a much smaller perplexity penalty (~0.1%) with basic tensor scaling, but it's currently not used because of performance issues wrt floating-point conversion.
+
+`gf4` corresponds to 4-bit grouped floating point (8 values are stored in 32 bits using 3 bit quantized scale per value and one fp8 group scale). Using `gf4` currently carries a ~5% perplexity penalty but increases inference speed by ~75% and halves the model size compared to `fp8`. Quantization code is currently naive and further improvements are planned. Unlike llama.cpp's K-quants, `gf4` quantization is pure and uniform - all layers are quantized to exactly 4 bits per weight.
 
 KV cache is using `fp16`.
 
@@ -63,7 +65,7 @@ KV cache is using `fp16`.
 
 Auto-regressive prediction for a single sequence needs to read the entire model and the entire KV cache (until current token) for every token. As such, given an optimal implementation we'd expect the process to be bandwidth bound. Note that the cost of token generation at the beginning of the sequence should be smaller than the cost at the end of the sequence due to the need to read data from KV cache.
 
-When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16` and `fp8` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts and 4000 for 4096 contexts):
+When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts and 4000 for 4096 contexts):
 
 | Model (context)     | Performance (first 32 tokens) | Performance (last 32 tokens)
 | ----------- | ----------- | ----------- |
@@ -76,7 +78,7 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
-Currently weights support `fp16` and `fp8` formats; in the future, 4-bit quantization is planned. This will allow running inference at higher tok/s, however the main metric is bandwidth utilization and the goal is to keep it as close to peak as possible at all supported weight formats.
+With smaller weights on small models, getting closer to bandwidth limit becomes more difficult. Future optimizations may increase the gap here for small models, although smaller weights are most valuable to be able to infer larger models.
 
 RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3]. The code has not been heavily tuned for datacenter-grade hardware (A100/H100) or earlier NVidia architectures yet.
 
