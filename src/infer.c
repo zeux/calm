@@ -96,7 +96,7 @@ static float dotprod_gf4(void* w, int n, int i, float* x) {
 	__m256 acc = _mm256_setzero_ps();
 	for (int j = 0; j < n; j += 8) {
 		uint32_t wg = r[j / 8];
-		float wgs = -fp82half(wg & 0xff) / 4.f;
+		float wgs = fp82half(wg & 0xff) / -4.f;
 		__m256i wv = _mm256_set1_epi32(wg);
 		__m256 xv = _mm256_loadu_ps(&x[j]);
 		wv = _mm256_srlv_epi32(wv, _mm256_setr_epi32(8, 11, 14, 17, 20, 23, 26, 29));
@@ -111,7 +111,7 @@ static float dotprod_gf4(void* w, int n, int i, float* x) {
 	float val = 0.0f;
 	for (int j = 0; j < n; j += 8) {
 		uint32_t wg = r[j / 8];
-		float wgs = -fp82half(wg & 0xff) / 4.f;
+		float wgs = fp82half(wg & 0xff) / -4.f;
 		for (int k = 0; k < 8; ++k) {
 			val += ((int)((wg >> (8 + k * 3)) & 7) - 4) * wgs * x[j + k];
 		}
@@ -284,7 +284,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	if (w->dbits == 4) {
 		for (int i = 0; i < dim; i += 8) {
 			uint32_t wg = ((uint32_t*)content_row)[i / 8];
-			float wgs = -fp82half(wg & 0xff) / 4.f;
+			float wgs = fp82half(wg & 0xff) / -4.f;
 			for (int k = 0; k < 8; ++k) {
 				x[i + k] = ((int)((wg >> (8 + k * 3)) & 7) - 4) * wgs;
 			}

@@ -128,8 +128,8 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 			uint32_t wg0 = w[i * stride / 8 + j / 8];
 			uint32_t wg1 = w[i * stride / 8 + j / 8 + warpSize];
 
-			float wgs0 = -fp8_e5m2_ff(wg0 & 0xff) / 4.f;
-			float wgs1 = -fp8_e5m2_ff(wg1 & 0xff) / 4.f;
+			float wgs0 = fp8_e5m2_ff(wg0 & 0xff) / -4.f;
+			float wgs1 = fp8_e5m2_ff(wg1 & 0xff) / -4.f;
 
 			float8 xx0 = *(float8*)&x[j];
 #pragma unroll
@@ -148,7 +148,7 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 		float val = 0.0f;
 		for (int j = lane * 8; j < n; j += warpSize * 8) {
 			uint32_t wg = w[i * stride / 8 + j / 8];
-			float wgs = -fp8_e5m2_ff(wg & 0xff) / 4.f;
+			float wgs = fp8_e5m2_ff(wg & 0xff) / -4.f;
 
 			float8 xx = *(float8*)&x[j];
 #pragma unroll
