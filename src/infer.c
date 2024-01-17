@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <float.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -88,17 +89,31 @@ static float dotprod_fp8(void* w, int n, int i, float* x) {
 #endif
 }
 
+static float dotprod_gf4(void* w, int n, int i, float* x) {
+	assert(n % 8 == 0);
+	uint32_t* r = (uint32_t*)w + i * n / 8;
+	float val = 0.0f;
+	for (int j = 0; j < n; j += 8) {
+		uint32_t wg = r[j / 8];
+		float wgs = -fp82half(wg & 0xff) / 4.f;
+		for (int k = 0; k < 8; ++k) {
+			val += ((int)((wg >> (8 + k * 3)) & 7) - 4) * wgs * x[j + k];
+		}
+	}
+	return val;
+}
+
 static dotprod_t dotprod;
 
 void prepare(struct Transformer* transformer) {
 	struct Config* p = &transformer->config;
 	struct RunState* s = &transformer->state;
 
-	if (transformer->weights.dbits != 8 && transformer->weights.dbits != 16) {
+	if (transformer->weights.dbits != 4 && transformer->weights.dbits != 8 && transformer->weights.dbits != 16) {
 		assert(!"Unsupported dbits: must be 8 or 16 for CPU");
 	}
 
-	dotprod = transformer->weights.dbits == 8 ? dotprod_fp8 : dotprod_fp16;
+	dotprod = transformer->weights.dbits == 4 ? dotprod_gf4 : transformer->weights.dbits == 8 ? dotprod_fp8 : dotprod_fp16;
 
 	// we calloc instead of malloc to keep valgrind happy
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
@@ -248,9 +263,19 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
 
 	// copy the token embedding into x
-	char* content_row = (char*)w->token_embedding_table + token * dim * (w->dbits / 8);
-	for (int i = 0; i < dim; ++i) {
-		x[i] = w->dbits == 8 ? fp82half(content_row[i]) : ((half*)content_row)[i];
+	char* content_row = (char*)w->token_embedding_table + token * dim * (size_t)w->dbits / 8;
+	if (w->dbits == 4) {
+		for (int i = 0; i < dim; i += 8) {
+			uint32_t wg = ((uint32_t*)content_row)[i / 8];
+			float wgs = -fp82half(wg & 0xff) / 4.f;
+			for (int k = 0; k < 8; ++k) {
+				x[i + k] = ((int)((wg >> (8 + k * 3)) & 7) - 4) * wgs;
+			}
+		}
+	} else {
+		for (int i = 0; i < dim; ++i) {
+			x[i] = w->dbits == 8 ? fp82half(content_row[i]) : ((half*)content_row)[i];
+		}
 	}
 
 	// forward all the layers
