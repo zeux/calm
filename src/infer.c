@@ -92,6 +92,22 @@ static float dotprod_fp8(void* w, int n, int i, float* x) {
 static float dotprod_gf4(void* w, int n, int i, float* x) {
 	assert(n % 8 == 0);
 	uint32_t* r = (uint32_t*)w + i * n / 8;
+#if defined(__AVX2__) && defined(__F16C__)
+	__m256 acc = _mm256_setzero_ps();
+	for (int j = 0; j < n; j += 8) {
+		uint32_t wg = r[j / 8];
+		float wgs = -fp82half(wg & 0xff) / 4.f;
+		__m256i wv = _mm256_set1_epi32(wg);
+		__m256 xv = _mm256_loadu_ps(&x[j]);
+		wv = _mm256_srlv_epi32(wv, _mm256_setr_epi32(8, 11, 14, 17, 20, 23, 26, 29));
+		wv = _mm256_and_si256(wv, _mm256_set1_epi32(7));
+		wv = _mm256_sub_epi32(wv, _mm256_set1_epi32(4));
+		acc = _mm256_add_ps(_mm256_mul_ps(_mm256_cvtepi32_ps(wv), _mm256_mul_ps(xv, _mm256_set1_ps(wgs))), acc);
+	}
+	__m128 acc4 = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+	__m128 accf = _mm_dp_ps(acc4, _mm_set1_ps(1.0f), 0xf1);
+	return _mm_cvtss_f32(accf);
+#else
 	float val = 0.0f;
 	for (int j = 0; j < n; j += 8) {
 		uint32_t wg = r[j / 8];
@@ -101,6 +117,7 @@ static float dotprod_gf4(void* w, int n, int i, float* x) {
 		}
 	}
 	return val;
+#endif
 }
 
 static dotprod_t dotprod;
