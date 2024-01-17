@@ -19,7 +19,7 @@ CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math
 LDFLAGS=-lm
 
 ifeq ($(UNAME),Darwin)
-  CFLAGS+=-Xclang -fopenmp  -I/opt/homebrew/opt/libomp/include
+  CFLAGS+=-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include
   LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
 else
   CFLAGS+=-fopenmp -mf16c -mavx2 -mfma

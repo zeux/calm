@@ -90,21 +90,33 @@ static float dotprod_fp8(void* w, int n, int i, float* x) {
 }
 
 static float dotprod_gf4(void* w, int n, int i, float* x) {
-	assert(n % 8 == 0);
 	uint32_t* r = (uint32_t*)w + i * n / 8;
 #if defined(__AVX2__) && defined(__F16C__)
-	__m256 acc = _mm256_setzero_ps();
-	for (int j = 0; j < n; j += 8) {
-		uint32_t wg = r[j / 8];
-		float wgs = fp82half(wg & 0xff) / -4.f;
-		__m256i wv = _mm256_set1_epi32(wg);
-		__m256 xv = _mm256_loadu_ps(&x[j]);
-		wv = _mm256_srlv_epi32(wv, _mm256_setr_epi32(8, 11, 14, 17, 20, 23, 26, 29));
-		wv = _mm256_and_si256(wv, _mm256_set1_epi32(7));
-		wv = _mm256_sub_epi32(wv, _mm256_set1_epi32(4));
-		acc = _mm256_add_ps(_mm256_mul_ps(_mm256_cvtepi32_ps(wv), _mm256_mul_ps(xv, _mm256_set1_ps(wgs))), acc);
+	assert(n % 32 == 0);
+	__m256 acc0 = _mm256_setzero_ps(), acc1 = _mm256_setzero_ps();
+	for (int j = 0; j < n; j += 32) {
+		__m128i wg = _mm_loadu_si128((__m128i*)&r[j / 8]);
+		const __m128i wgfm = _mm_setr_epi8(-1, 0, -1, 4, -1, 8, -1, 12, -1, -1, -1, -1, -1, -1, -1, -1);
+		__m128 wgf = _mm_cvtph_ps(_mm_shuffle_epi8(wg, wgfm)); // note: scale 1/-4.f is baked into wgtab below
+		__m256 x0 = _mm256_loadu_ps(&x[j]);
+		__m256 x1 = _mm256_loadu_ps(&x[j + 8]);
+		__m256 x2 = _mm256_loadu_ps(&x[j + 16]);
+		__m256 x3 = _mm256_loadu_ps(&x[j + 24]);
+		__m256i wgp = _mm256_broadcastsi128_si256(wg);
+		__m256 wgfp = _mm256_castsi256_ps(_mm256_broadcastsi128_si256(_mm_castps_si128(wgf)));
+		const __m256i wgbits = _mm256_setr_epi32(8, 11, 14, 17, 20, 23, 26, 29);
+		const __m256 wgtab = _mm256_setr_ps(-4 / -4.f, -3 / -4.f, -2 / -4.f, -1 / -4.f, 0 / -4.f, 1 / -4.f, 2 / -4.f, 3 / -4.f);
+		__m256 w0 = _mm256_permutevar8x32_ps(wgtab, _mm256_srlv_epi32(_mm256_shuffle_epi32(wgp, 0x00), wgbits));
+		__m256 w1 = _mm256_permutevar8x32_ps(wgtab, _mm256_srlv_epi32(_mm256_shuffle_epi32(wgp, 0x55), wgbits));
+		__m256 w2 = _mm256_permutevar8x32_ps(wgtab, _mm256_srlv_epi32(_mm256_shuffle_epi32(wgp, 0xaa), wgbits));
+		__m256 w3 = _mm256_permutevar8x32_ps(wgtab, _mm256_srlv_epi32(_mm256_shuffle_epi32(wgp, 0xff), wgbits));
+		acc0 = _mm256_add_ps(_mm256_mul_ps(w0, _mm256_mul_ps(x0, _mm256_shuffle_ps(wgfp, wgfp, 0x00))), acc0);
+		acc1 = _mm256_add_ps(_mm256_mul_ps(w1, _mm256_mul_ps(x1, _mm256_shuffle_ps(wgfp, wgfp, 0x55))), acc1);
+		acc0 = _mm256_add_ps(_mm256_mul_ps(w2, _mm256_mul_ps(x2, _mm256_shuffle_ps(wgfp, wgfp, 0xaa))), acc0);
+		acc1 = _mm256_add_ps(_mm256_mul_ps(w3, _mm256_mul_ps(x3, _mm256_shuffle_ps(wgfp, wgfp, 0xff))), acc1);
 	}
-	__m128 acc4 = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+	__m256 acc8 = _mm256_add_ps(acc0, acc1);
+	__m128 acc4 = _mm_add_ps(_mm256_castps256_ps128(acc8), _mm256_extractf128_ps(acc8, 1));
 	__m128 accf = _mm_dp_ps(acc4, _mm_set1_ps(1.0f), 0xf1);
 	return _mm_cvtss_f32(accf);
 #else
