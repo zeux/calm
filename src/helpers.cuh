@@ -4,6 +4,7 @@
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 #include <float.h>
+#include <stdint.h>
 
 __device__ inline float warpreduce_sum(float v) {
 #pragma unroll
