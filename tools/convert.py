@@ -198,7 +198,9 @@ assert dtype
 # gf4 quantization: 8 values get quantized to 32 bits, 3-bit normalized int per value + shared fp8 scale factor
 # int range is asymmetric; we use this fact to encode the max value as -4 to expand the range a little bit
 def gf4(t):
-    if torch.cuda.is_available(): t = t.cuda()
+    if torch.cuda.is_available():
+        t.max() # work around cuda load from mmap using small block size for reading...
+        t = t.cuda()
     # groups of 8 values
     gt = t.unflatten(-1, (-1, 8))
     # max (abs) of each group
@@ -347,5 +349,4 @@ def save_file(tensors, filename, metadata=None):
             v.view(torch.uint8).numpy().tofile(f)
 
 # metadata values must be strings in safetensors
-# save_file = safetensors.torch.save_file
 save_file(tensors, args.output, {k: str(v) for k, v in metadata.items()})
