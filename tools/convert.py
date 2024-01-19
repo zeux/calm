@@ -208,9 +208,12 @@ def gf4(t):
     gmax = gt.gather(-1, gmaxi.unsqueeze(-1))
     # round gmax to fp8 to make sure we're quantizing to the right range
     gmax = gmax.to(torch.float8_e5m2).to(gmax.dtype)
+    # normalize gt; note that gmax may be zero
+    gt /= gmax
+    torch.nan_to_num(gt, nan=0, posinf=0, neginf=0, out=gt)
     # normalize each group by -max ([-1, 1]) and quantize to [0, 8)
     # note that 8 needs to be clamped to 7 since positive half of the range is shorter
-    gtq = ((gt / gmax).to(torch.float16) * -4 + 4).clamp(0, 7).round().to(torch.int32)
+    gtq = (gt.to(torch.float16) * -4 + 4).clamp(0, 7).round().to(torch.int32)
     # assemble the results
     gtq <<= torch.tensor([8 + i * 3 for i in range(8)], dtype=torch.int32, device=gtq.device)
     gtr = gtq.sum(-1, dtype=torch.int32)
