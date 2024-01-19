@@ -7,6 +7,7 @@
 #endif
 
 #define MAX_LAYERS 128
+#define MAX_EXPERTS 64
 
 // Can switch between float and _Float16
 #ifdef __CUDACC__
@@ -23,7 +24,8 @@ typedef short kvtype_t;
 
 enum Arch {
 	LlamaLike,
-	Phi
+	Phi,
+	Mixtral,
 };
 
 struct Config {
@@ -37,6 +39,8 @@ struct Config {
 	int seq_len;      // max sequence length
 	float rope_theta; // RoPE theta
 	int rotary_dim;   // RoPE rotary dimension (elements after that don't get rotated)
+	int n_experts;    // number of experts for MoE models
+	int n_experts_ac; // number of active experts for MoE models
 };
 
 struct Weights {
@@ -74,6 +78,12 @@ struct Weights {
 	float* b1[MAX_LAYERS]; // (hidden_dim)
 	float* b2[MAX_LAYERS]; // (dim)
 	float* bcls;
+	// moe gate weights (mixtral)
+	void* moegate[MAX_LAYERS]; // (n_experts, dim)
+	// moe ffn weights (mixtral)
+	void* moew1[MAX_LAYERS][MAX_EXPERTS]; // (hidden_dim, dim)
+	void* moew2[MAX_LAYERS][MAX_EXPERTS]; // (dim, hidden_dim)
+	void* moew3[MAX_LAYERS][MAX_EXPERTS]; // (hidden_dim, dim)
 };
 
 struct RunState {

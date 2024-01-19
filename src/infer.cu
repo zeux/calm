@@ -91,6 +91,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 		weights->b1[l] = (float*)cuda_devicecopy(weights->b1[l], hidden_dim * sizeof(float));
 		weights->b2[l] = (float*)cuda_devicecopy(weights->b2[l], dim * sizeof(float));
+
+		weights->moegate[l] = cuda_devicecopy(weights->moegate[l], dim * config->n_experts * dbits / 8);
+
+		for (int e = 0; e < config->n_experts; ++e) {
+			weights->moew1[l][e] = cuda_devicecopy(weights->moew1[l][e], dim * hidden_dim * dbits / 8);
+			weights->moew2[l][e] = cuda_devicecopy(weights->moew2[l][e], dim * hidden_dim * dbits / 8);
+			weights->moew3[l][e] = cuda_devicecopy(weights->moew3[l][e], dim * hidden_dim * dbits / 8);
+		}
 	}
 
 	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
