@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral"]:
+if arch in ["llama", "mistral", "mixtral"]:
     # hardcoded in C
     assert config["hidden_act"] == "silu"
     assert config["rms_norm_eps"] == 1e-5
@@ -72,6 +72,11 @@ if arch in ["llama", "mistral"]:
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
+
+    # moe
+    if arch in ["mixtral"]:
+        metadata["n_experts"] = config["num_local_experts"]
+        metadata["n_experts_per_tok"] = config["num_experts_per_tok"]
 elif arch == "qwen":
     # customizable
     metadata["dim"] = config["hidden_size"]
@@ -228,7 +233,7 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral"]:
+if arch in ["llama", "mistral", "mixtral"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
@@ -243,9 +248,17 @@ if arch in ["llama", "mistral"]:
 
         tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
-        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
-        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
-        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
+        if arch in ["mixtral"]:
+            tensors[f"model.layers.{l}.egate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
+
+            for e in range(config["num_local_experts"]):
+                tensors[f"model.layers.{l}.experts.{e}.w1.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w1.weight"])
+                tensors[f"model.layers.{l}.experts.{e}.w2.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w2.weight"])
+                tensors[f"model.layers.{l}.experts.{e}.w3.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w3.weight"])
+        else:
+            tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
+            tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
+            tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
     tensors["model.norm.weight"] = weights["model.norm.weight"].float()
     tensors["model.output.weight"] = conv(weights["lm_head.weight"])
