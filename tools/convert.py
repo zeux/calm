@@ -76,7 +76,7 @@ if arch in ["llama", "mistral", "mixtral"]:
     # moe
     if arch in ["mixtral"]:
         metadata["n_experts"] = config["num_local_experts"]
-        metadata["n_experts_per_tok"] = config["num_experts_per_tok"]
+        metadata["n_experts_active"] = config["num_experts_per_tok"]
 elif arch == "qwen":
     # customizable
     metadata["dim"] = config["hidden_size"]
@@ -249,7 +249,7 @@ if arch in ["llama", "mistral", "mixtral"]:
         tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
         if arch in ["mixtral"]:
-            tensors[f"model.layers.{l}.egate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
+            tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
 
             for e in range(config["num_local_experts"]):
                 tensors[f"model.layers.{l}.experts.{e}.w1.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w1.weight"])
