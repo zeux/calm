@@ -290,6 +290,7 @@ static void moe_gate(float* moe_weights, int* moe_experts, float* x, int d, int 
 
 	// top k
 	uint64_t mask = 0;
+	float wsum = 0.0f;
 
 	for (int k = 0; k < active; ++k) {
 		int best = -1;
@@ -303,15 +304,11 @@ static void moe_gate(float* moe_weights, int* moe_experts, float* x, int d, int 
 		}
 
 		moe_experts[k] = best;
+		wsum += expf(x[moe_experts[k]] - max_val);
 		mask |= 1ull << best;
 	}
 
 	// top k weights, normalized
-	float wsum = 0.0f;
-	for (int k = 0; k < active; ++k) {
-		wsum += expf(x[moe_experts[k]] - max_val);
-	}
-
 	for (int k = 0; k < active; ++k) {
 		moe_weights[k] = expf(x[moe_experts[k]] - max_val) / wsum;
 	}

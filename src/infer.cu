@@ -335,12 +335,13 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 		}
 
 		// top k
-		uint64_t mask = 0;
+		uint32_t mask = 0;
+		float wsum = 0.0f;
 
 		for (int k = 0; k < active; ++k) {
 			int best = -1;
 			for (int j = 0; j < experts; ++j) {
-				if ((mask & (1ull << j)) != 0) {
+				if ((mask & (1u << j)) != 0) {
 					continue;
 				}
 				if (best == -1 || ws[j] > ws[best]) {
@@ -349,15 +350,11 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 			}
 
 			moe_experts[k] = best;
-			mask |= 1ull << best;
+			wsum += expf(ws[best] - max_val);
+			mask |= 1u << best;
 		}
 
 		// top k weights, normalized
-		float wsum = 0.0f;
-		for (int k = 0; k < active; ++k) {
-			wsum += expf(ws[moe_experts[k]] - max_val);
-		}
-
 		for (int k = 0; k < active; ++k) {
 			moe_weights[k] = expf(ws[moe_experts[k]] - max_val) / wsum;
 		}
