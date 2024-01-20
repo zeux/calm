@@ -319,6 +319,8 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 	extern __shared__ float ws[];
 	ws[i] = val;
 
+	__syncthreads();
+
 	if (threadIdx.x == 0) {
 		// softmax across experts
 		float max_val = -FLT_MAX;
