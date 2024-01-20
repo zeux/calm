@@ -273,6 +273,14 @@ static void attn(float* xout, float* atth, float* qh, kvtype_t* kh, kvtype_t* vh
 	}
 }
 
+inline float gelu(float x) {
+	return 0.5f * x * (1.0f + tanhf(0.797885f * (x + 0.044715f * x * x * x)));
+}
+
+inline float silu(float x) {
+	return x / (1.0f + expf(-x));
+}
+
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 
 	// a few convenience variables
@@ -375,10 +383,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 			// GELU non-linearity
 			for (int i = 0; i < hidden_dim; i++) {
-				float val = s->hb[i];
-				// GELU (0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x^3))))
-				val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
-				s->hb[i] = val;
+				s->hb[i] = gelu(s->hb[i]);
 			}
 		} else {
 			// ffn rmsnorm
@@ -391,12 +396,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 			// SwiGLU non-linearity
 			for (int i = 0; i < hidden_dim; i++) {
-				float val = s->hb[i];
-				// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-				val *= (1.0f / (1.0f + expf(-val)));
-				// elementwise multiply with w3(x)
-				val *= s->hb2[i];
-				s->hb[i] = val;
+				s->hb[i] = silu(s->hb[i]) * s->hb2[i];
 			}
 		}
 
