@@ -277,9 +277,7 @@ __global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x,
 	float v3 = matmul_warppar(x, w3, i, n, n);
 
 	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-	float val = v1;
-	val *= 1.0f / (1.0f + expf(-v1));
-	val *= v3;
+	float val = (v1 / (1.0f + expf(-v1))) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
@@ -367,9 +365,7 @@ __global__ static void kernel_matmul_moe_ffn13_silu(uint64_t, float* xout, float
 	float v3 = matmul_warppar(x, w3[moe_experts[e]], i, n, n);
 
 	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-	float val = v1;
-	val *= 1.0f / (1.0f + expf(-v1));
-	val *= v3;
+	float val = (v1 / (1.0f + expf(-v1))) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
