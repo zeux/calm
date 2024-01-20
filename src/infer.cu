@@ -316,9 +316,9 @@ __global__ static void kernel_matmul_ffn2(uint64_t, float* xout, float* x, T* w,
 }
 
 template <typename T>
-__global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, float* x, T* w, int n, int d, int active) {
+__global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, float* x, T* w, int n, int experts, int active) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
-	assert(i < d);
+	assert(i < experts);
 
 	float val = matmul_warppar(x, w, i, n, n);
 
@@ -330,18 +330,8 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 	if (threadIdx.x == 0) {
 		// softmax across experts
 		float max_val = -FLT_MAX;
-		for (int j = 0; j < d; ++j) {
+		for (int j = 0; j < experts; ++j) {
 			max_val = max(max_val, ws[j]);
-		}
-
-		float sum = 0.0f;
-		for (int j = 0; j < d; ++j) {
-			ws[j] = expf(ws[j] - max_val);
-			sum += ws[j];
-		}
-
-		for (int j = 0; j < d; ++j) {
-			ws[j] /= sum;
 		}
 
 		// top k
@@ -349,7 +339,7 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 
 		for (int k = 0; k < active; ++k) {
 			int best = -1;
-			for (int j = 0; j < d; ++j) {
+			for (int j = 0; j < experts; ++j) {
 				if ((mask & (1ull << j)) != 0) {
 					continue;
 				}
@@ -365,11 +355,11 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 		// top k weights, normalized
 		float wsum = 0.0f;
 		for (int k = 0; k < active; ++k) {
-			wsum += ws[moe_experts[k]];
+			wsum += expf(ws[moe_experts[k]] - max_val);
 		}
 
 		for (int k = 0; k < active; ++k) {
-			moe_weights[k] = ws[moe_experts[k]] / wsum;
+			moe_weights[k] = expf(ws[moe_experts[k]] - max_val) / wsum;
 		}
 	}
 }
@@ -638,6 +628,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
 
 			// moe gate
+			assert(p->n_experts <= 32);
 			float* moe_weights = s->xa;
 			int* moe_experts = (int*)s->xa + p->n_experts_ac;
 			kernel_moe_gate<<<1, 32 * p->n_experts, p->n_experts * sizeof(float), stream>>>(moe_weights, moe_experts, s->xb, (T*)w->moegate[l], dim, p->n_experts, p->n_experts_ac);
