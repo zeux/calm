@@ -30,6 +30,7 @@ calm currently supports the following model architectures:
 
 - Llama-like (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE)
 - Phi (LayerNorm normalization, GELU activation, parallel attention mixing, partial RoPE)
+- Mixtral (Llama-like with FFN in every layer replaced by a mixture of experts)
 
 It has been tested on following models:
 
@@ -48,6 +49,8 @@ It has been tested on following models:
 - Phi architecture
   - Phi1.5 (microsoft/phi-1_5)
   - Phi2 (microsoft/phi-2)
+- Mixtral architecture
+  - Mixtral 8x7B (mistralai/Mixtral-8x7B-Instruct-v0.1)
 
 ## Supported formats
 
@@ -78,6 +81,7 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Phi 2.7B (2048), fp16 | 167 tok/s (932 GB/s) | 149 tok/s (930 GB/s) |
 | Phi 2.7B (2048), fp8 | 313 tok/s (874 GB/s) | 256 tok/s (881 GB/s) |
 | Phi 2.7B (2048), gf4 | 551 tok/s (771 GB/s) | 395 tok/s (811 GB/s) |
+| Mixtral 8x7B (4096), gf4 | 125 tok/s (805 GB/s) | 116 tok/s (813 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
