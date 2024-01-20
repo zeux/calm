@@ -136,9 +136,10 @@ void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_siz
 	tokenizer_init(t, tokens, scores, bos_id, eos_id, vocab_size);
 }
 
-void count_params(struct Tensors* tensors, const char* prefix, size_t* out_params, size_t* out_bytes) {
+void count_params(struct Tensors* tensors, const char* prefix, size_t* out_params, size_t* out_bytes, const char* filter, size_t* out_filtered) {
 	*out_params = 0;
 	*out_bytes = 0;
+	*out_filtered = 0;
 
 	for (int i = 0; i < tensors->n_tensors; ++i) {
 		struct Tensor* tensor = &tensors->tensors[i];
@@ -151,6 +152,9 @@ void count_params(struct Tensors* tensors, const char* prefix, size_t* out_param
 		}
 		*out_params += params;
 		*out_bytes += tensor->size;
+		if (strstr(tensor->name, filter)) {
+			*out_filtered += tensor->size;
+		}
 	}
 }
 
@@ -215,7 +219,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 		unsigned flags = pos < num_prompt_tokens - 1 ? FF_UPDATE_KV_ONLY : 0;
 		float* logits = transformer->forward(transformer, token, pos + pos_offset, flags);
 
-		read_bytes += transformer->n_bytes;
+		read_bytes += transformer->n_bandwidth;
 		read_bytes += kvcache_bandwidth(&transformer->config, pos + pos_offset);
 
 		// advance the state machine
@@ -407,7 +411,13 @@ int main(int argc, char* argv[]) {
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
 	build_transformer(&transformer.config, &transformer.weights, &tensors, context);
-	count_params(&tensors, "model.", &transformer.n_params, &transformer.n_bytes);
+	count_params(&tensors, "model.", &transformer.n_params, &transformer.n_bytes, ".experts.", &transformer.n_bandwidth);
+	if (transformer.config.arch == Mixtral) {
+		transformer.n_bandwidth = (transformer.n_bytes - transformer.n_bandwidth) +
+		                          transformer.n_bandwidth / transformer.config.n_experts * transformer.config.n_experts_ac;
+	} else {
+		transformer.n_bandwidth = transformer.n_bytes;
+	}
 
 	printf("# %s: %.1fB params (%.1f GiB @ %.2f bpw), %d context (kvcache %.1f GiB)\n",
 	       checkpoint_path,
