@@ -295,10 +295,7 @@ static void moe_gate(float* moe_weights, int* moe_experts, float* x, int d, int 
 	for (int k = 0; k < active; ++k) {
 		int best = -1;
 		for (int j = 0; j < d; ++j) {
-			if ((mask & (1ull << j)) != 0) {
-				continue;
-			}
-			if (best == -1 || x[j] > x[best]) {
+			if ((mask & (1ull << j)) == 0 && (best == -1 || x[j] > x[best])) {
 				best = j;
 			}
 		}

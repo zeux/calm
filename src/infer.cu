@@ -341,10 +341,7 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 		for (int k = 0; k < active; ++k) {
 			int best = -1;
 			for (int j = 0; j < experts; ++j) {
-				if ((mask & (1u << j)) != 0) {
-					continue;
-				}
-				if (best == -1 || ws[j] > ws[best]) {
+				if ((mask & (1u << j)) == 0 && (best == -1 || x[j] > x[best])) {
 					best = j;
 				}
 			}
