@@ -158,8 +158,8 @@ static void atexit_handler(void) {
 
 	if (n_kernels) {
 		printf("\n");
-		printf("%20s%15s%20s%15s%15s%25s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)", "Utilization (limit)");
-		printf("%20s%15s%20s%15s%15s%25s\n", "---", "---", "---", "---", "---", "---");
+		printf("%25s%15s%20s%15s%15s%25s\n", "Kernel", "Time (%)", "Avg Time (us)", "Calls", "BW (GB/s)", "Utilization (limit)");
+		printf("%25s%15s%20s%15s%15s%25s\n", "---", "---", "---", "---", "---", "---");
 
 		float total_time = 0;
 		for (int i = 0; i < n_kernels; i++) {
@@ -193,7 +193,7 @@ static void atexit_handler(void) {
 			char util[64];
 			snprintf(util, sizeof(util), "%.0f%% SMs, %.0f wrp/SM", kernel->peak_util * 100, kernel->peak_occ);
 
-			printf("%20.*s%14.1f%%%21s%15d%15.1f%25s\n", (int)length, name,
+			printf("%25.*s%14.1f%%%21s%15d%15.1f%25s\n", (int)length, name,
 			       kernel->total_time / total_time * 100, avgtime, kernel->calls, kernel->peak_bw, util);
 		}
 	}
