@@ -99,6 +99,12 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 			weights->moew2[l][e] = cuda_devicecopy(weights->moew2[l][e], dim * hidden_dim * dbits / 8);
 			weights->moew3[l][e] = cuda_devicecopy(weights->moew3[l][e], dim * hidden_dim * dbits / 8);
 		}
+
+		if (config->n_experts) {
+			weights->moewr[l][0] = (void**)cuda_devicecopy(weights->moew1[l], config->n_experts * sizeof(void*));
+			weights->moewr[l][1] = (void**)cuda_devicecopy(weights->moew2[l], config->n_experts * sizeof(void*));
+			weights->moewr[l][2] = (void**)cuda_devicecopy(weights->moew3[l], config->n_experts * sizeof(void*));
+		}
 	}
 
 	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
@@ -639,10 +645,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) * expert weight + pre-rmsnorm residual
 			for (int e = 0; e < p->n_experts_ac; ++e) {
 				kernel_matmul_moe_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-				    PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T**)w->moew1[l], (T**)w->moew3[l], moe_experts, e, dim, hidden_dim);
+				    PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T**)w->moewr[l][0], (T**)w->moewr[l][2], moe_experts, e, dim, hidden_dim);
 
 				kernel_matmul_moe_ffn2<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-				    PROF_TOKEN(dim * hidden_dim * dbits / 8), x, s->hb, (T**)w->moew2[l], moe_experts, moe_weights, e, hidden_dim, dim);
+				    PROF_TOKEN(dim * hidden_dim * dbits / 8), x, s->hb, (T**)w->moewr[l][1], moe_experts, moe_weights, e, hidden_dim, dim);
 			}
 		} else if (p->arch == Phi) {
 			cudaStream_t mlpstream = parstream ? parstream : stream;

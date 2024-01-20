@@ -84,6 +84,7 @@ struct Weights {
 	void* moew1[MAX_LAYERS][MAX_EXPERTS]; // (hidden_dim, dim)
 	void* moew2[MAX_LAYERS][MAX_EXPERTS]; // (dim, hidden_dim)
 	void* moew3[MAX_LAYERS][MAX_EXPERTS]; // (hidden_dim, dim)
+	void** moewr[MAX_LAYERS][3];          // (n_experts)
 };
 
 struct RunState {
