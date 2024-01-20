@@ -281,6 +281,52 @@ inline float silu(float x) {
 	return x / (1.0f + expf(-x));
 }
 
+static void moe_gate(float* moe_weights, int* moe_experts, float* x, int d, int active) {
+	// softmax across experts
+	float max_val = -FLT_MAX;
+	for (int j = 0; j < d; ++j) {
+		max_val = (max_val < x[j]) ? x[j] : max_val;
+	}
+
+	float sum = 0.0f;
+	for (int j = 0; j < d; ++j) {
+		x[j] = expf(x[j] - max_val);
+		sum += x[j];
+	}
+
+	for (int j = 0; j < d; ++j) {
+		x[j] /= sum;
+	}
+
+	// top k
+	uint64_t mask = 0;
+
+	for (int k = 0; k < active; ++k) {
+		int best = -1;
+		for (int j = 0; j < d; ++j) {
+			if ((mask & (1ull << j)) != 0) {
+				continue;
+			}
+			if (best == -1 || x[j] > x[best]) {
+				best = j;
+			}
+		}
+
+		moe_experts[k] = best;
+		mask |= 1ull << best;
+	}
+
+	// top k weights, normalized
+	float wsum = 0.0f;
+	for (int k = 0; k < active; ++k) {
+		wsum += x[moe_experts[k]];
+	}
+
+	for (int k = 0; k < active; ++k) {
+		moe_weights[k] = x[moe_experts[k]] / wsum;
+	}
+}
+
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 
 	// a few convenience variables
@@ -378,34 +424,63 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			x[i] += s->hb[i];
 		}
 
-		if (p->arch == Phi) {
-			matmul(s->hb, s->xb, w->w1[l], w->b1[l], dim, hidden_dim);
-
-			// GELU non-linearity
-			for (int i = 0; i < hidden_dim; i++) {
-				s->hb[i] = gelu(s->hb[i]);
-			}
-		} else {
+		if (p->arch == Mixtral) {
 			// ffn rmsnorm
 			rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
 
-			// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-			// first calculate self.w1(x) and self.w3(x)
-			matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim);
-			matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim);
+			// moe gate
+			// TODO: we're using att as a temporary storage, hacky
+			float* moe_weights = s->att + p->n_experts;
+			int* moe_experts = (int*)moe_weights + p->n_experts_ac;
+			matmul(s->att, s->xb, w->moegate[l], NULL, dim, p->n_experts);
+			moe_gate(moe_weights, moe_experts, s->att, p->n_experts, p->n_experts_ac);
 
-			// SwiGLU non-linearity
-			for (int i = 0; i < hidden_dim; i++) {
-				s->hb[i] = silu(s->hb[i]) * s->hb2[i];
+			// mix self.w2(F.silu(self.w1(x)) * self.w3(x))
+			for (int e = 0; e < p->n_experts_ac; ++e) {
+				matmul(s->hb, s->xb, w->moew1[l][moe_experts[e]], NULL, dim, hidden_dim);
+				matmul(s->hb2, s->xb, w->moew3[l][moe_experts[e]], NULL, dim, hidden_dim);
+
+				// SwiGLU non-linearity
+				for (int i = 0; i < hidden_dim; i++) {
+					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
+				}
+
+				matmul(s->xb2, s->hb, w->moew2[l][moe_experts[e]], NULL, hidden_dim, dim);
+
+				for (int i = 0; i < dim; i++) {
+					x[i] += s->xb2[i] * moe_weights[e];
+				}
 			}
-		}
+		} else {
+			if (p->arch == Phi) {
+				matmul(s->hb, s->xb, w->w1[l], w->b1[l], dim, hidden_dim);
 
-		// final matmul to get the output of the ffn
-		matmul(s->xb, s->hb, w->w2[l], w->b2[l], hidden_dim, dim);
+				// GELU non-linearity
+				for (int i = 0; i < hidden_dim; i++) {
+					s->hb[i] = gelu(s->hb[i]);
+				}
+			} else {
+				// ffn rmsnorm
+				rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
 
-		// residual connection
-		for (int i = 0; i < dim; i++) {
-			x[i] += s->xb[i];
+				// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+				// first calculate self.w1(x) and self.w3(x)
+				matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim);
+				matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim);
+
+				// SwiGLU non-linearity
+				for (int i = 0; i < hidden_dim; i++) {
+					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
+				}
+			}
+
+			// final matmul to get the output of the ffn
+			matmul(s->xb, s->hb, w->w2[l], w->b2[l], hidden_dim, dim);
+
+			// residual connection
+			for (int i = 0; i < dim; i++) {
+				x[i] += s->xb[i];
+			}
 		}
 	}
 
