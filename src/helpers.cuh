@@ -71,6 +71,12 @@ __device__ inline float fp8_e5m2_ff(uint8_t v) {
     return __internal_halfraw_to_float(h);
 }
 
+// gf4 decoding: 8 3-bit values + 1 fp8 scale are packed in a 32-bit word
+__device__ inline float gf4_ff(uint32_t v, int k) {
+	float s = fp8_e5m2_ff(v & 0xff) / -4.f; // we expect compiler to reuse this across multiple calls
+	return (int((v >> (8 + k * 3)) & 7) - 4) * s;
+}
+
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
 template <typename T>
 __device__ inline float matmul(float* x, T* w, int i, int n) {
@@ -129,19 +135,16 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 			uint32_t wg0 = w[i * stride / 8 + j / 8];
 			uint32_t wg1 = w[i * stride / 8 + j / 8 + warpSize];
 
-			float wgs0 = fp8_e5m2_ff(wg0 & 0xff) / -4.f;
-			float wgs1 = fp8_e5m2_ff(wg1 & 0xff) / -4.f;
-
 			float8 xx0 = *(float8*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += (int((wg0 >> (8 + k * 3)) & 7) - 4) * wgs0 * xx0.v[k];
+				val += gf4_ff(wg0, k) * xx0.v[k];
 			}
 
 			float8 xx1 = *(float8*)&x[j + warpSize * 8];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += (int((wg1 >> (8 + k * 3)) & 7) - 4) * wgs1 * xx1.v[k];
+				val += gf4_ff(wg1, k) * xx1.v[k];
 			}
 		}
 		return warpreduce_sum(val);
@@ -149,12 +152,11 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 		float val = 0.0f;
 		for (int j = lane * 8; j < n; j += warpSize * 8) {
 			uint32_t wg = w[i * stride / 8 + j / 8];
-			float wgs = fp8_e5m2_ff(wg & 0xff) / -4.f;
 
 			float8 xx = *(float8*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += (int((wg >> (8 + k * 3)) & 7) - 4) * wgs * xx.v[k];
+				val += gf4_ff(wg, k) * xx.v[k];
 			}
 		}
 		return warpreduce_sum(val);

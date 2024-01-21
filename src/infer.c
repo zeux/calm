@@ -22,13 +22,18 @@ typedef _Float16 half;
 typedef short half;
 #endif
 
-static half fp82half(unsigned char v) {
+inline half fp82half(unsigned char v) {
 	union {
 		unsigned short u;
 		half f;
 	} u;
 	u.u = v << 8;
 	return u.f;
+}
+
+inline float gf4_ff(uint32_t v, int k) {
+	float s = fp82half(v & 0xff) / -4.f; // we expect compiler to reuse this across multiple calls
+	return ((int)((v >> (8 + k * 3)) & 7) - 4) * s;
 }
 
 typedef float (*dotprod_t)(void* w, int n, int i, float* x);
@@ -123,9 +128,8 @@ static float dotprod_gf4(void* w, int n, int i, float* x) {
 	float val = 0.0f;
 	for (int j = 0; j < n; j += 8) {
 		uint32_t wg = r[j / 8];
-		float wgs = fp82half(wg & 0xff) / -4.f;
 		for (int k = 0; k < 8; ++k) {
-			val += ((int)((wg >> (8 + k * 3)) & 7) - 4) * wgs * x[j + k];
+			val += gf4_ff(wg, k) * x[j + k];
 		}
 	}
 	return val;
@@ -334,9 +338,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	if (w->dbits == 4) {
 		for (int i = 0; i < dim; i += 8) {
 			uint32_t wg = ((uint32_t*)content_row)[i / 8];
-			float wgs = fp82half(wg & 0xff) / -4.f;
 			for (int k = 0; k < 8; ++k) {
-				x[i + k] = ((int)((wg >> (8 + k * 3)) & 7) - 4) * wgs;
+				x[i + k] = gf4_ff(wg, k);
 			}
 		}
 	} else {

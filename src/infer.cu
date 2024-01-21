@@ -144,9 +144,7 @@ __global__ static void kernel_embed(float* o, uint32_t* weight, int token, int n
 	assert(i < n);
 
 	uint32_t wg = weight[token * n / 8 + i / 8];
-	float wgs = -fp8_e5m2_ff(wg & 0xff) / 4.f;
-
-	o[i] = (int((wg >> (8 + (i % 8) * 3)) & 7) - 4) * wgs;
+	o[i] = gf4_ff(wg, i % 8);
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
