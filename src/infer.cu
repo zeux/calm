@@ -319,9 +319,8 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 
 	float val = matmul_warppar(x, w, i, n, n);
 
-	extern __shared__ float ws[];
+	__shared__ float ws[32];
 	ws[i] = val;
-
 	__syncthreads();
 
 	if (threadIdx.x == 0) {
@@ -632,7 +631,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			assert(p->n_experts <= 32);
 			float* moe_weights = s->xa;
 			int* moe_experts = (int*)s->xa + p->n_experts_ac;
-			kernel_moe_gate<<<1, 32 * p->n_experts, p->n_experts * sizeof(float), stream>>>(moe_weights, moe_experts, s->xb, (T*)w->moegate[l], dim, p->n_experts, p->n_experts_ac);
+			kernel_moe_gate<<<1, 32 * p->n_experts, 0, stream>>>(moe_weights, moe_experts, s->xb, (T*)w->moegate[l], dim, p->n_experts, p->n_experts_ac);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) * expert weight + pre-rmsnorm residual
 			kernel_matmul_moe_ffn13_silu<<<hidden_dim, dim3(32, p->n_experts_ac), 0, stream>>>(
