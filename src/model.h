@@ -95,6 +95,7 @@ struct RunState {
 	float* xa;     // buffer for parallel activation accumulation (dim,)
 	float* hb;     // buffer for hidden dimension in the ffn (hidden_dim,)
 	float* hb2;    // buffer for hidden dimension in the ffn (hidden_dim,)
+	float* he;     // buffer for hidden dimension in the ffn (n_experts_ac,hidden_dim,)
 	float* q;      // query (dim,)
 	float* k;      // key (dim,)
 	float* v;      // value (dim,)

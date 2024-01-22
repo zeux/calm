@@ -119,6 +119,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xa = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
+	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->v = (float*)cuda_devicealloc(kv_dim * sizeof(float));
@@ -355,9 +356,11 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 }
 
 template <typename T>
-__global__ static void kernel_matmul_moe_ffn13_silu(uint64_t, float* xout, float* x, T** w1, T** w3, int* moe_experts, int e, int n, int d) {
+__global__ static void kernel_matmul_moe_ffn13_silu(uint64_t, float* xout, float* x, T** w1, T** w3, int* moe_experts, int n, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
+
+	int e = threadIdx.y;
 
 	float v1 = matmul_warppar(x, w1[moe_experts[e]], i, n, n);
 	float v3 = matmul_warppar(x, w3[moe_experts[e]], i, n, n);
@@ -366,19 +369,29 @@ __global__ static void kernel_matmul_moe_ffn13_silu(uint64_t, float* xout, float
 	float val = (v1 / (1.0f + expf(-v1))) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
-		xout[i] = val;
+		xout[i + e * d] = val;
 	}
 }
 
 template <typename T>
-__global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T** w, int* moe_experts, float* moe_weights, int e, int n, int d) {
+__global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T** w, int* moe_experts, float* moe_weights, int n, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
+	int e = threadIdx.y;
+
 	float val = matmul_warppar(x, w[moe_experts[e]], i, n, n);
 
-	if (threadIdx.x % warpSize == 0) {
-		xout[i] += val * moe_weights[e];
+	__shared__ float rs[32];
+	rs[threadIdx.y] = val;
+	__syncthreads();
+
+	if (threadIdx.x == 0 && threadIdx.y == 0) {
+		float acc = 0.f;
+		for (int k = 0; k < blockDim.y; ++k) {
+			acc += rs[k] * moe_weights[k];
+		}
+		xout[i] += acc;
 	}
 }
 
@@ -622,13 +635,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_moe_gate<<<1, 32 * p->n_experts, p->n_experts * sizeof(float), stream>>>(moe_weights, moe_experts, s->xb, (T*)w->moegate[l], dim, p->n_experts, p->n_experts_ac);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) * expert weight + pre-rmsnorm residual
-			for (int e = 0; e < p->n_experts_ac; ++e) {
-				kernel_matmul_moe_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-				    PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T**)w->moewr[l][0], (T**)w->moewr[l][2], moe_experts, e, dim, hidden_dim);
+			kernel_matmul_moe_ffn13_silu<<<hidden_dim, dim3(32, p->n_experts_ac), 0, stream>>>(
+			    PROF_TOKEN(p->n_experts_ac * 2 * hidden_dim * dim * dbits / 8), s->he, s->xb, (T**)w->moewr[l][0], (T**)w->moewr[l][2], moe_experts, dim, hidden_dim);
 
-				kernel_matmul_moe_ffn2<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-				    PROF_TOKEN(dim * hidden_dim * dbits / 8), x, s->hb, (T**)w->moewr[l][1], moe_experts, moe_weights, e, hidden_dim, dim);
-			}
+			kernel_matmul_moe_ffn2<<<dim, dim3(32, p->n_experts_ac), 0, stream>>>(
+			    PROF_TOKEN(p->n_experts_ac * dim * hidden_dim * dbits / 8), x, s->he, (T**)w->moewr[l][1], moe_experts, moe_weights, hidden_dim, dim);
 		} else if (p->arch == Phi) {
 			cudaStream_t mlpstream = parstream ? parstream : stream;
 
