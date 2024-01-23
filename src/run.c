@@ -307,9 +307,8 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 
 		// update ppl and ppl error using standard error of the mean
 		ppl = exp(-sum / den);
-		pplerr = ppl * sqrt((ss - sum * sum / den) / den / den);;
+		pplerr = ppl * sqrt((ss - sum * sum / den) / den / den);
 	}
-
 
 	long end = time_in_ms();
 

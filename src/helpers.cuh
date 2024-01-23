@@ -64,11 +64,11 @@ __device__ inline float4 fp8x4_e5m2_ff(__nv_fp8x4_e5m2 v) {
 
 __device__ inline float fp8_e5m2_ff(uint8_t v) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
-    __half_raw h = __nv_cvt_fp8_to_halfraw(v, __NV_E5M2);
+	__half_raw h = __nv_cvt_fp8_to_halfraw(v, __NV_E5M2);
 #else
-    __half_raw h = {(unsigned short)(v << 8)};
+	__half_raw h = {(unsigned short)(v << 8)};
 #endif
-    return __internal_halfraw_to_float(h);
+	return __internal_halfraw_to_float(h);
 }
 
 // gf4 decoding: 8 3-bit values + 1 fp8 scale are packed in a 32-bit word
