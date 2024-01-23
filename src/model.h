@@ -100,6 +100,7 @@ struct RunState {
 	float* k;      // key (dim,)
 	float* v;      // value (dim,)
 	float* att;    // buffer for scores/attention values (n_heads, seq_len)
+	float* exp;    // buffer for MoE computations (n_experts + n_experts_ac * 2)
 	float* logits; // output logits
 	// kv cache
 	kvtype_t* key_cache;   // (layer, seq_len, dim)

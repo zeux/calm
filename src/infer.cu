@@ -124,6 +124,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->v = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
+	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
 
 	state->key_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
 	state->value_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
@@ -629,8 +630,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 			// moe gate
 			assert(p->n_experts <= 32);
-			float* moe_weights = s->xa;
-			int* moe_experts = (int*)s->xa + p->n_experts_ac;
+			float* moe_weights = s->exp + p->n_experts;
+			int* moe_experts = (int*)moe_weights + p->n_experts_ac;
 			kernel_moe_gate<<<1, 32 * p->n_experts, 0, stream>>>(moe_weights, moe_experts, s->xb, (T*)w->moegate[l], dim, p->n_experts, p->n_experts_ac);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) * expert weight + pre-rmsnorm residual

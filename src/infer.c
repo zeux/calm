@@ -159,6 +159,7 @@ void prepare(struct Transformer* transformer) {
 	s->k = calloc(kv_dim, sizeof(float));
 	s->v = calloc(kv_dim, sizeof(float));
 	s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
+	s->exp = calloc(p->n_experts + p->n_experts_ac * 2, sizeof(float));
 	s->logits = calloc(p->vocab_size, sizeof(float));
 	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
 	s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
@@ -416,11 +417,10 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim);
 
 			// moe gate
-			// TODO: we're using att as a temporary storage, hacky
-			float* moe_weights = s->att + p->n_experts;
+			float* moe_weights = s->exp + p->n_experts;
 			int* moe_experts = (int*)moe_weights + p->n_experts_ac;
-			matmul(s->att, s->xb, w->moegate[l], NULL, dim, p->n_experts);
-			moe_gate(moe_weights, moe_experts, s->att, p->n_experts, p->n_experts_ac);
+			matmul(s->exp, s->xb, w->moegate[l], NULL, dim, p->n_experts);
+			moe_gate(moe_weights, moe_experts, s->exp, p->n_experts, p->n_experts_ac);
 
 			// mix self.w2(F.silu(self.w1(x)) * self.w3(x))
 			for (int e = 0; e < p->n_experts_ac; ++e) {
