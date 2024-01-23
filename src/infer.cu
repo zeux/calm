@@ -379,7 +379,7 @@ __global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T
 
 	int e = threadIdx.y;
 
-	float val = matmul_warppar(x, w[moe_experts[e]], i, n, n);
+	float val = matmul_warppar(x + e * n, w[moe_experts[e]], i, n, n);
 
 	__shared__ float rs[32];
 	rs[threadIdx.y] = val;
