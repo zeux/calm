@@ -26,10 +26,8 @@ void* upload_cuda(void* host, size_t size);
 void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 
-void build_transformer(struct Config* config, struct Weights* weights, struct Tensors* tensors, int context) {
-	// create config
+void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* arch = tensors_metadata(tensors, "arch");
-	const char* dtype = tensors_metadata(tensors, "dtype");
 
 	config->arch = strcmp(arch, "mixtral") == 0 ? Mixtral : strcmp(arch, "phi") == 0 ? Phi : strcmp(arch, "qwen") == 0 ? Qwen : LlamaLike;
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
@@ -54,10 +52,13 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 		config->n_experts = atoi(tensors_metadata(tensors, "n_experts"));
 		config->n_experts_ac = atoi(tensors_metadata(tensors, "n_experts_active"));
 	}
+}
+
+void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
+	const char* dtype = tensors_metadata(tensors, "dtype");
 
 	int head_size = config->dim / config->n_heads;
 
-	// get tensor data
 	enum DType wtype = strcmp(dtype, "gf4") == 0 ? dt_i32 : strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16;
 	int gsize =  strcmp(dtype, "gf4") == 0 ? 8 : 1;
 
@@ -414,22 +415,9 @@ int main(int argc, char* argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
-#ifdef __linux__
-	// upload tensors to the GPU
-	if (cuda) {
-		int i;
-		for (i = 0; i < tensors.n_tensors; ++i) {
-			struct Tensor* tensor = &tensors.tensors[i];
-			if (strncmp(tensor->name, "model.", 6) == 0) {
-				tensor->data = upload_cuda(tensor->data, tensor->size);
-			}
-		}
-	}
-#endif
-
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
-	build_transformer(&transformer.config, &transformer.weights, &tensors, context);
+	get_config(&transformer.config, &tensors, context);
 	count_params(&tensors, "model.", &transformer.n_params, &transformer.n_bytes, ".experts.", &transformer.n_bandwidth);
 	if (transformer.config.arch == Mixtral) {
 		transformer.n_bandwidth = (transformer.n_bytes - transformer.n_bandwidth) +
@@ -444,6 +432,21 @@ int main(int argc, char* argv[]) {
 	       (double)transformer.n_bytes * 8 / (double)transformer.n_params,
 	       transformer.config.seq_len,
 	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
+
+#ifdef __linux__
+	// upload tensors to the GPU
+	if (cuda) {
+		int i;
+		for (i = 0; i < tensors.n_tensors; ++i) {
+			struct Tensor* tensor = &tensors.tensors[i];
+			if (strncmp(tensor->name, "model.", 6) == 0) {
+				tensor->data = upload_cuda(tensor->data, tensor->size);
+			}
+		}
+	}
+#endif
+
+	get_weights(&transformer.config, &transformer.weights, &tensors);
 
 #ifdef __linux__
 	if (cuda) {
