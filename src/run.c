@@ -403,7 +403,7 @@ int main(int argc, char* argv[]) {
 	// read .safetensors model
 	struct Tensors tensors = {};
 	if (tensors_open(&tensors, checkpoint_path) != 0) {
-		fprintf(stderr, "failed to open tensors\n");
+		fprintf(stderr, "failed to open %s\n", checkpoint_path);
 		exit(EXIT_FAILURE);
 	}
 
