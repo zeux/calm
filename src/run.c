@@ -31,7 +31,7 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 	const char* arch = tensors_metadata(tensors, "arch");
 	const char* dtype = tensors_metadata(tensors, "dtype");
 
-	config->arch = strcmp(arch, "mixtral") == 0 ? Mixtral : strcmp(arch, "phi") == 0 ? Phi : LlamaLike;
+	config->arch = strcmp(arch, "mixtral") == 0 ? Mixtral : strcmp(arch, "phi") == 0 ? Phi : strcmp(arch, "qwen") == 0 ? Qwen : LlamaLike;
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
 	config->n_layers = atoi(tensors_metadata(tensors, "n_layers"));
@@ -98,7 +98,7 @@ void build_transformer(struct Config* config, struct Weights* weights, struct Te
 				weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 			}
 
-			if (config->arch == Phi || (arch && strcmp(arch, "qwen") == 0)) {
+			if (config->arch == Phi || config->arch == Qwen) {
 				weights->bq[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wq.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 				weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
 				weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});

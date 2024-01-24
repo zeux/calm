@@ -24,6 +24,7 @@ typedef short kvtype_t;
 
 enum Arch {
 	LlamaLike,
+	Qwen,
 	Phi,
 	Mixtral,
 };
