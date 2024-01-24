@@ -1,5 +1,6 @@
 #include "sampler.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -50,15 +51,27 @@ static int sample_argmax(float* probabilities, int n) {
 	return max_i;
 }
 
-static int sample_cutoff(float* probabilities, int n, float cutoff, float coin) {
+static int sample_minp(float* logits, int n, float minp, float temperature, float coin) {
+	// find max logit; we will use this to derive minp cutoff (in log space), since minp is scale-invariant (wrt softmax)
+	float max_logit = -FLT_MAX;
+	for (int i = 0; i < n; i++) {
+		max_logit = logits[i] > max_logit ? logits[i] : max_logit;
+	}
+
+	// exp(logit / temp) <= exp(max_logit / temp) * minp -> logit <= max_logit + log(minp) * temp
+	float logit_cutoff = max_logit + logf(minp) * temperature;
+
+	// convert from logits to probabilities in-place while simultaneously doing (unscaled) softmax; we'll rescale later
+	float* probs = logits;
 	int fallback = 0;
 	float cumulative_prob = 0.0f;
 	for (int i = 0; i < n; i++) {
-		if (probabilities[i] >= cutoff) {
-			cumulative_prob += probabilities[i];
+		if (logits[i] >= logit_cutoff) {
+			probs[i] = expf((logits[i] - max_logit) / temperature);
+			cumulative_prob += probs[i];
 			fallback = i; // for fallback due to rounding errors
 		} else {
-			probabilities[i] = 0.0f;
+			probs[i] = 0.0f;
 		}
 	}
 
@@ -66,7 +79,7 @@ static int sample_cutoff(float* probabilities, int n, float cutoff, float coin) 
 	float r = coin * cumulative_prob;
 	float cdf = 0.0f;
 	for (int i = 0; i < n; i++) {
-		cdf += probabilities[i];
+		cdf += probs[i];
 		if (r < cdf) {
 			return i;
 		}
@@ -79,11 +92,8 @@ int sample(struct Sampler* sampler, float* logits) {
 		// greedy argmax sampling: take the token with the highest probability
 		return sample_argmax(logits, sampler->vocab_size);
 	} else {
-		// apply softmax to the logits to get the probabilities for next token
-		float maxp = sample_softmax(logits, sampler->vocab_size, 1.0f / sampler->temperature);
-		// flip a (float) coin (this is our source of entropy for sampling)
 		float coin = random_f32(&sampler->rng_state);
 		// min-p (cutoff) sampling, clamping the least likely tokens to zero
-		return sample_cutoff(logits, sampler->vocab_size, sampler->minp * maxp, coin);
+		return sample_minp(logits, sampler->vocab_size, sampler->minp, sampler->temperature, coin);
 	}
 }
