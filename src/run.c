@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,7 @@
 void prepare(struct Transformer* transformer);
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags);
 
+void* upload_cuda(void* host, size_t size);
 void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 
@@ -400,12 +402,30 @@ int main(int argc, char* argv[]) {
 		prompt = input;
 	}
 
+#ifdef __linux__
+	char* cpu = getenv("CALM_CPU");
+	bool cuda = !cpu || atoi(cpu) == 0;
+#endif
+
 	// read .safetensors model
 	struct Tensors tensors = {};
 	if (tensors_open(&tensors, checkpoint_path) != 0) {
 		fprintf(stderr, "failed to open %s\n", checkpoint_path);
 		exit(EXIT_FAILURE);
 	}
+
+#ifdef __linux__
+	// upload tensors to the GPU
+	if (cuda) {
+		int i;
+		for (i = 0; i < tensors.n_tensors; ++i) {
+			struct Tensor* tensor = &tensors.tensors[i];
+			if (strncmp(tensor->name, "model.", 6) == 0) {
+				tensor->data = upload_cuda(tensor->data, tensor->size);
+			}
+		}
+	}
+#endif
 
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
@@ -426,8 +446,7 @@ int main(int argc, char* argv[]) {
 	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
 
 #ifdef __linux__
-	char* cpu = getenv("CALM_CPU");
-	if (!cpu || atoi(cpu) == 0) {
+	if (cuda) {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
 	}

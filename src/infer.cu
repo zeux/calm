@@ -44,6 +44,10 @@ static void* cuda_hostalloc(size_t size) {
 	return ptr;
 }
 
+extern "C" void* upload_cuda(void* host, size_t size) {
+	return cuda_devicecopy(host, size);
+}
+
 extern "C" void prepare_cuda(struct Transformer* transformer) {
 	struct Config* config = &transformer->config;
 	struct Weights* weights = &transformer->weights;
@@ -67,52 +71,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
-	size_t dbits = weights->dbits; // size_t prevents integer overflow in multiplications below
 
-	for (int l = 0; l < config->n_layers; ++l) {
-		weights->rms_att_weight[l] = (float*)cuda_devicecopy(weights->rms_att_weight[l], dim * sizeof(float));
-		weights->rms_ffn_weight[l] = (float*)cuda_devicecopy(weights->rms_ffn_weight[l], dim * sizeof(float));
-		weights->ln_weight[l] = (float*)cuda_devicecopy(weights->ln_weight[l], dim * sizeof(float));
-		weights->ln_bias[l] = (float*)cuda_devicecopy(weights->ln_bias[l], dim * sizeof(float));
-
-		weights->wq[l] = cuda_devicecopy(weights->wq[l], dim * dim * dbits / 8);
-		weights->wk[l] = cuda_devicecopy(weights->wk[l], dim * kv_dim * dbits / 8);
-		weights->wv[l] = cuda_devicecopy(weights->wv[l], dim * kv_dim * dbits / 8);
-		weights->wo[l] = cuda_devicecopy(weights->wo[l], dim * dim * dbits / 8);
-
-		weights->w1[l] = cuda_devicecopy(weights->w1[l], dim * hidden_dim * dbits / 8);
-		weights->w2[l] = cuda_devicecopy(weights->w2[l], dim * hidden_dim * dbits / 8);
-		weights->w3[l] = cuda_devicecopy(weights->w3[l], dim * hidden_dim * dbits / 8);
-
-		weights->bq[l] = (float*)cuda_devicecopy(weights->bq[l], dim * sizeof(float));
-		weights->bk[l] = (float*)cuda_devicecopy(weights->bk[l], kv_dim * sizeof(float));
-		weights->bv[l] = (float*)cuda_devicecopy(weights->bv[l], kv_dim * sizeof(float));
-		weights->bo[l] = (float*)cuda_devicecopy(weights->bo[l], dim * sizeof(float));
-
-		weights->b1[l] = (float*)cuda_devicecopy(weights->b1[l], hidden_dim * sizeof(float));
-		weights->b2[l] = (float*)cuda_devicecopy(weights->b2[l], dim * sizeof(float));
-
-		weights->moegate[l] = cuda_devicecopy(weights->moegate[l], dim * config->n_experts * dbits / 8);
-
-		for (int e = 0; e < config->n_experts; ++e) {
-			weights->moew1[l][e] = cuda_devicecopy(weights->moew1[l][e], dim * hidden_dim * dbits / 8);
-			weights->moew2[l][e] = cuda_devicecopy(weights->moew2[l][e], dim * hidden_dim * dbits / 8);
-			weights->moew3[l][e] = cuda_devicecopy(weights->moew3[l][e], dim * hidden_dim * dbits / 8);
-		}
-
-		if (config->n_experts) {
+	if (config->n_experts) {
+		for (int l = 0; l < config->n_layers; ++l) {
 			weights->moewr[l][0] = (void**)cuda_devicecopy(weights->moew1[l], config->n_experts * sizeof(void*));
 			weights->moewr[l][1] = (void**)cuda_devicecopy(weights->moew2[l], config->n_experts * sizeof(void*));
 			weights->moewr[l][2] = (void**)cuda_devicecopy(weights->moew3[l], config->n_experts * sizeof(void*));
 		}
 	}
-
-	weights->rms_final_weight = (float*)cuda_devicecopy(weights->rms_final_weight, dim * sizeof(float));
-	weights->ln_final_weight = (float*)cuda_devicecopy(weights->ln_final_weight, dim * sizeof(float));
-	weights->ln_final_bias = (float*)cuda_devicecopy(weights->ln_final_bias, dim * sizeof(float));
-	weights->token_embedding_table = cuda_devicecopy(weights->token_embedding_table, config->vocab_size * dim * (size_t)dbits / 8);
-	weights->wcls = cuda_devicecopy(weights->wcls, dim * config->vocab_size * (size_t)dbits / 8);
-	weights->bcls = (float*)cuda_devicecopy(weights->bcls, config->vocab_size * sizeof(float));
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
