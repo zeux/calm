@@ -38,15 +38,12 @@ float sample_softmax(float* x, int size, float scale) {
 	return 1.0f / sum;
 }
 
-static int sample_argmax(float* probabilities, int n) {
-	// return the index that has the highest probability
-	int max_i = 0;
-	float max_p = probabilities[0];
-	for (int i = 1; i < n; i++) {
-		if (probabilities[i] > max_p) {
-			max_i = i;
-			max_p = probabilities[i];
-		}
+static int sample_argmax(float* logits, int n) {
+	int max_i = -1;
+	float max_p = -FLT_MAX;
+	for (int i = 0; i < n; i++) {
+		max_i = logits[i] > max_p ? i : max_i;
+		max_p = logits[i] > max_p ? logits[i] : max_p;
 	}
 	return max_i;
 }
