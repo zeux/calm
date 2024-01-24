@@ -8,6 +8,6 @@ struct Sampler {
 	float minp;
 };
 
-float sample_softmax(float* x, int size, float scale);
+float sample_prob(int idx, float* logits, int size);
 
 int sample(struct Sampler* sampler, float* logits);

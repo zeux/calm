@@ -16,26 +16,19 @@ static float random_f32(unsigned long long* state) { // random float32 in [0,1)
 	return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-float sample_softmax(float* x, int size, float scale) {
+float sample_prob(int idx, float* logits, int size) {
 	// find max value (for numerical stability)
-	float max_val = x[0];
-	for (int i = 1; i < size; i++) {
-		if (x[i] > max_val) {
-			max_val = x[i];
-		}
+	float max_val = -FLT_MAX;
+	for (int i = 0; i < size; i++) {
+		max_val = logits[i] > max_val ? logits[i] : max_val;
 	}
 	// exp and sum
 	float sum = 0.0f;
 	for (int i = 0; i < size; i++) {
-		x[i] = expf((x[i] - max_val) * scale);
-		sum += x[i];
+		sum += expf(logits[i] - max_val);
 	}
-	// normalize
-	for (int i = 0; i < size; i++) {
-		x[i] /= sum;
-	}
-	// return max value (post-softmax)
-	return 1.0f / sum;
+	// return probability of the given index
+	return expf(logits[idx] - max_val) / sum;
 }
 
 static int sample_argmax(float* logits, int n) {
