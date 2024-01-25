@@ -75,6 +75,8 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Llama2 7B (4096), fp16 | 67 tok/s (905 GB/s) | 58 tok/s (910 GB/s) |
 | Llama2 7B (4096), fp8 | 126 tok/s (850 GB/s) | 98 tok/s (870 GB/s) |
 | Llama2 7B (4096), gf4 | 222 tok/s (750 GB/s) | 148 tok/s (815 GB/s) |
+| Llama2 13B (4096), fp8 | 67 tok/s (879 GB/s) | 54 tok/s (895 GB/s) |
+| Llama2 13B (4096), gf4 | 123 tok/s (802 GB/s) | 86 tok/s (847 GB/s) |
 | Mistral 7B (4096), fp16 | 63 tok/s (914 GB/s) | 61 tok/s (914 GB/s) |
 | Mistral 7B (4096), fp8 | 119 tok/s (865 GB/s) | 111 tok/s (869 GB/s) |
 | Mistral 7B (4096), gf4 | 214 tok/s (778 GB/s) | 190 tok/s (790 GB/s) |
@@ -82,6 +84,7 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Phi 2.7B (2048), fp8 | 313 tok/s (874 GB/s) | 256 tok/s (881 GB/s) |
 | Phi 2.7B (2048), gf4 | 551 tok/s (771 GB/s) | 395 tok/s (811 GB/s) |
 | Mixtral 8x7B (4096), gf4 | 125 tok/s (805 GB/s) | 116 tok/s (813 GB/s) |
+| Yi 34B (4096), gf4 | 49 tok/s (846 GB/s) | 46 tok/s (837 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
