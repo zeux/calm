@@ -22,6 +22,14 @@ __device__ inline float warpreduce_max(float v) {
 	return v;
 }
 
+__device__ inline int warpreduce_maxi(int v) {
+#pragma unroll
+	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
+		v = max(v, __shfl_xor_sync(0xffffffff, v, mask));
+	}
+	return v;
+}
+
 __device__ inline float blocktranspose(float v, float def) {
 	int lane = threadIdx.x % warpSize;
 	int warp = threadIdx.x / warpSize;

@@ -287,33 +287,38 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 	ws[i] = val;
 	__syncthreads();
 
-	if (threadIdx.x == 0) {
-		// softmax across experts
-		float max_val = -FLT_MAX;
-		for (int j = 0; j < experts; ++j) {
-			max_val = max(max_val, ws[j]);
-		}
+	// warp-parallel top expert selection within the first warp
+	if (threadIdx.x < warpSize) {
+		i = threadIdx.x;
 
-		// top k
-		uint32_t mask = 0;
-		float wsum = 0.0f;
+		// (unscaled) softmax across experts
+		float w = (i < experts) ? ws[i] : -FLT_MAX;
+		float max_val = warpreduce_max(w);
+		w = expf(w - max_val);
+
+		// weight in top 24 bits, index in bottom 8
+		int wi = (*(int*)&w & 0xffffff00) | i;
+
+		// top k within warp
+		float sumw = 0.f;
+		int acti = -1;
 
 		for (int k = 0; k < active; ++k) {
-			int best = -1;
-			for (int j = 0; j < experts; ++j) {
-				if ((mask & (1u << j)) == 0 && (best == -1 || ws[j] > ws[best])) {
-					best = j;
-				}
-			}
+			int maxi = warpreduce_maxi(wi);
 
-			moe_experts[k] = best;
-			wsum += expf(ws[best] - max_val);
-			mask |= 1u << best;
+			sumw += *(float*)&maxi;
+
+			// keeps top weight in thread k, clears weight for thread with max thread to avoid re-selection
+			acti = (i == k) ? maxi : acti;
+			wi = (wi == maxi) ? 0 : wi;
 		}
 
-		// top k weights, normalized
-		for (int k = 0; k < active; ++k) {
-			moe_weights[k] = expf(ws[moe_experts[k]] - max_val) / wsum;
+		// write normalized weights
+		if (i < active) {
+			assert(acti >= 0);
+
+			moe_experts[i] = acti & 0xff;
+			moe_weights[i] = *(float*)&acti / sumw;
 		}
 	}
 }
