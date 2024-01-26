@@ -25,7 +25,7 @@ static cudaEvent_t parsync[2];
 static void* cuda_devicecopy(void* host, size_t size) {
 	void* device = NULL;
 	CUDA_CHECK(cudaMalloc(&device, size));
-	CUDA_CHECK(cudaMemcpy(device, host, size, cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpyAsync(device, host, size, cudaMemcpyHostToDevice));
 	return device;
 }
 
