@@ -537,8 +537,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	const int rmsnorm_size = 1024;
 	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
-	// gf4 kernels need a little more parallelism to saturate the GPU
-	const int matmul_par = w->dbits == 4 ? 2 : 1;
+	// gf4 kernels need a little more parallelism to saturate 4090
+	// fp8 kernels work well with 1 on 4090, but H100 benefits from 2
+	const int matmul_par = w->dbits <= 8 ? 2 : 1;
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
