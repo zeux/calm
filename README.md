@@ -83,7 +83,7 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Phi 2.7B (2048), fp16 | 167 tok/s (932 GB/s) | 149 tok/s (930 GB/s) |
 | Phi 2.7B (2048), fp8 | 313 tok/s (874 GB/s) | 256 tok/s (881 GB/s) |
 | Phi 2.7B (2048), gf4 | 551 tok/s (771 GB/s) | 395 tok/s (811 GB/s) |
-| Mixtral 8x7B (4096), gf4 | 125 tok/s (805 GB/s) | 116 tok/s (813 GB/s) |
+| Mixtral 8x7B (4096), gf4 | 127 tok/s (820 GB/s) | 118 tok/s (822 GB/s) |
 | Yi 34B (4096), gf4 | 49 tok/s (846 GB/s) | 46 tok/s (837 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
