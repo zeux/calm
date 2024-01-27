@@ -70,7 +70,7 @@ Auto-regressive prediction for a single sequence needs to read the entire model 
 
 When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts and 4000 for 4096 contexts):
 
-| Model (context)     | Performance (first 32 tokens) | Performance (last 32 tokens) |
+| Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
 | ----------- | ----------- | ----------- |
 | Llama2 7B (4096), fp16 | 67 tok/s (905 GB/s) | 58 tok/s (910 GB/s) |
 | Llama2 7B (4096), fp8 | 126 tok/s (850 GB/s) | 98 tok/s (870 GB/s) |
