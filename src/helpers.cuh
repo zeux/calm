@@ -55,6 +55,15 @@ __device__ inline float blockreduce_max(float v) {
 	return v;
 }
 
+__device__ inline void atomicMax(float* ptr, float v) {
+	int bits = __float_as_int(v);
+	if (bits >= 0) {
+		atomicMax((int*)ptr, bits);
+	} else {
+		atomicMin((unsigned*)ptr, bits);
+	}
+}
+
 // fast fp8x4 => float4 conversion; drops unnecessary NaN handling from __nv_cvt_fp8_to_halfraw
 __device__ inline float4 fp8x4_e5m2_ff(__nv_fp8x4_e5m2 v) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
