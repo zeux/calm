@@ -84,8 +84,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
-	state->k = (float*)cuda_devicealloc(kv_dim * sizeof(float));
-	state->v = (float*)cuda_devicealloc(kv_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
 	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
 
@@ -194,11 +192,37 @@ __global__ static void kernel_matmul_cls(uint64_t, float* xout, float* x, T* w, 
 }
 
 template <typename T>
-__global__ static void kernel_matmul_qkv(uint64_t, float* qout, float* kout, float* vout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd) {
+__global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd,
+                                              kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int seq_len, int rotary_dim) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
-	assert(i < d + kvd * 2);
+	assert(i < d + kvd * 2 + kv_sink * kvd);
 
-	float* out = i < d ? qout : (i < d + kvd ? kout : vout);
+	int j_head = i % head_size; // TODO: optimize when head_size is a power of two
+	float freq = j_head >= rotary_dim ? 0.f : exp2f(-theta_log2 * (float)j_head / (float)rotary_dim);
+	float fcr, fci;
+	sincosf(pos * freq, &fci, &fcr);
+
+	if (i >= d + kvd * 2) {
+		int j = i - (d + kvd * 2);
+
+		// rotate sink tokens forward to keep pace with non-sink tokens
+		// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
+		int t = j / kvd;
+		int o = t * 2 + seq_len * (j % kvd);
+
+		float k0 = kb[o];
+		float k1 = kb[o + 1];
+
+		sincosf(freq, &fci, &fcr);
+
+		float rk0 = k0 * fcr - k1 * fci;
+		float rk1 = k0 * fci + k1 * fcr;
+
+		kb[o] = rk0;
+		kb[o + 1] = rk1;
+		return;
+	}
+
 	T* w = i < d ? wq : (i < d + kvd ? wk : wv);
 	float* b = i < d ? bq : (i < d + kvd ? bk : bv);
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
@@ -209,8 +233,39 @@ __global__ static void kernel_matmul_qkv(uint64_t, float* qout, float* kout, flo
 		val += b[j];
 	}
 
-	if (threadIdx.x % warpSize == 0) {
-		out[j] = val;
+	__shared__ float vs[2];
+	vs[threadIdx.x / warpSize] = val;
+	__syncthreads();
+
+	if (threadIdx.x == 0) {
+		if (i < d) {
+			// q
+			float q0 = vs[0];
+			float q1 = vs[1];
+			float rq0 = q0 * fcr - q1 * fci;
+			float rq1 = q0 * fci + q1 * fcr;
+
+			qout[j] = rq0;
+			qout[j + 1] = rq1;
+		} else if (i < d + kvd) {
+			// k
+			float k0 = vs[0];
+			float k1 = vs[1];
+			float rk0 = k0 * fcr - k1 * fci;
+			float rk1 = k0 * fci + k1 * fcr;
+
+			// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
+			kb[kv_pos * 2 + 0 + seq_len * j] = rk0;
+			kb[kv_pos * 2 + 1 + seq_len * j] = rk1;
+		} else {
+			// v
+			float v0 = vs[0];
+			float v1 = vs[1];
+
+			// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
+			vb[kv_pos + seq_len * (j + 0)] = v0;
+			vb[kv_pos + seq_len * (j + 1)] = v1;
+		}
 	}
 }
 
@@ -363,60 +418,6 @@ __global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T
 	}
 }
 
-__global__ static void kernel_rope_qkv(float* q, float* k, float* v, kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int d, int kvd, int seq_len, int rotary_dim) {
-	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-	assert(i < d + kvd + kv_sink * kvd);
-
-	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
-
-	int j_head = j % head_size; // TODO: optimize when head_size is a power of two
-	float freq = j_head >= rotary_dim ? 0.f : exp2f(-theta_log2 * (float)j_head / (float)rotary_dim);
-	float fcr, fci;
-	sincosf(pos * freq, &fci, &fcr);
-
-	if (i < d) {
-		float q0 = q[j];
-		float q1 = q[j + 1];
-		float rq0 = q0 * fcr - q1 * fci;
-		float rq1 = q0 * fci + q1 * fcr;
-
-		q[j] = rq0;
-		q[j + 1] = rq1;
-	} else if (i < d + kvd) {
-		float k0 = k[j];
-		float k1 = k[j + 1];
-		float rk0 = k0 * fcr - k1 * fci;
-		float rk1 = k0 * fci + k1 * fcr;
-
-		float v0 = v[j];
-		float v1 = v[j + 1];
-
-		// update kvcache key/value
-		// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
-		// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
-		kb[kv_pos * 2 + 0 + seq_len * j] = rk0;
-		kb[kv_pos * 2 + 1 + seq_len * j] = rk1;
-		vb[kv_pos + seq_len * (j + 0)] = v0;
-		vb[kv_pos + seq_len * (j + 1)] = v1;
-	} else {
-		// rotate sink tokens forward to keep pace with non-sink tokens
-		// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
-		int t = j / kvd;
-		int o = t * 2 + seq_len * (j % kvd);
-
-		float k0 = kb[o];
-		float k1 = kb[o + 1];
-
-		sincosf(freq, &fci, &fcr);
-
-		float rk0 = k0 * fcr - k1 * fci;
-		float rk1 = k0 * fci + k1 * fcr;
-
-		kb[o] = rk0;
-		kb[o + 1] = rk1;
-	}
-}
-
 __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= kv_len) {
@@ -563,13 +564,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim);
 		}
 
-		// qkv matmuls for this position
-		kernel_matmul_qkv<<<(dim + kv_dim * 2) / matmul_par, 32 * matmul_par, 0, stream>>>(
-		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->k, s->v, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim);
-
-		// RoPE relative positional encoding: complex-valued rotate q and k in each head, and update kv cache
-		assert(dim % 64 == 0 && kv_dim % 64 == 0);
-		kernel_rope_qkv<<<(dim + kv_dim + kv_dim * kv_sink) / 64, 32, 0, stream>>>(s->q, s->k, s->v, s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), dim, kv_dim, p->seq_len, p->rotary_dim);
+		// qkv matmuls for this position + RoPE encoding + update KV cache
+		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
+			PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
+			s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 
 		// only update kv cache and don't output logits
 		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
