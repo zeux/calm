@@ -539,8 +539,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
 	// gf4 kernels need a little more parallelism to saturate 4090
-	// fp8/fp16 kernels work well with 1 on 4090, but H100 benefits from 2
+	// fp8/fp16 kernels work well with 1 on 4090, but A100/H100 benefits from 2
 	const int matmul_par = 2;
+
+	// A100/H100 need higher parallelism for attention kernels
+	const int attn_par = 2;
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
@@ -577,14 +580,14 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(kvtype_t);
 
 		// attention scores for all heads
-		kernel_attn_score<<<dim3((kv_len + 31) / 32, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
+		kernel_attn_score<<<dim3((kv_len + 32 * attn_par - 1) / (32 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
 		    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
+		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
 		    PROF_TOKEN(kvbw), s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
