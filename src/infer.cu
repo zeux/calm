@@ -479,7 +479,7 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 }
 
 __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
-	int i = blockIdx.x;
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < head_size);
 
 	int kvh = blockIdx.y;
@@ -492,20 +492,20 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 	kvtype_t* val = vh + i * seq_len;
 
 	float res = 0.0f;
-	for (int t = threadIdx.x * 2; t < kv_len - 1; t += warpSize * 2) {
+	for (int t = (threadIdx.x % warpSize) * 2; t < kv_len - 1; t += warpSize * 2) {
 		float2 vv = __half22float2(*((half2*)&val[t]));
 		float2 aa = *(float2*)&atth[t];
 		res += vv.x * aa.x;
 		res += vv.y * aa.y;
 	}
 
-	if (kv_len % 2 == 1 && threadIdx.x == 0) {
+	if (kv_len % 2 == 1 && threadIdx.x % warpSize == 0) {
 		res += atth[kv_len - 1] * float(val[kv_len - 1]);
 	}
 
 	res = warpreduce_sum(res);
 
-	if (threadIdx.x == 0) {
+	if (threadIdx.x % warpSize == 0) {
 		xout[h * head_size + i] = res;
 	}
 }
