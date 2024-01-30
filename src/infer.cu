@@ -85,7 +85,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
-	state->attmax = (float*)cuda_devicealloc(config->n_layers * config->n_heads * sizeof(float));
 	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
 
 	state->key_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
@@ -96,27 +95,19 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 }
 
 template <typename T>
-__global__ static void kernel_embed(float* o, T* weight, int token, int n, float* attmax, int attmaxn) {
+__global__ static void kernel_embed(float* o, T* weight, int token, int n) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < n);
 
 	o[i] = float(weight[token * n + i]);
-
-	if (i < attmaxn) {
-		attmax[i] = -FLT_MAX;
-	}
 }
 
-__global__ static void kernel_embed(float* o, uint32_t* weight, int token, int n, float* attmax, int attmaxn) {
+__global__ static void kernel_embed(float* o, uint32_t* weight, int token, int n) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < n);
 
 	uint32_t wg = weight[token * n / 8 + i / 8];
 	o[i] = gf4_ff(wg, i % 8);
-
-	if (i < attmaxn) {
-		attmax[i] = -FLT_MAX;
-	}
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
@@ -427,43 +418,67 @@ __global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T
 	}
 }
 
-__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, float* attmax, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+	int t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= kv_len) {
+		return;
+	}
+
 	int kvh = blockIdx.y;
 	assert(kvh < n_kv_heads);
 
 	int h = kvh * kv_mul + threadIdx.y;
 
-	int t = blockIdx.x * blockDim.x + threadIdx.x;
+	float* qh = qb + h * head_size;
+	kvtype_t* kh = kb + kvh * head_size * seq_len;
+	float* atth = attb + h * seq_len;
 
 	float score = 0.0f;
-
-	if (t >= kv_len) {
-		score = -FLT_MAX;
-	} else {
-		float* qh = qb + h * head_size;
-		kvtype_t* kh = kb + kvh * head_size * seq_len;
-		float* atth = attb + h * seq_len;
-
-		for (int j = 0; j < head_size; j += 2) {
-			float2 kk = __half22float2(*((half2*)&kh[j * seq_len + t * 2]));
-			float2 qq = *(float2*)&qh[j];
-			score += kk.x * qq.x;
-			score += kk.y * qq.y;
-		}
-
-		score /= sqrtf(head_size);
-
-		atth[t] = score;
+	for (int j = 0; j < head_size; j += 2) {
+		float2 kk = __half22float2(*((half2*)&kh[j * seq_len + t * 2]));
+		float2 qq = *(float2*)&qh[j];
+		score += kk.x * qq.x;
+		score += kk.y * qq.y;
 	}
 
-	score = warpreduce_max(score);
+	score /= sqrtf(head_size);
 
-	if (threadIdx.x % warpSize == 0) {
-		atomicMax(&attmax[h], score);
+	atth[t] = score;
+}
+
+__global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int kv_len) {
+	int i = threadIdx.x;
+
+	int h = blockIdx.x;
+	assert(h < n_heads);
+
+	float* atth = attb + h * seq_len;
+
+	// find max value per thread (for numerical stability)
+	float max_val = -FLT_MAX;
+	for (int j = i; j < kv_len; j += blockDim.x) {
+		max_val = max(max_val, atth[j]);
+	}
+
+	// max across threads in block
+	max_val = blockreduce_max(max_val);
+
+	// exp and sum per thread
+	float sum = 0.0f;
+	for (int j = i; j < kv_len; j += blockDim.x) {
+		sum += expf(atth[j] - max_val);
+	}
+
+	// sum across threads in block
+	sum = blockreduce_sum(sum);
+
+	// output normalized values
+	for (int j = i; j < kv_len; j += blockDim.x) {
+		atth[j] = expf(atth[j] - max_val) / sum;
 	}
 }
 
-__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, float* attmax, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int i = blockIdx.x;
 	assert(i < head_size);
 
@@ -476,31 +491,22 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, float
 	kvtype_t* vh = valb + kvh * head_size * seq_len;
 	kvtype_t* val = vh + i * seq_len;
 
-	float attmaxh = attmax[h];
-
 	float res = 0.0f;
-	float sum = 0.0f;
 	for (int t = threadIdx.x * 2; t < kv_len - 1; t += warpSize * 2) {
 		float2 vv = __half22float2(*((half2*)&val[t]));
 		float2 aa = *(float2*)&atth[t];
-		aa.x = expf(aa.x - attmaxh);
-		aa.y = expf(aa.y - attmaxh);
 		res += vv.x * aa.x;
 		res += vv.y * aa.y;
-		sum += aa.x + aa.y;
 	}
 
 	if (kv_len % 2 == 1 && threadIdx.x == 0) {
-		float a = expf(atth[kv_len - 1] - attmaxh);
-		res += a * float(val[kv_len - 1]);
-		sum += a;
+		res += atth[kv_len - 1] * float(val[kv_len - 1]);
 	}
 
 	res = warpreduce_sum(res);
-	sum = warpreduce_sum(sum);
 
 	if (threadIdx.x == 0) {
-		xout[h * head_size + i] = res / sum;
+		xout[h * head_size + i] = res;
 	}
 }
 
@@ -527,9 +533,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 	assert(p->vocab_size % 32 == 0);
 
-	// normalization kernels require maximum possible block size for efficiency
+	// rmsnorm and softmax require a larger-than-warp block size for efficiency
 	const int layernorm_size = 1024;
 	const int rmsnorm_size = 1024;
+	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
 	// gf4 kernels need a little more parallelism to saturate 4090
 	// fp8 kernels work well with 1 on 4090, but H100 benefits from 2
@@ -537,8 +544,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	assert(dim >= p->n_layers + p->n_heads); // we use embed kernel to initialize attmax for all layers
-	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim, s->attmax, p->n_layers * p->n_heads);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
@@ -571,13 +577,15 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(kvtype_t);
 
 		// attention scores for all heads
-		float* attmax = s->attmax + l * p->n_heads;
 		kernel_attn_score<<<dim3((kv_len + 31) / 32, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, attmax, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+
+		// softmax the scores to get attention weights over [0..kv_len)
+		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 		// compute weighted sum of the values into xb2
 		kernel_attn_mix<<<dim3(head_size, p->n_kv_heads), dim3(32, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, attmax, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
