@@ -40,6 +40,7 @@ It has been tested on following models:
   - Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
   - LLaMA Pro 8B (TencentARC/LLaMA-Pro-8B-Instruct)
   - Yi 34B (01-ai/Yi-34B-Chat)
+  - H2O Danube 1.8B (h2oai/h2o-danube-1.8b-chat)
 - Mistral architecture
   - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
   - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
