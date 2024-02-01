@@ -213,16 +213,16 @@ __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T
 		int t = j / kvd;
 		int o = t * 2 + seq_len * (j % kvd);
 
-		float k0 = kb[o];
-		float k1 = kb[o + 1];
+		float k0 = float(kb[o]);
+		float k1 = float(kb[o + 1]);
 
 		sincosf(freq, &fci, &fcr);
 
 		float rk0 = k0 * fcr - k1 * fci;
 		float rk1 = k0 * fci + k1 * fcr;
 
-		kb[o] = rk0;
-		kb[o + 1] = rk1;
+		kb[o] = kvtype_t(rk0);
+		kb[o + 1] = kvtype_t(rk1);
 		return;
 	}
 
@@ -258,16 +258,16 @@ __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T
 			float rk1 = k0 * fci + k1 * fcr;
 
 			// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
-			kb[kv_pos * 2 + 0 + seq_len * j] = rk0;
-			kb[kv_pos * 2 + 1 + seq_len * j] = rk1;
+			kb[kv_pos * 2 + 0 + seq_len * j] = kvtype_t(rk0);
+			kb[kv_pos * 2 + 1 + seq_len * j] = kvtype_t(rk1);
 		} else {
 			// v
 			float v0 = vs[0];
 			float v1 = vs[1];
 
 			// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
-			vb[kv_pos + seq_len * (j + 0)] = v0;
-			vb[kv_pos + seq_len * (j + 1)] = v1;
+			vb[kv_pos + seq_len * (j + 0)] = kvtype_t(v0);
+			vb[kv_pos + seq_len * (j + 1)] = kvtype_t(v1);
 		}
 	}
 }
@@ -421,6 +421,14 @@ __global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T
 	}
 }
 
+__device__ inline float2 attn_load2(half* p) {
+	return __half22float2(*((half2*)p));
+}
+
+__device__ inline float2 attn_load2(__nv_fp8_e5m2* p) {
+	return float2(*(__nv_fp8x2_e5m2*)p);
+}
+
 __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= kv_len) {
@@ -438,7 +446,7 @@ __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtyp
 
 	float score = 0.0f;
 	for (int j = 0; j < head_size; j += 2) {
-		float2 kk = __half22float2(*((half2*)&kh[j * seq_len + t * 2]));
+		float2 kk = attn_load2(&kh[j * seq_len + t * 2]);
 		float2 qq = *(float2*)&qh[j];
 		score += kk.x * qq.x;
 		score += kk.y * qq.y;
@@ -496,7 +504,7 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 
 	float res = 0.0f;
 	for (int t = (threadIdx.x % warpSize) * 2; t < kv_len - 1; t += warpSize * 2) {
-		float2 vv = __half22float2(*((half2*)&val[t]));
+		float2 vv = attn_load2(&val[t]);
 		float2 aa = *(float2*)&atth[t];
 		res += vv.x * aa.x;
 		res += vv.y * aa.y;
