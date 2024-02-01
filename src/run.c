@@ -394,7 +394,7 @@ int main(int argc, char* argv[]) {
 		rng_seed = (unsigned int)time(NULL);
 
 	if (prompt && strcmp(prompt, "-") == 0) {
-		static char input[32768];
+		static char input[65536];
 		size_t input_size = fread(input, 1, sizeof(input) - 1, stdin);
 		input[input_size] = '\0';
 		prompt = input;
