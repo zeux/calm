@@ -215,7 +215,7 @@ def gf4(t):
     gmax = gmax.to(torch.float8_e5m2).to(gmax.dtype)
     # normalize gt; note that gmax may be zero
     gt /= gmax
-    torch.nan_to_num(gt, nan=0, posinf=0, neginf=0, out=gt)
+    torch.nan_to_num(gt, nan=0.0, posinf=0.0, neginf=0.0, out=gt)
     # normalize each group by -max ([-1, 1]) and quantize to [0, 8)
     # note that 8 needs to be clamped to 7 since positive half of the range is shorter
     gtq = (gt.to(torch.float16) * -4 + 4).clamp(0, 7).round().to(torch.int32)
