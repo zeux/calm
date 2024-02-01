@@ -7,6 +7,9 @@
 
 #include "helpers.cuh"
 
+// we only support fp16 kv cache by default
+typedef __half kvtype_t;
+
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -87,8 +90,8 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
 	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
 
-	state->key_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
-	state->value_cache = (kvtype_t*)cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
+	state->key_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
+	state->value_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
 
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
@@ -570,7 +573,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// qkv matmuls for this position + RoPE encoding + update KV cache
 		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
 			PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
-			s->key_cache + loff, s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+			(kvtype_t*)s->key_cache + loff, (kvtype_t*)s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 
 		// only update kv cache and don't output logits
 		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
@@ -581,14 +584,14 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((kv_len + 32 * attn_par - 1) / (32 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->att, s->q, s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->att, s->q, (kvtype_t*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 		// compute weighted sum of the values into xb2
 		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->xb2, s->att, (kvtype_t*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(

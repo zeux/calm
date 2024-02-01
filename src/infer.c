@@ -22,6 +22,9 @@ typedef _Float16 half;
 typedef short half;
 #endif
 
+// we only support fp16 kv cache by default; this can be changed to float with a recompile
+typedef half kvtype_t;
+
 inline half fp82half(unsigned char v) {
 	union {
 		unsigned short u;
@@ -359,6 +362,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		// key and value point to the kv cache
 		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
+		kvtype_t* kb = (kvtype_t*)s->key_cache + loff;
+		kvtype_t* vb = (kvtype_t*)s->value_cache + loff;
 
 		// qkv matmuls for this position
 		matmul(s->q, s->xb, w->wq[l], w->bq[l], dim, dim, dotprod);
@@ -371,20 +376,20 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		// update kv cache
 		for (int i = 0; i < kv_dim; i++) {
-			s->key_cache[loff + kv_pos * kv_dim + i] = s->k[i];
-			s->value_cache[loff + kv_pos * kv_dim + i] = s->v[i];
+			kb[kv_pos * kv_dim + i] = s->k[i];
+			vb[kv_pos * kv_dim + i] = s->v[i];
 		}
 
 		// rotate sink tokens forward to keep pace with non-sink tokens
 		for (int r = 0; r < kv_sink; r++) {
 			for (int i = 0; i < kv_dim; i++) {
-				s->k[i] = s->key_cache[loff + r * kv_dim + i];
+				s->k[i] = kb[r * kv_dim + i];
 			}
 
 			rope(s->k, kv_dim, head_size, 1, p->rope_theta, p->rotary_dim);
 
 			for (int i = 0; i < kv_dim; i++) {
-				s->key_cache[loff + r * kv_dim + i] = s->k[i];
+				kb[r * kv_dim + i] = s->k[i];
 			}
 		}
 
@@ -394,8 +399,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		for (h = 0; h < p->n_heads; h++) {
 			float* qh = s->q + h * head_size;
 			float* atth = s->att + h * p->seq_len;
-			kvtype_t* kh = s->key_cache + loff + (h / kv_mul) * head_size;
-			kvtype_t* vh = s->value_cache + loff + (h / kv_mul) * head_size;
+			kvtype_t* kh = kb + (h / kv_mul) * head_size;
+			kvtype_t* vh = vb + (h / kv_mul) * head_size;
 
 			attn(s->xb2 + h * head_size, atth, qh, kh, vh, head_size, kv_dim, kv_len);
 		}

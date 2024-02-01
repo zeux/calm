@@ -2,22 +2,8 @@
 
 #include <stddef.h>
 
-#ifdef __CUDACC__
-#include <cuda_fp16.h>
-#endif
-
 #define MAX_LAYERS 128
 #define MAX_EXPERTS 64
-
-// Can switch between float and _Float16
-#ifdef __CUDACC__
-typedef half kvtype_t;
-#elif defined(__FLT16_MANT_DIG__)
-typedef _Float16 kvtype_t;
-#else
-// We can't use _Float16 on CPU but we can still run CUDA
-typedef short kvtype_t;
-#endif
 
 // How many attention sinks to use for rolling buffer
 #define KV_SINKS 2
@@ -104,8 +90,8 @@ struct RunState {
 	float* exp;    // buffer for MoE computations (n_experts + n_experts_ac * 2)
 	float* logits; // output logits
 	// kv cache
-	kvtype_t* key_cache;   // (layer, seq_len, dim)
-	kvtype_t* value_cache; // (layer, seq_len, dim)
+	void* key_cache;   // (layer, seq_len, dim)
+	void* value_cache; // (layer, seq_len, dim)
 };
 
 struct Transformer {

@@ -174,7 +174,7 @@ long time_in_ms() {
 size_t kvcache_bandwidth(struct Config* config, int pos) {
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
 	int kv_len = pos >= config->seq_len ? config->seq_len : pos + 1;
-	return 2 * sizeof(kvtype_t) * config->n_layers * kv_dim * kv_len;
+	return 2 * sizeof(short) * config->n_layers * kv_dim * kv_len;
 }
 
 // ----------------------------------------------------------------------------
