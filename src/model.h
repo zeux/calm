@@ -90,6 +90,7 @@ struct RunState {
 	float* exp;    // buffer for MoE computations (n_experts + n_experts_ac * 2)
 	float* logits; // output logits
 	// kv cache
+	int kvbits;        // 8 for fp8, 16 for fp16; determines type of void* below
 	void* key_cache;   // (layer, seq_len, dim)
 	void* value_cache; // (layer, seq_len, dim)
 };

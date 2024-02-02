@@ -171,10 +171,10 @@ long time_in_ms() {
 	return time.tv_sec * 1000 + time.tv_nsec / 1000000;
 }
 
-size_t kvcache_bandwidth(struct Config* config, int pos) {
+size_t kvcache_bandwidth(struct Config* config, int kvbits, int pos) {
 	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
 	int kv_len = pos >= config->seq_len ? config->seq_len : pos + 1;
-	return 2 * sizeof(short) * config->n_layers * kv_dim * kv_len;
+	return 2 * (size_t)(kvbits / 8) * config->n_layers * kv_dim * kv_len;
 }
 
 // ----------------------------------------------------------------------------
@@ -223,7 +223,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 		float* logits = transformer->forward(transformer, token, pos + pos_offset, flags);
 
 		read_bytes += transformer->n_bandwidth;
-		read_bytes += kvcache_bandwidth(&transformer->config, pos + pos_offset);
+		read_bytes += kvcache_bandwidth(&transformer->config, transformer->state.kvbits, pos + pos_offset);
 
 		// advance the state machine
 		if (pos < num_prompt_tokens - 1) {
@@ -505,12 +505,21 @@ int main(int argc, char* argv[]) {
 		transformer.n_bandwidth = transformer.n_bytes;
 	}
 
-	printf("# %s: %.1fB params (%.1f GiB @ %.2f bpw), %d context (kvcache %.1f GiB)\n",
+	transformer.state.kvbits = 16;
+
+#ifdef __linux__
+	if (cuda && transformer.config.seq_len > 4096) {
+		transformer.state.kvbits = 8; // for now use fp8 for larger contexts automatically without explicit control
+	}
+#endif
+
+	printf("# %s: %.1fB params (%.1f GiB @ %.2f bpw), %d context (kvcache %.1f GiB @ fp%d)\n",
 	       checkpoint_path,
 	       (double)transformer.n_params / 1e9, (double)transformer.n_bytes / 1024 / 1024 / 1024,
 	       (double)transformer.n_bytes * 8 / (double)transformer.n_params,
 	       transformer.config.seq_len,
-	       (double)kvcache_bandwidth(&transformer.config, transformer.config.seq_len - 1) / 1024 / 1024 / 1024);
+	       (double)kvcache_bandwidth(&transformer.config, transformer.state.kvbits, transformer.config.seq_len - 1) / 1024 / 1024 / 1024,
+		   transformer.state.kvbits);
 
 #ifdef __linux__
 	// upload tensors to the GPU

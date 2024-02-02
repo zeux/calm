@@ -156,6 +156,7 @@ void prepare(struct Transformer* transformer) {
 	s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
 	s->exp = calloc(p->n_experts + p->n_experts_ac * 2, sizeof(float));
 	s->logits = calloc(p->vocab_size, sizeof(float));
+	assert(s->kvbits == sizeof(kvtype_t) * 8);
 	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
 	s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
 	// ensure all mallocs went fine

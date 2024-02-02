@@ -7,9 +7,6 @@
 
 #include "helpers.cuh"
 
-// we only support fp16 kv cache by default
-typedef __half kvtype_t;
-
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -90,8 +87,9 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
 	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
 
-	state->key_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
-	state->value_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * sizeof(kvtype_t));
+	assert(state->kvbits == 8 || state->kvbits == 16);
+	state->key_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * (state->kvbits / 8));
+	state->value_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * (state->kvbits / 8));
 
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
@@ -194,9 +192,9 @@ __global__ static void kernel_matmul_cls(uint64_t, float* xout, float* x, T* w, 
 	}
 }
 
-template <typename T>
+template <typename T, typename KVT>
 __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd,
-                                              kvtype_t* kb, kvtype_t* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int seq_len, int rotary_dim) {
+                                              KVT* kb, KVT* vb, int head_size, int pos, int kv_pos, int kv_sink, float theta_log2, int seq_len, int rotary_dim) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d + kvd * 2 + kv_sink * kvd);
 
@@ -221,8 +219,8 @@ __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T
 		float rk0 = k0 * fcr - k1 * fci;
 		float rk1 = k0 * fci + k1 * fcr;
 
-		kb[o] = kvtype_t(rk0);
-		kb[o + 1] = kvtype_t(rk1);
+		kb[o] = KVT(rk0);
+		kb[o + 1] = KVT(rk1);
 		return;
 	}
 
@@ -258,16 +256,16 @@ __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T
 			float rk1 = k0 * fci + k1 * fcr;
 
 			// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
-			kb[kv_pos * 2 + 0 + seq_len * j] = kvtype_t(rk0);
-			kb[kv_pos * 2 + 1 + seq_len * j] = kvtype_t(rk1);
+			kb[kv_pos * 2 + 0 + seq_len * j] = KVT(rk0);
+			kb[kv_pos * 2 + 1 + seq_len * j] = KVT(rk1);
 		} else {
 			// v
 			float v0 = vs[0];
 			float v1 = vs[1];
 
 			// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
-			vb[kv_pos + seq_len * (j + 0)] = kvtype_t(v0);
-			vb[kv_pos + seq_len * (j + 1)] = kvtype_t(v1);
+			vb[kv_pos + seq_len * (j + 0)] = KVT(v0);
+			vb[kv_pos + seq_len * (j + 1)] = KVT(v1);
 		}
 	}
 }
@@ -429,7 +427,8 @@ __device__ inline float2 attn_load2(__nv_fp8_e5m2* p) {
 	return float2(*(__nv_fp8x2_e5m2*)p);
 }
 
-__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtype_t* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+template <typename KVT>
+__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= kv_len) {
 		return;
@@ -441,7 +440,7 @@ __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, kvtyp
 	int h = kvh * kv_mul + threadIdx.y;
 
 	float* qh = qb + h * head_size;
-	kvtype_t* kh = kb + kvh * head_size * seq_len;
+	KVT* kh = kb + kvh * head_size * seq_len;
 	float* atth = attb + h * seq_len;
 
 	float score = 0.0f;
@@ -489,7 +488,8 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	}
 }
 
-__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtype_t* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+template <typename KVT>
+__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < head_size);
 
@@ -499,8 +499,8 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 	int h = kvh * kv_mul + threadIdx.y;
 
 	float* atth = attb + h * seq_len;
-	kvtype_t* vh = valb + kvh * head_size * seq_len;
-	kvtype_t* val = vh + i * seq_len;
+	KVT* vh = valb + kvh * head_size * seq_len;
+	KVT* val = vh + i * seq_len;
 
 	float res = 0.0f;
 	for (int t = (threadIdx.x % warpSize) * 2; t < kv_len - 1; t += warpSize * 2) {
@@ -521,7 +521,7 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, kvtyp
 	}
 }
 
-template <typename T>
+template <typename T, typename KVT>
 static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	// a few convenience variables
 	struct Config* p = &transformer->config;
@@ -580,26 +580,26 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// qkv matmuls for this position + RoPE encoding + update KV cache
 		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
-			PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
-			(kvtype_t*)s->key_cache + loff, (kvtype_t*)s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
+		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 
 		// only update kv cache and don't output logits
 		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
 			break;
 		}
 
-		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(kvtype_t);
+		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT);
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((kv_len + 32 * attn_par - 1) / (32 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->att, s->q, (kvtype_t*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 		// compute weighted sum of the values into xb2
 		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, (kvtype_t*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
@@ -673,15 +673,19 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
-	switch (transformer->weights.dbits) {
-	case 4:
-		return forward<uint32_t>(transformer, token, pos, flags);
-	case 8:
-		return forward<__nv_fp8_e5m2>(transformer, token, pos, flags);
-	case 16:
-		return forward<half>(transformer, token, pos, flags);
-	default:
-		assert(!"Unsupported dbits: must be 4, 8 or 16 for CUDA");
-		return NULL;
-	}
+#define CASE(dbits_, dtype, kvbits_, kvtype)                                          \
+	if (transformer->weights.dbits == dbits_ && transformer->state.kvbits == kvbits_) \
+	return forward<dtype, kvtype>(transformer, token, pos, flags)
+
+	CASE(4, uint32_t, 8, __nv_fp8_e5m2);
+	CASE(4, uint32_t, 16, __half);
+	CASE(8, __nv_fp8_e5m2, 8, __nv_fp8_e5m2);
+	CASE(8, __nv_fp8_e5m2, 16, __half);
+	CASE(16, __half, 8, __nv_fp8_e5m2);
+	CASE(16, __half, 16, __half);
+
+	assert(!"Unsupported dbits/kvbits combination for CUDA: dbits must be 4, 8 or 16, kvbits must be 8 or 16");
+	return NULL;
+
+#undef CASE
 }
