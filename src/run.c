@@ -318,6 +318,84 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 	       ppl, pplerr, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
 }
 
+void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler,
+          char* cli_prompt, char* system_prompt) {
+
+	// buffers for reading the system prompt and user prompt from stdin
+	// you'll notice they are soomewhat haphazardly and unsafely set atm
+	char user_prompt[512];
+	char rendered_prompt[1152];
+	int num_prompt_tokens = 0;
+	int* prompt_tokens = (int*)malloc(1152 * sizeof(int));
+	int user_idx;
+
+	// start the main loop
+	int8_t user_turn = 1; // user starts
+	int next = 0;         // will store the next token in the sequence
+	int token;            // stores the current token to feed into the transformer
+	int pos = 0;          // position in the sequence
+	for (;;) {
+
+		// when it is the user's turn to contribute tokens to the dialog...
+		if (user_turn) {
+			// get the user prompt
+			if (pos == 0 && cli_prompt != NULL) {
+				// user prompt for position 0 was passed in, use it
+				strcpy(user_prompt, cli_prompt);
+			} else {
+				// otherwise get user prompt from stdin
+				printf("User: ");
+				fflush(stdout);
+				char* x = fgets(user_prompt, sizeof(user_prompt), stdin);
+				(void)x;
+			}
+			// render user/system prompts into the Llama 2 Chat schema
+			if (pos == 0 && system_prompt[0] != '\0') {
+				char system_template[] = "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]";
+				sprintf(rendered_prompt, system_template, system_prompt, user_prompt);
+			} else {
+				char user_template[] = "[INST] %s [/INST]";
+				sprintf(rendered_prompt, user_template, user_prompt);
+			}
+			// encode the rendered prompt into tokens
+			num_prompt_tokens = tokenizer_encode(tokenizer, rendered_prompt, TF_ENCODE_BOS, prompt_tokens);
+			user_idx = 0; // reset the user index
+			user_turn = 0;
+			printf("Assistant: ");
+		}
+
+		// determine the token to pass into the transformer next
+		if (user_idx < num_prompt_tokens) {
+			// if we are still processing the input prompt, force the next prompt token
+			token = prompt_tokens[user_idx++];
+		} else {
+			// otherwise use the next token sampled from previous turn
+			token = next;
+		}
+		// EOS (=2) token ends the Assistant turn
+		if (token == 2) {
+			user_turn = 1;
+		}
+
+		// forward the transformer to get logits for the next token
+		float* logits = transformer->forward(transformer, token, pos, 0);
+		next = sample(sampler, logits);
+		pos++;
+
+		if (user_idx >= num_prompt_tokens && next != 2) {
+			// the Assistant is responding, so print its output
+			char* piece = tokenizer_decode(tokenizer, token, next);
+			printf("%s", piece);
+			fflush(stdout);
+		}
+		if (next == 2) {
+			printf("\n");
+		}
+	}
+	printf("\n");
+	free(prompt_tokens);
+}
+
 // ----------------------------------------------------------------------------
 // CLI, include only if not testing
 #ifndef TESTING
@@ -334,6 +412,7 @@ void error_usage() {
 	fprintf(stderr, "  -c <int>    context length, default to model-specific maximum\n");
 	fprintf(stderr, "  -i <string> input prompt (- to read from stdin)\n");
 	fprintf(stderr, "  -x <path>   compute perplexity for text file\n");
+	fprintf(stderr, "  -y <string> chat mode with a system prompt\n");
 	exit(EXIT_FAILURE);
 }
 
@@ -347,6 +426,7 @@ int main(int argc, char* argv[]) {
 	int sequences = 1;               // number of sequences to decode
 	char* prompt = NULL;             // prompt string
 	char* perplexity = NULL;         // text file for perplexity
+	char* system_prompt = NULL;      // chat system prompt
 	unsigned long long rng_seed = 0; // seed rng with time by default
 	int context = 0;                 // context length
 
@@ -384,6 +464,8 @@ int main(int argc, char* argv[]) {
 			perplexity = argv[i + 1];
 		} else if (argv[i][1] == 'c') {
 			context = atoi(argv[i + 1]);
+		} else if (argv[i][1] == 'y') {
+			system_prompt = argv[i + 1];
 		} else {
 			error_usage();
 		}
@@ -481,6 +563,8 @@ int main(int argc, char* argv[]) {
 	// run!
 	if (perplexity) {
 		study(&transformer, &tokenizer, perplexity, steps);
+	} else if (system_prompt) {
+		chat(&transformer, &tokenizer, &sampler, prompt, system_prompt);
 	} else {
 		for (int s = 0; s < sequences; ++s) {
 			generate(&transformer, &tokenizer, &sampler, prompt, steps, pos_offset);
