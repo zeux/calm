@@ -667,6 +667,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
+	CUDA_CHECK(cudaGetLastError()); // check for kernel launch errors; they might fail with OOM due to lazy kernel compilation
 
 	return s->logits;
 }
