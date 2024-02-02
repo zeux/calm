@@ -373,19 +373,23 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 		}
 
 		// forward the transformer to get logits for the next token
-		float* logits = transformer->forward(transformer, token, pos, 0);
-		next = sample(sampler, logits);
+		unsigned flags = user_idx < num_prompt_tokens ? FF_UPDATE_KV_ONLY : 0;
+		float* logits = transformer->forward(transformer, token, pos, flags);
 		pos++;
 
-		if (next == tokenizer->eos_id) {
-			// EOS token ends the Assistant turn
-			printf("\n\n");
-			user_turn = 1;
-		} else if (user_idx >= num_prompt_tokens) {
-			// the Assistant is responding, so print its output
-			char* piece = tokenizer_decode(tokenizer, token, next);
-			printf("%s", piece);
-			fflush(stdout);
+		if (user_idx >= num_prompt_tokens) {
+			next = sample(sampler, logits);
+
+			if (next == tokenizer->eos_id) {
+				// EOS token ends the Assistant turn
+				printf("\n\n");
+				user_turn = 1;
+			} else {
+				// the Assistant is responding, so print its output
+				char* piece = tokenizer_decode(tokenizer, token, next);
+				printf("%s", piece);
+				fflush(stdout);
+			}
 		}
 	}
 
