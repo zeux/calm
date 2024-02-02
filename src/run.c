@@ -357,7 +357,7 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				sprintf(rendered_prompt, user_template, user_prompt);
 			}
 			// encode the rendered prompt into tokens
-			num_prompt_tokens = tokenizer_encode(tokenizer, rendered_prompt, TF_ENCODE_BOS, prompt_tokens);
+			num_prompt_tokens = tokenizer_encode(tokenizer, rendered_prompt, pos == 0 ? TF_ENCODE_BOS : 0, prompt_tokens);
 			user_idx = 0; // reset the user index
 			user_turn = 0;
 			printf("\n\033[33mAssistant:\033[00m");
