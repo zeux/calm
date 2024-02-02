@@ -318,8 +318,7 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 	       ppl, pplerr, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
 }
 
-void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler,
-          char* cli_prompt, char* system_prompt) {
+void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* cli_prompt, char* system_prompt) {
 
 	// buffers for reading the system prompt and user prompt from stdin
 	// you'll notice they are soomewhat haphazardly and unsafely set atm
@@ -330,10 +329,10 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 	int user_idx;
 
 	// start the main loop
-	int8_t user_turn = 1; // user starts
-	int next = 0;         // will store the next token in the sequence
-	int token;            // stores the current token to feed into the transformer
-	int pos = 0;          // position in the sequence
+	int user_turn = 1; // user starts
+	int next = 0;      // will store the next token in the sequence
+	int token;         // stores the current token to feed into the transformer
+	int pos = 0;       // position in the sequence
 	for (;;) {
 
 		// when it is the user's turn to contribute tokens to the dialog...
@@ -344,7 +343,7 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				strcpy(user_prompt, cli_prompt);
 			} else {
 				// otherwise get user prompt from stdin
-				printf("User: ");
+				printf("[%d] \033[32mUser:\033[37m ", pos);
 				fflush(stdout);
 				char* x = fgets(user_prompt, sizeof(user_prompt), stdin);
 				(void)x;
@@ -361,7 +360,7 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 			num_prompt_tokens = tokenizer_encode(tokenizer, rendered_prompt, TF_ENCODE_BOS, prompt_tokens);
 			user_idx = 0; // reset the user index
 			user_turn = 0;
-			printf("Assistant: ");
+			printf("\n\033[33mAssistant:\033[00m");
 		}
 
 		// determine the token to pass into the transformer next
@@ -373,7 +372,7 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 			token = next;
 		}
 		// EOS (=2) token ends the Assistant turn
-		if (token == 2) {
+		if (token == tokenizer->eos_id) {
 			user_turn = 1;
 		}
 
@@ -382,13 +381,13 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 		next = sample(sampler, logits);
 		pos++;
 
-		if (user_idx >= num_prompt_tokens && next != 2) {
+		if (user_idx >= num_prompt_tokens && next != tokenizer->eos_id) {
 			// the Assistant is responding, so print its output
 			char* piece = tokenizer_decode(tokenizer, token, next);
 			printf("%s", piece);
 			fflush(stdout);
 		}
-		if (next == 2) {
+		if (next == tokenizer->eos_id) {
 			printf("\n");
 		}
 	}
