@@ -343,7 +343,12 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				strcpy(user_prompt, cli_prompt);
 			} else {
 				// otherwise get user prompt from stdin
-				printf("[%d] \033[32mUser:\033[37m ", pos);
+				double seq_pct = (double)pos / (double)transformer->config.seq_len;
+				char progress[64] = {};
+				for (int i = 0; i < 10; ++i) {
+					strcat(progress, seq_pct < i * 0.1 ? "░" : seq_pct < i * 0.1 + 0.05 ? "▒" : "█");
+				}
+				printf("%s \033[32mUser:\033[37m ", progress);
 				fflush(stdout);
 				char* x = fgets(user_prompt, sizeof(user_prompt), stdin);
 				(void)x;
