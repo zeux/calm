@@ -371,27 +371,24 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 			// otherwise use the next token sampled from previous turn
 			token = next;
 		}
-		// EOS (=2) token ends the Assistant turn
-		if (token == tokenizer->eos_id) {
-			user_turn = 1;
-		}
 
 		// forward the transformer to get logits for the next token
 		float* logits = transformer->forward(transformer, token, pos, 0);
 		next = sample(sampler, logits);
 		pos++;
 
-		if (user_idx >= num_prompt_tokens && next != tokenizer->eos_id) {
+		if (next == tokenizer->eos_id) {
+			// EOS token ends the Assistant turn
+			printf("\n\n");
+			user_turn = 1;
+		} else if (user_idx >= num_prompt_tokens) {
 			// the Assistant is responding, so print its output
 			char* piece = tokenizer_decode(tokenizer, token, next);
 			printf("%s", piece);
 			fflush(stdout);
 		}
-		if (next == tokenizer->eos_id) {
-			printf("\n");
-		}
 	}
-	printf("\n");
+
 	free(prompt_tokens);
 }
 
