@@ -488,18 +488,9 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 	// max across threads in block
 	max_val = blockreduce_max(max_val);
 
-	// exp and sum per thread
-	float sum = 0.0f;
+	// exp per thread
 	for (int j = i; j < kv_len; j += blockDim.x) {
-		sum += expf(atth[j] - max_val);
-	}
-
-	// sum across threads in block
-	sum = blockreduce_sum(sum);
-
-	// output normalized values
-	for (int j = i; j < kv_len; j += blockDim.x) {
-		atth[j] = expf(atth[j] - max_val) / sum;
+		atth[j] = expf(atth[j] - max_val);
 	}
 }
 
@@ -521,6 +512,7 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* 
 	int lane = threadIdx.x % warpSize;
 
 	float res = 0.0f;
+	float sum = 0.0f;
 	for (int t = lane * 4; t < kv_len4; t += warpSize * 4) {
 		float4 vv = attn_load4(&val[t]);
 		float4 aa = *(float4*)&atth[t];
@@ -528,16 +520,20 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* 
 		res += vv.y * aa.y;
 		res += vv.z * aa.z;
 		res += vv.w * aa.w;
+		sum += aa.x + aa.y + aa.z + aa.w;
 	}
 
 	if (kv_len4 + lane < kv_len) {
-		res += atth[kv_len4 + lane] * float(val[kv_len4 + lane]);
+		float a = atth[kv_len4 + lane];
+		res += a * float(val[kv_len4 + lane]);
+		sum += a;
 	}
 
 	res = warpreduce_sum(res);
+	sum = warpreduce_sum(sum);
 
 	if (threadIdx.x % warpSize == 0) {
-		xout[h * head_size + i] = res;
+		xout[h * head_size + i] = res / sum;
 	}
 }
 
