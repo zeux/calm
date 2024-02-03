@@ -69,24 +69,24 @@ KV cache is using `fp16` by default; when using longer contexts (> 4096), CUDA i
 
 Auto-regressive prediction for a single sequence needs to read the entire model and the entire KV cache (until current token) for every token. As such, given an optimal implementation we'd expect the process to be bandwidth bound. Note that the cost of token generation at the beginning of the sequence should be smaller than the cost at the end of the sequence due to the need to read data from KV cache.
 
-When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts and 4000 for 4096 contexts):
+When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts, 4000 for 4096 contexts and 16000 for 16384 contexts):
 
 | Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
 | ----------- | ----------- | ----------- |
-| Llama2 7B (4096), fp16 | 67 tok/s (910 GB/s) | 58 tok/s (916 GB/s) |
-| Llama2 7B (4096), fp8 | 127 tok/s (860 GB/s) | 99 tok/s (876 GB/s) |
-| Llama2 7B (4096), gf4 | 223 tok/s (756 GB/s) | 151 tok/s (826 GB/s) |
-| Llama2 13B (4096), fp8 | 68 tok/s (885 GB/s) | 55 tok/s (900 GB/s) |
-| Llama2 13B (4096), gf4 | 125 tok/s (818 GB/s) | 88 tok/s (861 GB/s) |
-| Mistral 7B (4096), fp16 | 63 tok/s (918 GB/s) | 61 tok/s (918 GB/s) |
-| Mistral 7B (4096), fp8 | 120 tok/s (871 GB/s) | 113 tok/s (878 GB/s) |
-| Mistral 7B (4096), gf4 | 219 tok/s (794 GB/s) | 192 tok/s (799 GB/s) |
-| Phi 2.7B (2048), fp16 | 167 tok/s (932 GB/s) | 151 tok/s (942 GB/s) |
-| Phi 2.7B (2048), fp8 | 313 tok/s (874 GB/s) | 256 tok/s (881 GB/s) |
-| Phi 2.7B (2048), gf4 | 551 tok/s (771 GB/s) | 390 tok/s (801 GB/s) |
-| Mixtral 8x7B (4096), gf4 | 128 tok/s (821 GB/s) | 119 tok/s (831 GB/s) |
-| Mixtral 8x7B (16384), gf4 | 127 tok/s (818 GB/s) | 103 tok/s (775 GB/s) |
-| Yi 34B (4096), gf4 | 49 tok/s (854 GB/s) | 45 tok/s (825 GB/s) |
+| Llama2 7B (4096), fp16 | 67 tok/s (892 GB/s) | 58 tok/s (901 GB/s) |
+| Llama2 7B (4096), fp8 | 128 tok/s (846 GB/s) | 99 tok/s (868 GB/s) |
+| Llama2 7B (4096), gf4 | 225 tok/s (746 GB/s) | 151 tok/s (816 GB/s) |
+| Llama2 13B (4096), fp8 | 68 tok/s (877 GB/s) | 55 tok/s (889 GB/s) |
+| Llama2 13B (4096), gf4 | 126 tok/s (811 GB/s) | 87 tok/s (847 GB/s) |
+| Mistral 7B (4096), fp16 | 63 tok/s (903 GB/s) | 61 tok/s (905 GB/s) |
+| Mistral 7B (4096), fp8 | 120 tok/s (859 GB/s) | 113 tok/s (863 GB/s) |
+| Mistral 7B (4096), gf4 | 219 tok/s (779 GB/s) | 196 tok/s (801 GB/s) |
+| Phi 2.7B (2048), fp16 | 167 tok/s (888 GB/s) | 150 tok/s (895 GB/s) |
+| Phi 2.7B (2048), fp8 | 313 tok/s (833 GB/s) | 256 tok/s (847 GB/s) |
+| Phi 2.7B (2048), gf4 | 551 tok/s (735 GB/s) | 395 tok/s (785 GB/s) |
+| Mixtral 8x7B (4096), gf4 | 128 tok/s (816 GB/s) | 119 tok/s (827 GB/s) |
+| Mixtral 8x7B (16384), gf4 | 127 tok/s (812 GB/s) | 105 tok/s (781 GB/s) |
+| Yi 34B (4096), gf4 | 49 tok/s (842 GB/s) | 46 tok/s (832 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
