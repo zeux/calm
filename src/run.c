@@ -139,26 +139,27 @@ void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_siz
 	tokenizer_init(t, tokens, scores, bos_id, eos_id, vocab_size);
 }
 
-void count_params(struct Tensors* tensors, const char* prefix, size_t* out_params, size_t* out_bytes, const char* filter, size_t* out_filtered) {
-	*out_params = 0;
-	*out_bytes = 0;
-	*out_filtered = 0;
-
+size_t count_bytes(struct Tensors* tensors, const char* prefix, const char* filter, size_t* out_params) {
+	size_t bytes = 0, params = 0;
 	for (int i = 0; i < tensors->n_tensors; ++i) {
 		struct Tensor* tensor = &tensors->tensors[i];
 		if (strncmp(tensor->name, prefix, strlen(prefix)) != 0) {
 			continue;
 		}
-		int params = tensor->dtype == dt_i32 ? 8 : 1; // gsize hack for gf4
+		if (filter && strstr(tensor->name, filter) == NULL) {
+			continue;
+		}
+		int elts = tensor->dtype == dt_i32 ? 8 : 1; // gsize hack for gf4
 		for (int j = 0; j < 4 && tensor->shape[j] != 0; ++j) {
-			params *= tensor->shape[j];
+			elts *= tensor->shape[j];
 		}
-		*out_params += params;
-		*out_bytes += tensor->size;
-		if (strstr(tensor->name, filter)) {
-			*out_filtered += tensor->size;
-		}
+		params += elts;
+		bytes += tensor->size;
 	}
+	if (out_params) {
+		*out_params = params;
+	}
+	return bytes;
 }
 
 // ----------------------------------------------------------------------------
@@ -502,12 +503,12 @@ int main(int argc, char* argv[]) {
 	// build transformer using tensors from the input model file
 	struct Transformer transformer = {};
 	get_config(&transformer.config, &tensors, context);
-	count_params(&tensors, "model.", &transformer.n_params, &transformer.n_bytes, ".experts.", &transformer.n_bandwidth);
+	transformer.n_bytes = count_bytes(&tensors, "model.", NULL, &transformer.n_params);
+	transformer.n_bandwidth = transformer.n_bytes - count_bytes(&tensors, "model.embed.", NULL, NULL);
 	if (transformer.config.arch == Mixtral) {
-		transformer.n_bandwidth = (transformer.n_bytes - transformer.n_bandwidth) +
-		                          transformer.n_bandwidth / transformer.config.n_experts * transformer.config.n_experts_ac;
-	} else {
-		transformer.n_bandwidth = transformer.n_bytes;
+		size_t mlp = count_bytes(&tensors, "model.layers.", ".experts.", NULL);
+		transformer.n_bandwidth -= mlp;
+		transformer.n_bandwidth += mlp / transformer.config.n_experts * transformer.config.n_experts_ac;
 	}
 
 	transformer.state.kvbits = 16;
