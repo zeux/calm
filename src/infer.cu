@@ -428,6 +428,20 @@ __device__ inline float2 attn_load2(__nv_fp8_e5m2* p) {
 	return float2(*(__nv_fp8x2_e5m2*)p);
 }
 
+union half4 {
+	float2 g;
+	half h[4];
+};
+
+__device__ inline float4 attn_load4(half* p) {
+	half4 h = *(half4*)p;
+	return { __half2float(h.h[0]), __half2float(h.h[1]), __half2float(h.h[2]), __half2float(h.h[3]) };
+}
+
+__device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
+	return fp8x4_e5m2_ff(*(__nv_fp8x4_e5m2*)p);
+}
+
 template <typename KVT>
 __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
@@ -503,16 +517,21 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* 
 	KVT* vh = valb + kvh * head_size * seq_len;
 	KVT* val = vh + i * seq_len;
 
+	int kv_len4 = kv_len & ~3;
+	int lane = threadIdx.x % warpSize;
+
 	float res = 0.0f;
-	for (int t = (threadIdx.x % warpSize) * 2; t < kv_len - 1; t += warpSize * 2) {
-		float2 vv = attn_load2(&val[t]);
-		float2 aa = *(float2*)&atth[t];
+	for (int t = lane * 4; t < kv_len4; t += warpSize * 4) {
+		float4 vv = attn_load4(&val[t]);
+		float4 aa = *(float4*)&atth[t];
 		res += vv.x * aa.x;
 		res += vv.y * aa.y;
+		res += vv.z * aa.z;
+		res += vv.w * aa.w;
 	}
 
-	if (kv_len % 2 == 1 && threadIdx.x % warpSize == 0) {
-		res += atth[kv_len - 1] * float(val[kv_len - 1]);
+	if (kv_len4 + lane < kv_len) {
+		res += atth[kv_len4 + lane] * float(val[kv_len4 + lane]);
 	}
 
 	res = warpreduce_sum(res);
