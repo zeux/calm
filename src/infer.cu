@@ -96,19 +96,20 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 }
 
 template <typename T>
+__device__ inline float embed(T* weight, int idx) {
+	return float(weight[idx]);
+}
+
+__device__ inline float embed(uint32_t* weight, int idx) {
+	return gf4_ff(weight[idx / 8], idx % 8);
+}
+
+template <typename T>
 __global__ static void kernel_embed(float* o, T* weight, int token, int n) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < n);
 
-	o[i] = float(weight[token * n + i]);
-}
-
-__global__ static void kernel_embed(float* o, uint32_t* weight, int token, int n) {
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	assert(i < n);
-
-	uint32_t wg = weight[token * n / 8 + i / 8];
-	o[i] = gf4_ff(wg, i % 8);
+	o[i] = embed(weight, token * n + i);
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
