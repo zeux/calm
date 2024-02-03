@@ -604,7 +604,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			break;
 		}
 
-		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT);
+		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((kv_len + 32 * attn_par - 1) / (32 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
