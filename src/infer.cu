@@ -420,14 +420,6 @@ __global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T
 	}
 }
 
-__device__ inline float2 attn_load2(half* p) {
-	return __half22float2(*((half2*)p));
-}
-
-__device__ inline float2 attn_load2(__nv_fp8_e5m2* p) {
-	return float2(*(__nv_fp8x2_e5m2*)p);
-}
-
 union half4 {
 	float2 g;
 	half h[4];
@@ -444,7 +436,7 @@ __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
 
 template <typename KVT>
 __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
-	int t = blockIdx.x * blockDim.x + threadIdx.x;
+	int t = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	if (t >= kv_len) {
 		return;
 	}
@@ -458,17 +450,22 @@ __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* 
 	KVT* kh = kb + kvh * head_size * seq_len;
 	float* atth = attb + h * seq_len;
 
-	float score = 0.0f;
+	float score1 = 0.0f;
+	float score2 = 0.0f;
 	for (int j = 0; j < head_size; j += 2) {
-		float2 kk = attn_load2(&kh[j * seq_len + t * 2]);
+		float4 kk = attn_load4(&kh[j * seq_len + t * 2]);
 		float2 qq = *(float2*)&qh[j];
-		score += kk.x * qq.x;
-		score += kk.y * qq.y;
+		score1 += kk.x * qq.x;
+		score1 += kk.y * qq.y;
+		score2 += kk.z * qq.x;
+		score2 += kk.w * qq.y;
 	}
 
-	score /= sqrtf(head_size);
+	score1 /= sqrtf(head_size);
+	score2 /= sqrtf(head_size);
 
-	atth[t] = score;
+	atth[t + 0] = score1;
+	atth[t + 1] = score2;
 }
 
 __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int kv_len) {
@@ -607,7 +604,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 		// attention scores for all heads
-		kernel_attn_score<<<dim3((kv_len + 32 * attn_par - 1) / (32 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
+		kernel_attn_score<<<dim3((kv_len + 64 * attn_par - 1) / (64 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
 		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// softmax the scores to get attention weights over [0..kv_len)
