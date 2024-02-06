@@ -47,6 +47,11 @@ It has been tested on following models:
 - Qwen architecture
   - Qwen 7B (Qwen/Qwen-7B-Chat)
   - Qwen 14B (Qwen/Qwen-14B-Chat)
+  - Qwen1.5 0.5B (Qwen/Qwen1.5-0.5B)
+  - Qwen1.5 1.8B (Qwen/Qwen1.5-1.8B)
+  - Qwen1.5 4B (Qwen/Qwen1.5-4B)
+  - Qwen1.5 7B (Qwen/Qwen1.5-7B)
+  - Qwen1.5 14B (Qwen/Qwen1.5-14B)
 - Phi architecture
   - Phi1.5 (microsoft/phi-1_5)
   - Phi2 (microsoft/phi-2)
