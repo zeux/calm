@@ -108,9 +108,25 @@ elif arch == "phi":
     metadata["rotary_dim"] = int(config["hidden_size"] / config["num_attention_heads"] * config["partial_rotary_factor"])
     metadata["norm_eps"] = config["layer_norm_eps"]
 
+# this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
+# this has poisoned all HF tokenizer configs that use ByteLevel decoder/preprocessor
+# as a result we get crazy UTF-8-as-bytes-as-UTF8 in the tokenizer data that we need to convert back
+def gpt2_bytes_to_unicode():
+    bs = list(range(ord("!"), ord("~")+1))+list(range(ord("¡"), ord("¬")+1))+list(range(ord("®"), ord("ÿ")+1))
+    cs = bs[:]
+    n = 0
+    for b in range(2**8):
+        if b not in bs:
+            bs.append(b)
+            cs.append(2**8+n)
+            n += 1
+    cs = [chr(n) for n in cs]
+    return dict(zip(bs, cs))
+
 # load tokenizer model
 tokens = [""] * config["vocab_size"]
 scores = [0] * config["vocab_size"]
+tokens_gpt2 = False
 
 ext = os.path.splitext(args.tokenizer)[1]
 if ext == ".json":
@@ -119,6 +135,8 @@ if ext == ".json":
 
     vocab = tokenizer["model"]["vocab"]
     assert len(vocab) <= config["vocab_size"]
+
+    tokens_gpt2 = not tokenizer["model"]["byte_fallback"]
 
     for t, i in vocab.items():
         tokens[i] = t
@@ -153,12 +171,17 @@ else:
     raise Exception("Unknown tokenizer file extension: {}; expected .json or .model/.tiktoken".format(ext))
 
 # postprocess tokens
-for i, t in enumerate(tokens):
-    t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
-    t = t.replace('\u0120', ' ') # some gpt-based tokenizers use this character as whitespace
-    t = '\n' if t == '\u010a' else t  # some gpt-based tokenizers use this character as newline
+gpt2_decode = {v: k for k, v in gpt2_bytes_to_unicode().items()}
 
-    b = t.encode('utf-8')
+for i, t in enumerate(tokens):
+    if tokens_gpt2:
+        b = bytes([gpt2_decode.get(c) for c in t])
+        b = b"" if b == b"\n\n" else b # special case for double newline because phi-2 is stupid
+        b = b.replace(b"\0", b"\7") # replace null bytes with bell characters
+    else:
+        t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
+        b = t.encode('utf-8')
+
     assert b.count(0) == 0 # no null bytes allowed
 
     tokens[i] = b
