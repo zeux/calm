@@ -112,7 +112,7 @@ __global__ static void kernel_embed(float* o, T* weight, int token, int n) {
 	o[i] = embed(weight, token * n + i);
 }
 
-__global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size) {
+__global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size, float eps) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -133,13 +133,13 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 
 	// normalize and scale
 	// note: blockreduce above implies __syncthreads so xs[] reads are safe
-	float scale = rsqrtf(ss / size + 1e-5f);
+	float scale = rsqrtf(ss / size + eps);
 	for (int j = i; j < size; j += blockSize) {
 		o[j] = xs[j] * scale;
 	}
 }
 
-__global__ static void kernel_layernorm(float* o, float* x, float* acc, float* weight, float* bias, int size) {
+__global__ static void kernel_layernorm(float* o, float* x, float* acc, float* weight, float* bias, int size, float eps) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -168,7 +168,7 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 	float var = (ss - sum * sum * rsize) * rsize;
 
 	// normalize and scale
-	float scale = rsqrtf(var + 1e-5f);
+	float scale = rsqrtf(var + eps);
 	for (int j = i; j < size; j += blockSize) {
 		o[j] = (x[j] - mean) * scale * weight[j] + bias[j];
 	}
@@ -579,7 +579,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (p->arch == Phi) {
 			// input layernorm
-			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], w->ln_bias[l], dim);
+			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], w->ln_bias[l], dim, p->norm_eps);
 
 			if (parstream) {
 				// wait for layernorm to complete on parstream
@@ -588,7 +588,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			}
 		} else {
 			// attention rmsnorm
-			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim);
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
 		}
 
 		// qkv matmuls for this position + RoPE encoding + update KV cache
@@ -620,7 +620,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (p->arch == Mixtral) {
 			// ffn rmsnorm
-			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
 
 			// moe gate
 			assert(p->n_experts <= 32);
@@ -651,7 +651,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			}
 		} else {
 			// ffn rmsnorm
-			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim);
+			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
@@ -669,10 +669,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	if (p->arch == Phi) {
 		// final layernorm
-		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, w->ln_final_bias, dim);
+		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, w->ln_final_bias, dim, p->norm_eps);
 	} else {
 		// final rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim);
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);
 	}
 
 	// classifier into logits

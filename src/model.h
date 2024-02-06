@@ -28,6 +28,7 @@ struct Config {
 	int rotary_dim;   // RoPE rotary dimension (elements after that don't get rotated)
 	int n_experts;    // number of experts for MoE models
 	int n_experts_ac; // number of active experts for MoE models
+	float norm_eps;   // epsilon for layer normalization
 };
 
 struct Weights {

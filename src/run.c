@@ -52,6 +52,9 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 		config->n_experts = atoi(tensors_metadata(tensors, "n_experts"));
 		config->n_experts_ac = atoi(tensors_metadata(tensors, "n_experts_active"));
 	}
+
+	const char* norm_eps = tensors_metadata_find(tensors, "norm_eps");
+	config->norm_eps = norm_eps ? atof(norm_eps) : 1e-5;
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
