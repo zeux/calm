@@ -136,7 +136,7 @@ if ext == ".json":
     vocab = tokenizer["model"]["vocab"]
     assert len(vocab) <= config["vocab_size"]
 
-    tokens_gpt2 = not tokenizer["model"]["byte_fallback"]
+    tokens_gpt2 = not tokenizer["model"].get("byte_fallback", False)
 
     for t, i in vocab.items():
         tokens[i] = t
