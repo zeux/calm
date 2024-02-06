@@ -48,17 +48,17 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2"]:
     # hardcoded in C
     assert config["hidden_act"] == "silu"
-    assert config["rms_norm_eps"] == 1e-5
+    assert config["rms_norm_eps"] == 1e-5 or arch == "qwen2"
 
     # customizable
     metadata["dim"] = config["hidden_size"]
@@ -68,7 +68,7 @@ if arch in ["llama", "mistral", "mixtral"]:
     metadata["n_kv_heads"] = config["num_key_value_heads"]
     metadata["vocab_size"] = config["vocab_size"]
     metadata["max_seq_len"] = config["max_position_embeddings"]
-    metadata["bos_token_id"] = config["bos_token_id"]
+    metadata["bos_token_id"] = -1 if arch in ["qwen2"] else config["bos_token_id"]
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
@@ -233,7 +233,7 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral", "mixtral"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
@@ -245,6 +245,11 @@ if arch in ["llama", "mistral", "mixtral"]:
         tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"], head_dim))
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
+
+        if arch in ["qwen2"]:
+            tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], config["num_attention_heads"], head_dim).float()
+            tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_key_value_heads"], head_dim).float()
+            tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
 
         tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
