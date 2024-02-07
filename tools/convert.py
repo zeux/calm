@@ -335,14 +335,13 @@ elif arch == "phi":
         tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_attention_heads"], rotary_dim).float()
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
         tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
-
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.dense.weight"])
-        tensors[f"model.layers.{l}.attn.wo.bias"] = weights[f"model.layers.{l}.self_attn.dense.bias"].float()
 
+        # note: we fold attn output bias into mlp w2 bias to reduce redundancy
         tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.fc1.weight"])
         tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"model.layers.{l}.mlp.fc1.bias"].float()
         tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.fc2.weight"])
-        tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"model.layers.{l}.mlp.fc2.bias"].float()
+        tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"model.layers.{l}.mlp.fc2.bias"].float() + weights[f"model.layers.{l}.self_attn.dense.bias"].float()
 
     tensors["model.norm.weight"] = weights["model.final_layernorm.weight"].float()
     tensors["model.norm.bias"] = weights["model.final_layernorm.bias"].float()

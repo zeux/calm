@@ -408,7 +408,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		// final matmul to get the output of the attention
 		// TODO: we're using hb as a temporary storage, hacky
-		matmul(s->hb, s->xb2, w->wo[l], w->bo[l], dim, dim, dotprod);
+		matmul(s->hb, s->xb2, w->wo[l], NULL, dim, dim, dotprod);
 
 		// residual connection back into x
 		for (int i = 0; i < dim; i++) {

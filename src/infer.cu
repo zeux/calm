@@ -272,15 +272,11 @@ __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T
 }
 
 template <typename T>
-__global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w, float* b, int n, int d) {
+__global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w, int n, int d) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
 	float val = matmul_warppar(x, w, i, n, n);
-
-	if (b) {
-		val += b[i];
-	}
 
 	if (threadIdx.x % warpSize == 0) {
 		// += for residual
@@ -616,7 +612,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], w->bo[l], dim, dim);
+		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], dim, dim);
 
 		if (p->arch == Mixtral) {
 			// ffn rmsnorm
