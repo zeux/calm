@@ -29,7 +29,11 @@ float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigne
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* arch = tensors_metadata(tensors, "arch");
 
-	config->arch = strcmp(arch, "mixtral") == 0 ? Mixtral : strcmp(arch, "phi") == 0 ? Phi : strcmp(arch, "qwen") == 0 || strcmp(arch, "qwen2") == 0 ? Qwen : LlamaLike;
+	config->arch = strcmp(arch, "mixtral") == 0                              ? Mixtral
+	               : strcmp(arch, "phi") == 0                                ? Phi
+	               : strcmp(arch, "qwen") == 0 || strcmp(arch, "qwen2") == 0 ? Qwen
+	                                                                         : LlamaLike;
+
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
 	config->n_layers = atoi(tensors_metadata(tensors, "n_layers"));
@@ -62,10 +66,10 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 
 	int head_size = config->dim / config->n_heads;
 
-	enum DType wtype = strcmp(dtype, "gf4") == 0 ? dt_i32 : strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16;
-	int gsize =  strcmp(dtype, "gf4") == 0 ? 8 : 1;
+	enum DType wtype = strcmp(dtype, "gf4") == 0 ? dt_i32 : (strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16);
+	int gsize = strcmp(dtype, "gf4") == 0 ? 8 : 1;
 
-	weights->dbits = strcmp(dtype, "gf4") == 0 ? 4 : strcmp(dtype, "fp8") == 0 ? 8 : 16;
+	weights->dbits = strcmp(dtype, "gf4") == 0 ? 4 : (strcmp(dtype, "fp8") == 0 ? 8 : 16);
 
 	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
 
@@ -350,7 +354,7 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				double seq_pct = (double)pos / (double)transformer->config.seq_len;
 				char progress[64] = {};
 				for (int i = 0; i < 10; ++i) {
-					strcat(progress, seq_pct < i * 0.1 ? "░" : seq_pct < i * 0.1 + 0.05 ? "▒" : "█");
+					strcat(progress, seq_pct < i * 0.1 ? "░" : (seq_pct < i * 0.1 + 0.05 ? "▒" : "█"));
 				}
 				printf("%s \033[32mUser:\033[37m ", progress);
 				fflush(stdout);
@@ -528,7 +532,7 @@ int main(int argc, char* argv[]) {
 	       (double)transformer.n_bytes * 8 / (double)transformer.n_params,
 	       transformer.config.seq_len,
 	       (double)kvcache_bandwidth(&transformer.config, transformer.state.kvbits, transformer.config.seq_len - 1) / 1024 / 1024 / 1024,
-		   transformer.state.kvbits);
+	       transformer.state.kvbits);
 
 #ifdef __linux__
 	// upload tensors to the GPU

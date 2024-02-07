@@ -427,7 +427,7 @@ union half4 {
 
 __device__ inline float4 attn_load4(half* p) {
 	half4 h = *(half4*)p;
-	return { __half2float(h.h[0]), __half2float(h.h[1]), __half2float(h.h[2]), __half2float(h.h[3]) };
+	return {__half2float(h.h[0]), __half2float(h.h[1]), __half2float(h.h[2]), __half2float(h.h[3])};
 }
 
 __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {

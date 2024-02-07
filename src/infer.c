@@ -317,7 +317,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		assert(!"Unsupported dbits: must be 8 or 16 for CPU");
 	}
 
-	dotprod_t dotprod = transformer->weights.dbits == 4 ? dotprod_gf4 : transformer->weights.dbits == 8 ? dotprod_fp8 : dotprod_fp16;
+	dotprod_t dotprod = transformer->weights.dbits == 4 ? dotprod_gf4 : (transformer->weights.dbits == 8 ? dotprod_fp8 : dotprod_fp16);
 
 	// a few convenience variables
 	struct Config* p = &transformer->config;
