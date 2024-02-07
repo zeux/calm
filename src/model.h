@@ -36,10 +36,8 @@ struct Weights {
 
 	// token embedding table
 	void* token_embedding_table; // (vocab_size, dim)
-	// weights for layernorm (phi)
+	// weights for norms (ln for phi)
 	float* ln_weight[MAX_LAYERS]; // (dim,)
-	float* ln_bias[MAX_LAYERS];   // (dim,)
-	// weights for rmsnorms
 	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
 	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
 	// weights for matmuls. note dim == n_heads * head_size
@@ -51,10 +49,8 @@ struct Weights {
 	void* w1[MAX_LAYERS]; // (hidden_dim, dim)
 	void* w2[MAX_LAYERS]; // (dim, hidden_dim)
 	void* w3[MAX_LAYERS]; // (hidden_dim, dim)
-	// final layernorm (phi)
+	// final norm (ln for phi)
 	float* ln_final_weight; // (dim,)
-	float* ln_final_bias;   // (dim,)
-	// final rmsnorm
 	float* rms_final_weight; // (dim,)
 	// classifier weights for the logits, on the last layer
 	void* wcls;

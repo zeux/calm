@@ -76,7 +76,6 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 	for (int l = 0; l < config->n_layers; ++l) {
 		if (config->arch == Phi) {
 			weights->ln_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-			weights->ln_bias[l] = (float*)tensors_get(tensors, "model.layers.%d.norm.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		} else {
 			weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
@@ -120,8 +119,7 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 	}
 
 	if (config->arch == Phi) {
-		weights->ln_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 1, dt_f32, (int[]){config->dim, 0, 0, 0});
-		weights->ln_final_bias = (float*)tensors_get(tensors, "model.norm.bias", 1, dt_f32, (int[]){config->dim, 0, 0, 0});
+		weights->ln_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	} else {
 		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	}

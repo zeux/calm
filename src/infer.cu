@@ -139,7 +139,7 @@ __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int siz
 	}
 }
 
-__global__ static void kernel_layernorm(float* o, float* x, float* acc, float* weight, float* bias, int size, float eps) {
+__global__ static void kernel_layernorm(float* o, float* x, float* acc, float* weight, int size, float eps) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -170,7 +170,7 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 	// normalize and scale
 	float scale = rsqrtf(var + eps);
 	for (int j = i; j < size; j += blockSize) {
-		o[j] = (x[j] - mean) * scale * weight[j] + bias[j];
+		o[j] = (x[j] - mean) * scale * weight[j];
 	}
 }
 
@@ -575,7 +575,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (p->arch == Phi) {
 			// input layernorm
-			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], w->ln_bias[l], dim, p->norm_eps);
+			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], dim, p->norm_eps);
 
 			if (parstream) {
 				// wait for layernorm to complete on parstream
@@ -665,7 +665,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	if (p->arch == Phi) {
 		// final layernorm
-		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, w->ln_final_bias, dim, p->norm_eps);
+		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, dim, p->norm_eps);
 	} else {
 		// final rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);

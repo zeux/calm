@@ -325,7 +325,6 @@ elif arch == "phi":
 
     for l in range(config["num_hidden_layers"]):
         tensors[f"model.layers.{l}.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
-        tensors[f"model.layers.{l}.norm.bias"] = torch.zeros_like(weights[f"model.layers.{l}.input_layernorm.bias"]).float()
 
         dim = config["hidden_size"]
         rotary_dim = metadata["rotary_dim"]
@@ -349,7 +348,6 @@ elif arch == "phi":
 
     # note: we fold norm bias into output bias to reduce redundancy
     tensors["model.norm.weight"] = weights["model.final_layernorm.weight"].float()
-    tensors["model.norm.bias"] = torch.zeros_like(weights["model.final_layernorm.bias"]).float()
     tensors["model.output.weight"] = conv(weights["lm_head.weight"])
     tensors["model.output.bias"] = weights["lm_head.bias"].float() + weights["lm_head.weight"] @ weights["model.final_layernorm.bias"]
 

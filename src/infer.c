@@ -190,7 +190,7 @@ static void rmsnorm(float* o, float* x, float* weight, int size, float eps) {
 	}
 }
 
-static void layernorm(float* o, float* x, float* weight, float* bias, int size, float eps) {
+static void layernorm(float* o, float* x, float* weight, int size, float eps) {
 	// calculate sum
 	float ss = 0.0f;
 	for (int j = 0; j < size; j++) {
@@ -210,7 +210,7 @@ static void layernorm(float* o, float* x, float* weight, float* bias, int size, 
 	// normalize and scale
 	float scale = 1.0f / sqrtf(var + eps);
 	for (int j = 0; j < size; j++) {
-		o[j] = (x[j] - mean) * scale * weight[j] + bias[j];
+		o[j] = (x[j] - mean) * scale * weight[j];
 	}
 }
 
@@ -355,7 +355,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		if (p->arch == Phi) {
 			// input layernorm
-			layernorm(s->xb, x, w->ln_weight[l], w->ln_bias[l], dim, p->norm_eps);
+			layernorm(s->xb, x, w->ln_weight[l], dim, p->norm_eps);
 		} else {
 			// attention rmsnorm
 			rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
@@ -481,7 +481,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 	if (p->arch == Phi) {
 		// final layernorm
-		layernorm(x, x, w->ln_final_weight, w->ln_final_bias, dim, p->norm_eps);
+		layernorm(x, x, w->ln_final_weight, dim, p->norm_eps);
 	} else {
 		// final rmsnorm
 		rmsnorm(x, x, w->rms_final_weight, dim, p->norm_eps);
