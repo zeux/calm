@@ -125,7 +125,11 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	}
 
-	weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
+	if (config->arch == Olmo && tensors_find(tensors, "model.output.weight", 0) == NULL) {
+		weights->wcls = weights->token_embedding_table; // tied weights
+	} else {
+		weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
+	}
 
 	if (config->arch == Phi) {
 		weights->bcls = (float*)tensors_get(tensors, "model.output.bias", 0, dt_f32, (int[]){config->vocab_size, 0, 0, 0});

@@ -113,7 +113,7 @@ elif arch == "olmo":
 
     # customizable
     metadata["dim"] = config["d_model"]
-    metadata["hidden_dim"] = config["mlp_hidden_size"] // 2
+    metadata["hidden_dim"] = (config["mlp_hidden_size"] or config["d_model"] * config["mlp_ratio"]) // 2
     metadata["n_layers"] = config["n_layers"]
     metadata["n_heads"] = config["n_heads"]
     metadata["n_kv_heads"] = config["n_heads"]
@@ -375,7 +375,7 @@ elif arch == "olmo":
 
         dim = config["d_model"]
         head_dim = dim // config["n_heads"]
-        hidden_dim = config["mlp_hidden_size"] // 2
+        hidden_dim = (config["mlp_hidden_size"] or config["d_model"] * config["mlp_ratio"]) // 2
 
         attn_proj = weights[f"model.transformer.blocks.{l}.att_proj.weight"]
         assert attn_proj.shape == (dim * 3, dim)
@@ -395,7 +395,8 @@ elif arch == "olmo":
         tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(mlp_proj[:hidden_dim])
 
     tensors["model.norm.weight"] = torch.ones(config["d_model"], dtype=torch.float32)
-    tensors["model.output.weight"] = conv(weights["model.transformer.ff_out.weight"])
+    if not config["weight_tying"]:
+        tensors["model.output.weight"] = conv(weights["model.transformer.ff_out.weight"])
 
 # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
 # note: we concatenate all bytes of all tokens into a single tensor
