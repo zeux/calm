@@ -48,7 +48,7 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OlmoModelForCausalLM": "olmo"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
@@ -107,6 +107,23 @@ elif arch == "phi":
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = int(config["hidden_size"] / config["num_attention_heads"] * config["partial_rotary_factor"])
     metadata["norm_eps"] = config["layer_norm_eps"]
+elif arch == "olmo":
+    # hardcoded in C
+    assert config["activation_type"] == "swiglu"
+
+    # customizable
+    metadata["dim"] = config["d_model"]
+    metadata["hidden_dim"] = config["mlp_hidden_size"] // 2
+    metadata["n_layers"] = config["n_layers"]
+    metadata["n_heads"] = config["n_heads"]
+    metadata["n_kv_heads"] = config["n_heads"]
+    metadata["vocab_size"] = config["embedding_size"]
+    metadata["max_seq_len"] = config["max_sequence_length"]
+    metadata["bos_token_id"] = -1
+    metadata["eos_token_id"] = config["eos_token_id"]
+    metadata["rope_theta"] = 10000.0
+    metadata["rotary_dim"] = config["d_model"] // config["n_heads"]
+    metadata["norm_eps"] = 1e-5
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
 # this has poisoned all HF tokenizer configs that use ByteLevel decoder/preprocessor
@@ -124,8 +141,8 @@ def gpt2_bytes_to_unicode():
     return dict(zip(bs, cs))
 
 # load tokenizer model
-tokens = [""] * config["vocab_size"]
-scores = [0] * config["vocab_size"]
+tokens = [""] * metadata["vocab_size"]
+scores = [0] * metadata["vocab_size"]
 tokens_gpt2 = False
 
 ext = os.path.splitext(args.tokenizer)[1]
@@ -175,7 +192,7 @@ gpt2_decode = {v: k for k, v in gpt2_bytes_to_unicode().items()}
 
 for i, t in enumerate(tokens):
     if tokens_gpt2:
-        b = bytes([gpt2_decode.get(c) for c in t])
+        b = bytes([gpt2_decode.get(c, 0) for c in t])
         b = b"" if b == b"\n\n" else b # special case for double newline because phi-2 is stupid
         b = b.replace(b"\0", b"\7") # replace null bytes with bell characters
     else:
@@ -350,6 +367,35 @@ elif arch == "phi":
     tensors["model.norm.weight"] = weights["model.final_layernorm.weight"].float()
     tensors["model.output.weight"] = conv(weights["lm_head.weight"])
     tensors["model.output.bias"] = weights["lm_head.bias"].float() + weights["lm_head.weight"] @ weights["model.final_layernorm.bias"]
+elif arch == "olmo":
+    tensors["model.embed.weight"] = conv(weights["model.transformer.wte.weight"])
+
+    for l in range(config["n_layers"]):
+        tensors[f"model.layers.{l}.attn.norm.weight"] = torch.ones(config["d_model"], dtype=torch.float32)
+
+        dim = config["d_model"]
+        head_dim = dim // config["n_heads"]
+        hidden_dim = config["mlp_hidden_size"] // 2
+
+        attn_proj = weights[f"model.transformer.blocks.{l}.att_proj.weight"]
+        assert attn_proj.shape == (dim * 3, dim)
+
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(attn_proj[:dim], config["n_heads"], head_dim))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(attn_proj[dim:dim*2], config["n_heads"], head_dim))
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(attn_proj[dim*2:])
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.transformer.blocks.{l}.attn_out.weight"])
+
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = torch.ones(config["d_model"], dtype=torch.float32)
+
+        mlp_proj = weights[f"model.transformer.blocks.{l}.ff_proj.weight"]
+        assert mlp_proj.shape == (hidden_dim * 2, dim)
+
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(mlp_proj[hidden_dim:])
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.transformer.blocks.{l}.ff_out.weight"])
+        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(mlp_proj[:hidden_dim])
+
+    tensors["model.norm.weight"] = torch.ones(config["d_model"], dtype=torch.float32)
+    tensors["model.output.weight"] = conv(weights["model.transformer.ff_out.weight"])
 
 # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
 # note: we concatenate all bytes of all tokens into a single tensor
