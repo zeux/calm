@@ -65,6 +65,9 @@ It has been tested on following models:
   - Phi2 (microsoft/phi-2)
 - Mixtral architecture
   - Mixtral 8x7B (mistralai/Mixtral-8x7B-Instruct-v0.1)
+- OLMo architecture
+  - OLMo 1B (allenai/OLMo-1B)
+  - OLMo 7B (allenai/OLMo-7B)
 
 ## Supported formats
 
