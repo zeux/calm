@@ -51,9 +51,10 @@ It has been tested on following models:
 - Mistral architecture
   - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
   - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
-- Qwen architecture
+- Qwen architecture (*deprecated*)
   - Qwen 7B (Qwen/Qwen-7B-Chat)
   - Qwen 14B (Qwen/Qwen-14B-Chat)
+- Qwen2 architecture
   - Qwen1.5 0.5B (Qwen/Qwen1.5-0.5B)
   - Qwen1.5 1.8B (Qwen/Qwen1.5-1.8B)
   - Qwen1.5 4B (Qwen/Qwen1.5-4B)
