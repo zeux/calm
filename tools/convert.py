@@ -304,12 +304,13 @@ elif arch == "qwen":
         assert wkv_w.shape[0] == 3 * dim and wkv_b.shape[0] == 3 * dim
 
         tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["num_attention_heads"], head_dim))
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["num_attention_heads"], head_dim).float()
         tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["num_attention_heads"], head_dim))
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["num_attention_heads"], head_dim).float()
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wkv_w[dim*2:])
-        tensors[f"model.layers.{l}.attn.wv.bias"] = wkv_b[dim*2:].float()
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"transformer.h.{l}.attn.c_proj.weight"])
+
+        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["num_attention_heads"], head_dim).float()
+        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["num_attention_heads"], head_dim).float()
+        tensors[f"model.layers.{l}.attn.wv.bias"] = wkv_b[dim*2:].float()
 
         tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"transformer.h.{l}.ln_2.weight"].float()
 
@@ -330,12 +331,13 @@ elif arch == "phi":
         rotary_dim = metadata["rotary_dim"]
 
         tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"], rotary_dim))
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], config["num_attention_heads"], rotary_dim).float()
         tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_attention_heads"], rotary_dim))
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_attention_heads"], rotary_dim).float()
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
-        tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.dense.weight"])
+
+        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], config["num_attention_heads"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_attention_heads"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
 
         # note: we fold attn output bias into mlp w2 bias to reduce redundancy
         tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.fc1.weight"])
