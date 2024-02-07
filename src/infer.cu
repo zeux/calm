@@ -146,6 +146,8 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 	float K = x[0] + (acc ? acc[0] : 0.f); // shifted variance for numerical stability
 	__syncthreads();
 
+	extern __shared__ float xs[];
+
 	// calculate sum and sum of squares (per thread)
 	float sum = 0.0f, ss = 0.0f;
 	for (int j = i; j < size; j += blockSize) {
@@ -157,6 +159,7 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 
 		sum += v - K;
 		ss += (v - K) * (v - K);
+		xs[j] = v;
 	}
 
 	// sum across threads in block
@@ -170,7 +173,7 @@ __global__ static void kernel_layernorm(float* o, float* x, float* acc, float* w
 	// normalize and scale
 	float scale = rsqrtf(var + eps);
 	for (int j = i; j < size; j += blockSize) {
-		o[j] = (x[j] - mean) * scale * weight[j];
+		o[j] = (xs[j] - mean) * scale * weight[j];
 	}
 }
 
@@ -575,7 +578,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		if (p->arch == Phi) {
 			// input layernorm
-			kernel_layernorm<<<1, layernorm_size, 0, stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], dim, p->norm_eps);
+			kernel_layernorm<<<1, layernorm_size, dim * sizeof(float), stream>>>(s->xb, x, l == 0 ? NULL : s->xa, w->ln_weight[l], dim, p->norm_eps);
 
 			if (parstream) {
 				// wait for layernorm to complete on parstream
@@ -665,7 +668,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	if (p->arch == Phi) {
 		// final layernorm
-		kernel_layernorm<<<1, layernorm_size, 0, stream>>>(x, x, s->xa, w->ln_final_weight, dim, p->norm_eps);
+		kernel_layernorm<<<1, layernorm_size, dim * sizeof(float), stream>>>(x, x, s->xa, w->ln_final_weight, dim, p->norm_eps);
 	} else {
 		// final rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);
