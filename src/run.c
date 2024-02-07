@@ -32,6 +32,7 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->arch = strcmp(arch, "mixtral") == 0                              ? Mixtral
 	               : strcmp(arch, "phi") == 0                                ? Phi
 	               : strcmp(arch, "qwen") == 0 || strcmp(arch, "qwen2") == 0 ? Qwen
+	               : strcmp(arch, "olmo") == 0                               ? Olmo
 	                                                                         : LlamaLike;
 
 	config->dim = atoi(tensors_metadata(tensors, "dim"));

@@ -13,6 +13,7 @@ enum Arch {
 	Qwen,
 	Phi,
 	Mixtral,
+	Olmo,
 };
 
 struct Config {

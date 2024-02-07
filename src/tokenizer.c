@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_TOKEN_LENGTH 256
+#define MAX_TOKEN_LENGTH 512
 
 static int compare_tokens(const void* a, const void* b) {
 	return strcmp(((struct TokenIndex*)a)->str, ((struct TokenIndex*)b)->str);

@@ -585,6 +585,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 				CUDA_CHECK(cudaEventRecord(parsync[0], stream));
 				CUDA_CHECK(cudaStreamWaitEvent(parstream, parsync[0], 0));
 			}
+		} else if (p->arch == Olmo) {
+			// attention layernorm
+			kernel_layernorm<<<1, layernorm_size, dim * sizeof(float), stream>>>(s->xb, x, NULL, w->rms_att_weight[l], dim, p->norm_eps);
 		} else {
 			// attention rmsnorm
 			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
@@ -649,8 +652,13 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 				CUDA_CHECK(cudaStreamWaitEvent(stream, parsync[1], 0));
 			}
 		} else {
-			// ffn rmsnorm
-			kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+			if (p->arch == Olmo) {
+				// ffn layernorm
+				kernel_layernorm<<<1, layernorm_size, dim * sizeof(float), stream>>>(s->xb, x, NULL, w->rms_ffn_weight[l], dim, p->norm_eps);
+			} else {
+				// ffn rmsnorm
+				kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+			}
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 			kernel_matmul_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
@@ -669,6 +677,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	if (p->arch == Phi) {
 		// final layernorm
 		kernel_layernorm<<<1, layernorm_size, dim * sizeof(float), stream>>>(x, x, s->xa, w->ln_final_weight, dim, p->norm_eps);
+	} else if (p->arch == Olmo) {
+		// final layernorm
+		kernel_layernorm<<<1, layernorm_size, dim * sizeof(float), stream>>>(x, x, NULL, w->rms_final_weight, dim, p->norm_eps);
 	} else {
 		// final rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);

@@ -356,6 +356,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		if (p->arch == Phi) {
 			// input layernorm
 			layernorm(s->xb, x, w->ln_weight[l], dim, p->norm_eps);
+		} else if (p->arch == Olmo) {
+			// attention layernorm
+			layernorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
 		} else {
 			// attention rmsnorm
 			rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
@@ -450,8 +453,13 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 					s->hb[i] = gelu(s->hb[i]);
 				}
 			} else {
-				// ffn rmsnorm
-				rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+				if (p->arch == Olmo) {
+					// ffn layernorm
+					layernorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+				} else {
+					// ffn rmsnorm
+					rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+				}
 
 				// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
 				// first calculate self.w1(x) and self.w3(x)
@@ -482,6 +490,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	if (p->arch == Phi) {
 		// final layernorm
 		layernorm(x, x, w->ln_final_weight, dim, p->norm_eps);
+	} else if (p->arch == Olmo) {
+		// final layernorm
+		layernorm(x, x, w->rms_final_weight, dim, p->norm_eps);
 	} else {
 		// final rmsnorm
 		rmsnorm(x, x, w->rms_final_weight, dim, p->norm_eps);
