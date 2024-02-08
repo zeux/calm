@@ -345,7 +345,7 @@ elif arch == "phi":
 
         dim = config["hidden_size"]
         rotary_dim = metadata["rotary_dim"]
-        norm_bias = weights[f"model.layers.{l}.input_layernorm.bias"]
+        norm_bias = weights[f"model.layers.{l}.input_layernorm.bias"].float()
 
         tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"], rotary_dim))
         tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_attention_heads"], rotary_dim))
@@ -353,20 +353,20 @@ elif arch == "phi":
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.dense.weight"])
 
         # note: we fold norm bias into qkv/mlp bias to reduce redundancy
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"] + weights[f"model.layers.{l}.self_attn.q_proj.weight"] @ norm_bias, config["num_attention_heads"], rotary_dim).float()
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"] + weights[f"model.layers.{l}.self_attn.k_proj.weight"] @ norm_bias, config["num_attention_heads"], rotary_dim).float()
-        tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float() + weights[f"model.layers.{l}.self_attn.v_proj.weight"] @ norm_bias
+        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"] + weights[f"model.layers.{l}.self_attn.q_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"] + weights[f"model.layers.{l}.self_attn.k_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float()
+        tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float() + weights[f"model.layers.{l}.self_attn.v_proj.weight"].float() @ norm_bias
 
         # note: we fold attn output bias into mlp w2 bias to reduce redundancy
         tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.fc1.weight"])
-        tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"model.layers.{l}.mlp.fc1.bias"].float() + weights[f"model.layers.{l}.mlp.fc1.weight"] @ norm_bias
+        tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"model.layers.{l}.mlp.fc1.bias"].float() + weights[f"model.layers.{l}.mlp.fc1.weight"].float() @ norm_bias
         tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.fc2.weight"])
         tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"model.layers.{l}.mlp.fc2.bias"].float() + weights[f"model.layers.{l}.self_attn.dense.bias"].float()
 
     # note: we fold norm bias into output bias to reduce redundancy
     tensors["model.norm.weight"] = weights["model.final_layernorm.weight"].float()
     tensors["model.output.weight"] = conv(weights["lm_head.weight"])
-    tensors["model.output.bias"] = weights["lm_head.bias"].float() + weights["lm_head.weight"] @ weights["model.final_layernorm.bias"]
+    tensors["model.output.bias"] = weights["lm_head.bias"].float() + weights["lm_head.weight"].float() @ weights["model.final_layernorm.bias"].float()
 elif arch == "olmo":
     tensors["model.embed.weight"] = conv(weights["model.transformer.wte.weight"])
 
