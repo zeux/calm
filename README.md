@@ -24,7 +24,7 @@ You can also run the model in chat mode (for models like Mistral/Mixtral you mig
 make && ./build/run mistral-7b-instruct.calm -y "You are a helpful AI assistant."
 ```
 
-Before running Python you may want to install the dependencies via `pip install -r tools/requirements.txt`. When using git, git-lfs is required and the download size may be larger than necessary; you can use `tools/download.py` instead:
+Before running Python you may want to install the dependencies via `pip install -r tools/requirements.txt`. When using git to download models, git-lfs is required and the download size may be larger than necessary; you can use `tools/download.py` instead (assumes models use Safetensors by default):
 
 ```sh
 python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct-v0.2
