@@ -574,7 +574,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
-		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
+		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
 		if (p->arch == Phi) {
 			// input layernorm

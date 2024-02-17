@@ -351,7 +351,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	}
 
 	// forward all the layers
-	for (unsigned long long l = 0; l < p->n_layers; l++) {
+	for (int l = 0; l < p->n_layers; l++) {
 
 		if (p->arch == Phi) {
 			// input layernorm
@@ -365,7 +365,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 
 		// key and value point to the kv cache
-		int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
+		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 		kvtype_t* kb = (kvtype_t*)s->key_cache + loff;
 		kvtype_t* vb = (kvtype_t*)s->value_cache + loff;
 
