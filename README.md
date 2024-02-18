@@ -51,6 +51,7 @@ It has been tested on following models:
 - Mistral architecture
   - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
   - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
+  - GritLM 7B (GritLM/GritLM-7B)
 - Qwen architecture (*deprecated*)
   - Qwen 7B (Qwen/Qwen-7B-Chat)
   - Qwen 14B (Qwen/Qwen-14B-Chat)
@@ -65,6 +66,7 @@ It has been tested on following models:
   - Phi2 (microsoft/phi-2)
 - Mixtral architecture
   - Mixtral 8x7B (mistralai/Mixtral-8x7B-Instruct-v0.1)
+  - GritLM 8x7B (GritLM/GritLM-8x7B)
 - OLMo architecture
   - OLMo 1B (allenai/OLMo-1B)
   - OLMo 7B (allenai/OLMo-7B)
