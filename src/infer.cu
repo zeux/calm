@@ -5,7 +5,13 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <cooperative_groups.h>
+
 #include "helpers.cuh"
+
+namespace cg {
+	using namespace cooperative_groups;
+}
 
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
@@ -21,6 +27,9 @@
 
 static cudaStream_t stream, parstream;
 static cudaEvent_t parsync[2];
+
+static int coop;
+static int coopsms;
 
 static void* cuda_devicecopy(void* host, size_t size) {
 	void* device = NULL;
@@ -93,6 +102,13 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
+
+	if (const char* coop_env = getenv("CALM_CG")) {
+		coop = atoi(coop_env);
+		coopsms = devprop.multiProcessorCount;
+
+		printf("# CUDA: Using cooperative groups (experimental)\n");
+	}
 }
 
 template <typename T>
@@ -695,10 +711,153 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	return s->logits;
 }
 
+template <typename T>
+__global__ static void kernel_fused_coop(uint64_t, float* xout, float* h, float* x, T* w1, T* w2, T* w3, int n, int d) {
+	cg::grid_group gg = cg::this_grid();
+
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	for (int j = i; j < d; j += ib) {
+		float v1 = matmul_warppar(x, w1, j, n, n);
+		float v3 = matmul_warppar(x, w3, j, n, n);
+
+		// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+		float val = (v1 / (1.0f + expf(-v1))) * v3;
+
+		if (threadIdx.x % warpSize == 0) {
+			h[j] = val;
+		}
+	}
+
+	gg.sync();
+
+	for (int j = i; j < n; j += ib) {
+		float val = matmul_warppar(h, w2, j, d, d);
+
+		if (threadIdx.x % warpSize == 0) {
+			xout[j] += val;
+		}
+	}
+}
+
+template <typename T, typename KVT>
+static float* forwardcoop(struct Transformer* transformer, int token, int pos, unsigned flags) {
+	struct Config* p = &transformer->config;
+	struct Weights* w = &transformer->weights;
+	struct RunState* s = &transformer->state;
+
+	assert(p->arch == LlamaLike);
+
+	// a few convenience variables
+	float* x = s->x;
+	int dim = p->dim;
+	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
+	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
+	int hidden_dim = p->hidden_dim;
+	int head_size = dim / p->n_heads;
+	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
+
+	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
+	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
+	int kv_pos = kv_sink + (pos - kv_sink) % (p->seq_len - kv_sink);
+	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
+
+	// ensure all dimensions are warp-aligned
+	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
+	assert(p->vocab_size % 32 == 0);
+
+	// rmsnorm and softmax require a larger-than-warp block size for efficiency
+	const int rmsnorm_size = 1024;
+	const int softmax_size = p->arch == Phi ? 512 : 1024;
+
+	// gf4 kernels need a little more parallelism to saturate 4090
+	// fp8/fp16 kernels work well with 1 on 4090, but A100/H100 benefits from 2
+	const int matmul_par = 2;
+
+	// A100/H100 need higher parallelism for attention kernels
+	const int attn_par = 2;
+
+	// copy the token embedding into x
+	assert(token < p->vocab_size);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
+
+	// forward all the layers
+	for (int l = 0; l < p->n_layers; l++) {
+		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
+
+		// attention rmsnorm
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
+
+		// qkv matmuls for this position + RoPE encoding + update KV cache
+		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
+		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
+		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, head_size, pos, kv_pos, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+
+		// only update kv cache and don't output logits
+		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
+			break;
+		}
+
+		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
+
+		// attention scores for all heads
+		kernel_attn_score<<<dim3((kv_len + 64 * attn_par - 1) / (64 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
+		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+
+		// softmax the scores to get attention weights over [0..kv_len)
+		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
+
+		// compute weighted sum of the values into xb2
+		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
+		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+
+		// final matmul to get the output of the attention
+		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
+		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], dim, dim);
+
+		// ffn rmsnorm
+		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+
+		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
+		uint64_t bw = 0;
+		void* coopargs[] = {
+			&bw,
+			&x,
+			&s->hb,
+			&s->xb,
+			&w->w1[l],
+			&w->w2[l],
+			&w->w3[l],
+			&dim,
+			&hidden_dim
+		};
+
+		CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T>, coopsms, 1024, coopargs, 0, stream));
+	}
+
+	if (flags & FF_UPDATE_KV_ONLY) {
+		// only update kv cache and don't output logits
+		return NULL;
+	}
+
+	// final rmsnorm
+	kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);
+
+	// classifier into logits
+	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(
+	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+	CUDA_CHECK(cudaGetLastError()); // check for kernel launch errors; they might fail with OOM due to lazy kernel compilation
+
+	return s->logits;
+}
+
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
 #define CASE(dbits_, dtype, kvbits_, kvtype)                                          \
 	if (transformer->weights.dbits == dbits_ && transformer->state.kvbits == kvbits_) \
-	return forward<dtype, kvtype>(transformer, token, pos, flags)
+	return (coop ? &forwardcoop<dtype, kvtype> : &forward<dtype, kvtype>)(transformer, token, pos, flags)
 
 	CASE(4, uint32_t, 8, __nv_fp8_e5m2);
 	CASE(4, uint32_t, 16, __half);
