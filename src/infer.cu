@@ -712,31 +712,47 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 }
 
 template <typename T>
-__global__ static void kernel_fused_coop(uint64_t, float* xout, float* h, float* x, T* w1, T* w2, T* w3, int n, int d) {
+struct CoopArgs {
+	uint64_t bw;
+	float* xout;
+	float* h;
+	float* x;
+	T* w1;
+	T* w2;
+	T* w3;
+	int n;
+	int d;
+};
+
+template <typename T>
+__global__ static void kernel_fused_coop(CoopArgs<T> args) {
 	cg::grid_group gg = cg::this_grid();
+
+	int n = args.n;
+	int d = args.d;
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
 	for (int j = i; j < d; j += ib) {
-		float v1 = matmul_warppar(x, w1, j, n, n);
-		float v3 = matmul_warppar(x, w3, j, n, n);
+		float v1 = matmul_warppar(args.x, args.w1, j, n, n);
+		float v3 = matmul_warppar(args.x, args.w3, j, n, n);
 
 		// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
 		float val = (v1 / (1.0f + expf(-v1))) * v3;
 
 		if (threadIdx.x % warpSize == 0) {
-			h[j] = val;
+			args.h[j] = val;
 		}
 	}
 
 	gg.sync();
 
 	for (int j = i; j < n; j += ib) {
-		float val = matmul_warppar(h, w2, j, d, d);
+		float val = matmul_warppar(args.h, args.w2, j, d, d);
 
 		if (threadIdx.x % warpSize == 0) {
-			xout[j] += val;
+			args.xout[j] += val;
 		}
 	}
 }
@@ -822,21 +838,21 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 		uint64_t bw = 0;
 		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
-		bw = PROF_TOKEN(bw);
 
-		void* coopargs[] = {
-			&bw,
-			&x,
-			&s->hb,
-			&s->xb,
-			&w->w1[l],
-			&w->w2[l],
-			&w->w3[l],
-			&dim,
-			&hidden_dim
+		CoopArgs<T> args = {
+			PROF_TOKEN(bw),
+			x,
+			s->hb,
+			s->xb,
+			(T*)w->w1[l],
+			(T*)w->w2[l],
+			(T*)w->w3[l],
+			dim,
+			hidden_dim
 		};
+		void* argsp = &args;
 
-		CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T>, coopsms, 1024, coopargs, 0, stream));
+		CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T>, coopsms, 1024, &argsp, 0, stream));
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
