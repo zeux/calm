@@ -746,6 +746,24 @@ struct CoopArgs {
 	float norm_eps;
 };
 
+__device__ static void softmax(float* x, int size) {
+	int i = threadIdx.x;
+
+	// find max value per thread (for numerical stability)
+	float max_val = -FLT_MAX;
+	for (int j = i; j < size; j += blockDim.x) {
+		max_val = max(max_val, x[j]);
+	}
+
+	// max across threads in block
+	max_val = blockreduce_max(max_val);
+
+	// exp per thread
+	for (int j = i; j < size; j += blockDim.x) {
+		x[j] = expf(x[j] - max_val);
+	}
+}
+
 __device__ static void rmsnorm(float* o, float* x, float* weight, int size, float eps) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
@@ -779,6 +797,16 @@ __global__ static void kernel_fused_coop(CoopArgs<T, KVT> args) {
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	// attention softmax
+	if (blockIdx.x < args.n_heads) {
+		int h = blockIdx.x;
+		float* atth = args.att + h * args.seq_len;
+
+		softmax(atth, args.kv_len);
+	}
+
+	gg.sync();
 
 	// attention mix
 	for (int j = i; j < dim; j += ib) {
@@ -870,7 +898,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 	// rmsnorm and softmax require a larger-than-warp block size for efficiency
 	const int rmsnorm_size = 1024;
-	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
 	// A100/H100 need higher parallelism for attention kernels
 	const int attn_par = 2;
@@ -901,9 +928,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((kv_len + 64 * attn_par - 1) / (64 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
 		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
-
-		// softmax the scores to get attention weights over [0..kv_len)
-		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 		uint64_t bw = 0;
 		bw += kvbw; // attn mixing
