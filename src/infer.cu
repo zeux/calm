@@ -450,6 +450,25 @@ __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
 }
 
 template <typename KVT>
+__device__ inline float2 attn_score2(KVT* kht, float* qh, int head_size, int seq_len, int t) {
+	float score1 = 0.0f;
+	float score2 = 0.0f;
+	for (int j = 0; j < head_size; j += 2) {
+		float4 kk = attn_load4(&kht[j * seq_len + t * 2]);
+		float2 qq = *(float2*)&qh[j];
+		score1 += kk.x * qq.x;
+		score1 += kk.y * qq.y;
+		score2 += kk.z * qq.x;
+		score2 += kk.w * qq.y;
+	}
+
+	score1 /= sqrtf(head_size);
+	score2 /= sqrtf(head_size);
+
+	return {score1, score2};
+}
+
+template <typename KVT>
 __device__ inline float attn_warpdot(KVT* val, float* atth, int kv_len) {
 	int kv_len4 = kv_len & ~3;
 	int lane = threadIdx.x % warpSize;
@@ -494,22 +513,10 @@ __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* 
 	KVT* kh = kb + kvh * head_size * seq_len;
 	float* atth = attb + h * seq_len;
 
-	float score1 = 0.0f;
-	float score2 = 0.0f;
-	for (int j = 0; j < head_size; j += 2) {
-		float4 kk = attn_load4(&kh[j * seq_len + t * 2]);
-		float2 qq = *(float2*)&qh[j];
-		score1 += kk.x * qq.x;
-		score1 += kk.y * qq.y;
-		score2 += kk.z * qq.x;
-		score2 += kk.w * qq.y;
-	}
+	float2 score = attn_score2(kh, qh, head_size, seq_len, t);
 
-	score1 /= sqrtf(head_size);
-	score2 /= sqrtf(head_size);
-
-	atth[t + 0] = score1;
-	atth[t + 1] = score2;
+	atth[t + 0] = score.x;
+	atth[t + 1] = score.y;
 }
 
 __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len, int kv_len) {
@@ -726,8 +733,10 @@ struct CoopArgs {
 	float* hb;
 	float* xb;
 	float* xb2;
+	float* q;
 	float* att;
 
+	KVT* keyb;
 	KVT* valb;
 
 	T* wo;
@@ -786,7 +795,7 @@ __device__ static void rmsnorm(float* o, float* x, float* weight, int size, floa
 }
 
 template <typename T, typename KVT>
-__global__ static void kernel_fused_coop(CoopArgs<T, KVT> args) {
+__global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, KVT> args) {
 	cg::grid_group gg = cg::this_grid();
 
 	int dim = args.dim;
@@ -797,6 +806,28 @@ __global__ static void kernel_fused_coop(CoopArgs<T, KVT> args) {
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	// attention score
+	int kv_len32 = (args.kv_len + 31) / 32;
+
+	for (int j = i; j < kv_len32 * args.n_heads; j += ib) {
+		int h = j % args.n_heads;
+		int kvh = h / kv_mul;
+		int t = ((j / args.n_heads) * warpSize + (threadIdx.x % warpSize)) * 2;
+
+		if (t < args.kv_len) {
+			float* qh = args.q + h * head_size;
+			KVT* kh = args.keyb + kvh * head_size * args.seq_len;
+			float* atth = args.att + h * args.seq_len;
+
+			float2 score = attn_score2(kh, qh, head_size, args.seq_len, t);
+
+			atth[t + 0] = score.x;
+			atth[t + 1] = score.y;
+		}
+	}
+
+	gg.sync();
 
 	// attention softmax
 	if (blockIdx.x < args.n_heads) {
@@ -925,12 +956,8 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
-		// attention scores for all heads
-		kernel_attn_score<<<dim3((kv_len + 64 * attn_par - 1) / (64 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
-
 		uint64_t bw = 0;
-		bw += kvbw; // attn mixing
+		bw += kvbw * 2; // attn scoring and mixing
 		bw += dim * dim * dbits / 8; // attn output
 		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
 
@@ -941,8 +968,10 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			s->hb,
 			s->xb,
 			s->xb2,
+			s->q,
 			s->att,
 
+			(KVT*)s->key_cache + loff,
 			(KVT*)s->value_cache + loff,
 
 			(T*)w->wo[l],
