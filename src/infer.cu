@@ -450,6 +450,35 @@ __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
 }
 
 template <typename KVT>
+__device__ inline float attn_warpdot(KVT* val, float* atth, int kv_len) {
+	int kv_len4 = kv_len & ~3;
+	int lane = threadIdx.x % warpSize;
+
+	float res = 0.0f;
+	float sum = 0.0f;
+	for (int t = lane * 4; t < kv_len4; t += warpSize * 4) {
+		float4 vv = attn_load4(&val[t]);
+		float4 aa = *(float4*)&atth[t];
+		res += vv.x * aa.x;
+		res += vv.y * aa.y;
+		res += vv.z * aa.z;
+		res += vv.w * aa.w;
+		sum += aa.x + aa.y + aa.z + aa.w;
+	}
+
+	if (kv_len4 + lane < kv_len) {
+		float a = atth[kv_len4 + lane];
+		res += a * float(val[kv_len4 + lane]);
+		sum += a;
+	}
+
+	res = warpreduce_sum(res);
+	sum = warpreduce_sum(sum);
+
+	return res / sum;
+}
+
+template <typename KVT>
 __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	if (t >= kv_len) {
@@ -520,32 +549,10 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* 
 	KVT* vh = valb + kvh * head_size * seq_len;
 	KVT* val = vh + i * seq_len;
 
-	int kv_len4 = kv_len & ~3;
-	int lane = threadIdx.x % warpSize;
-
-	float res = 0.0f;
-	float sum = 0.0f;
-	for (int t = lane * 4; t < kv_len4; t += warpSize * 4) {
-		float4 vv = attn_load4(&val[t]);
-		float4 aa = *(float4*)&atth[t];
-		res += vv.x * aa.x;
-		res += vv.y * aa.y;
-		res += vv.z * aa.z;
-		res += vv.w * aa.w;
-		sum += aa.x + aa.y + aa.z + aa.w;
-	}
-
-	if (kv_len4 + lane < kv_len) {
-		float a = atth[kv_len4 + lane];
-		res += a * float(val[kv_len4 + lane]);
-		sum += a;
-	}
-
-	res = warpreduce_sum(res);
-	sum = warpreduce_sum(sum);
+	float res = attn_warpdot(val, atth, kv_len);
 
 	if (threadIdx.x % warpSize == 0) {
-		xout[h * head_size + i] = res / sum;
+		xout[h * head_size + i] = res;
 	}
 }
 
@@ -711,7 +718,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	return s->logits;
 }
 
-template <typename T>
+template <typename T, typename KVT>
 struct CoopArgs {
 	uint64_t bw;
 
@@ -719,6 +726,9 @@ struct CoopArgs {
 	float* hb;
 	float* xb;
 	float* xb2;
+	float* att;
+
+	KVT* valb;
 
 	T* wo;
 	float* rms_ffn_weight;
@@ -728,6 +738,11 @@ struct CoopArgs {
 
 	int dim;
 	int hidden_dim;
+	int n_heads;
+	int n_kv_heads;
+	int seq_len;
+	int kv_len;
+
 	float norm_eps;
 };
 
@@ -752,15 +767,37 @@ __device__ static void rmsnorm(float* o, float* x, float* weight, int size, floa
 	}
 }
 
-template <typename T>
-__global__ static void kernel_fused_coop(CoopArgs<T> args) {
+template <typename T, typename KVT>
+__global__ static void kernel_fused_coop(CoopArgs<T, KVT> args) {
 	cg::grid_group gg = cg::this_grid();
 
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
 
+	int head_size = dim / args.n_heads;
+	int kv_mul = args.n_heads / args.n_kv_heads;
+
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	// attention mix
+	for (int j = i; j < dim; j += ib) {
+		int h = j / head_size;
+		int kvh = h / kv_mul;
+		int j_head = j % head_size;
+
+		float* atth = args.att + h * args.seq_len;
+		KVT* vh = args.valb + kvh * head_size * args.seq_len;
+		KVT* val = vh + j_head * args.seq_len;
+
+		float res = attn_warpdot(val, atth, args.kv_len);
+
+		if (threadIdx.x % warpSize == 0) {
+			args.xb2[j] = res;
+		}
+	}
+
+	gg.sync();
 
 	// attention output
 	for (int j = i; j < dim; j += ib) {
@@ -868,21 +905,21 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
-		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
-
 		uint64_t bw = 0;
+		bw += kvbw; // attn mixing
 		bw += dim * dim * dbits / 8; // attn output
 		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
 
-		CoopArgs<T> args = {
+		CoopArgs<T, KVT> args = {
 			PROF_TOKEN(bw),
 
 			x,
 			s->hb,
 			s->xb,
 			s->xb2,
+			s->att,
+
+			(KVT*)s->value_cache + loff,
 
 			(T*)w->wo[l],
 			w->rms_ffn_weight[l],
@@ -892,11 +929,16 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 			dim,
 			hidden_dim,
+			p->n_heads,
+			p->n_kv_heads,
+			p->seq_len,
+			kv_len,
+
 			p->norm_eps,
 		};
 		void* argsp = &args;
 
-		CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T>, coopsms, 1024, &argsp, 0, stream));
+		CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T, KVT>, coopsms, 1024, &argsp, 0, stream));
 	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
