@@ -718,7 +718,9 @@ struct CoopArgs {
 	float* x;
 	float* hb;
 	float* xb;
+	float* xb2;
 
+	T* wo;
 	float* rms_ffn_weight;
 	T* w1;
 	T* w2;
@@ -760,12 +762,25 @@ __global__ static void kernel_fused_coop(CoopArgs<T> args) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
+	// attention output
+	for (int j = i; j < dim; j += ib) {
+		float val = matmul_warppar(args.xb2, args.wo, j, dim, dim);
+
+		if (threadIdx.x % warpSize == 0) {
+			args.x[j] += val;
+		}
+	}
+
+	gg.sync();
+
+	// rmsnorm
 	if (blockIdx.x == 0) {
 		rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
 	}
 
 	gg.sync();
 
+	// F.silu(self.w1(x)) * self.w3(x)
 	for (int j = i; j < hidden_dim; j += ib) {
 		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim);
 		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim);
@@ -780,6 +795,7 @@ __global__ static void kernel_fused_coop(CoopArgs<T> args) {
 
 	gg.sync();
 
+	// self.w2(...) + pre-rmsnorm residual
 	for (int j = i; j < dim; j += ib) {
 		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim, hidden_dim);
 
@@ -819,10 +835,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	const int rmsnorm_size = 1024;
 	const int softmax_size = p->arch == Phi ? 512 : 1024;
 
-	// gf4 kernels need a little more parallelism to saturate 4090
-	// fp8/fp16 kernels work well with 1 on 4090, but A100/H100 benefits from 2
-	const int matmul_par = 2;
-
 	// A100/H100 need higher parallelism for attention kernels
 	const int attn_par = 2;
 
@@ -860,11 +872,8 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
 		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
 
-		// final matmul to get the output of the attention
-		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], dim, dim);
-
 		uint64_t bw = 0;
+		bw += dim * dim * dbits / 8; // attn output
 		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
 
 		CoopArgs<T> args = {
@@ -873,7 +882,9 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			x,
 			s->hb,
 			s->xb,
+			s->xb2,
 
+			(T*)w->wo[l],
 			w->rms_ffn_weight[l],
 			(T*)w->w1[l],
 			(T*)w->w2[l],
