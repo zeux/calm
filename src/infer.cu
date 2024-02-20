@@ -714,45 +714,77 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 template <typename T>
 struct CoopArgs {
 	uint64_t bw;
-	float* xout;
-	float* h;
+
 	float* x;
+	float* hb;
+	float* xb;
+
+	float* rms_ffn_weight;
 	T* w1;
 	T* w2;
 	T* w3;
-	int n;
-	int d;
+
+	int dim;
+	int hidden_dim;
+	float norm_eps;
 };
+
+__device__ static void rmsnorm(float* o, float* x, float* weight, int size, float eps) {
+	int i = threadIdx.x;
+	int blockSize = blockDim.x;
+
+	// calculate sum of squares (per thread)
+	float ss = 0.0f;
+	for (int j = i; j < size; j += blockSize) {
+		float v = x[j];
+		ss += v * v;
+	}
+
+	// sum across threads in block
+	ss = blockreduce_sum(ss);
+
+	// normalize and scale
+	float scale = rsqrtf(ss / size + eps);
+	for (int j = i; j < size; j += blockSize) {
+		o[j] = x[j] * scale * weight[j];
+	}
+}
 
 template <typename T>
 __global__ static void kernel_fused_coop(CoopArgs<T> args) {
 	cg::grid_group gg = cg::this_grid();
 
-	int n = args.n;
-	int d = args.d;
+	int dim = args.dim;
+	int hidden_dim = args.hidden_dim;
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
-	for (int j = i; j < d; j += ib) {
-		float v1 = matmul_warppar(args.x, args.w1, j, n, n);
-		float v3 = matmul_warppar(args.x, args.w3, j, n, n);
+	if (blockIdx.x == 0) {
+		rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
+	}
+
+	gg.sync();
+
+	for (int j = i; j < hidden_dim; j += ib) {
+		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim);
+		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim);
 
 		// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
 		float val = (v1 / (1.0f + expf(-v1))) * v3;
 
 		if (threadIdx.x % warpSize == 0) {
-			args.h[j] = val;
+			args.hb[j] = val;
 		}
 	}
 
 	gg.sync();
 
-	for (int j = i; j < n; j += ib) {
-		float val = matmul_warppar(args.h, args.w2, j, d, d);
+	for (int j = i; j < dim; j += ib) {
+		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim, hidden_dim);
 
 		if (threadIdx.x % warpSize == 0) {
-			args.xout[j] += val;
+			args.x[j] += val;
 		}
 	}
 }
@@ -832,23 +864,24 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
 		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], dim, dim);
 
-		// ffn rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-
-		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 		uint64_t bw = 0;
 		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
 
 		CoopArgs<T> args = {
 			PROF_TOKEN(bw),
+
 			x,
 			s->hb,
 			s->xb,
+
+			w->rms_ffn_weight[l],
 			(T*)w->w1[l],
 			(T*)w->w2[l],
 			(T*)w->w3[l],
+
 			dim,
-			hidden_dim
+			hidden_dim,
+			p->norm_eps,
 		};
 		void* argsp = &args;
 
