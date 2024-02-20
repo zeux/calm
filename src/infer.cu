@@ -821,6 +821,9 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 		// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
 		uint64_t bw = 0;
+		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
+		bw = PROF_TOKEN(bw);
+
 		void* coopargs[] = {
 			&bw,
 			&x,

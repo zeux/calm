@@ -143,6 +143,13 @@ static void CUPTIAPI callback_handler(void* userdata, CUpti_CallbackDomain domai
 			}
 			break;
 		}
+		case CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000: {
+			if (cbinfo->callbackSite == CUPTI_API_ENTER) {
+				cudaLaunchCooperativeKernel_v9000_params* params = (cudaLaunchCooperativeKernel_v9000_params*)cbinfo->functionParams;
+				tokens[cbinfo->correlationId % MAX_TOKENS] = *(uint64_t*)*params->args;
+			}
+			break;
+		}
 		default:
 			break;
 		}
@@ -205,6 +212,7 @@ extern "C" int InitializeInjection(void) {
 	CUpti_SubscriberHandle subscriber;
 	CUPTI_CHECK(cuptiSubscribe(&subscriber, callback_handler, NULL));
 	CUPTI_CHECK(cuptiEnableCallback(1, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API, CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000));
+	CUPTI_CHECK(cuptiEnableCallback(1, subscriber, CUPTI_CB_DOMAIN_RUNTIME_API, CUPTI_RUNTIME_TRACE_CBID_cudaLaunchCooperativeKernel_v9000));
 
 	const char* sync = getenv("PROF_SYNC");
 
