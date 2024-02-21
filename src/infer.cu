@@ -755,10 +755,12 @@ struct CoopArgs {
 	KVT* keyb;
 	KVT* valb;
 
+	float* rms_att_weight;
 	T* wq;
 	T* wk;
 	T* wv;
 	T* wo;
+
 	float* rms_ffn_weight;
 	T* w1;
 	T* w2;
@@ -831,6 +833,13 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	// pre-attention rmsnorm
+	if (blockIdx.x == 0) {
+		rmsnorm(args.xb, args.x, args.rms_att_weight, dim, args.norm_eps);
+	}
+
+	gg.sync();
 
 	// qkv matmul + RoPE encoding + update KV cache
 	for (int j = i * 2; j < dim + kv_dim * 2; j += ib * 2) {
@@ -925,7 +934,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	gg.sync();
 
-	// rmsnorm
+	// post-attention rmsnorm
 	if (blockIdx.x == 0) {
 		rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
 	}
@@ -1000,9 +1009,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	for (int l = 0; l < p->n_layers; l++) {
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
-		// attention rmsnorm
-		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
-
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 		uint64_t bw = 0;
@@ -1024,10 +1030,12 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			(KVT*)s->key_cache + loff,
 			(KVT*)s->value_cache + loff,
 
+			w->rms_att_weight[l],
 			(T*)w->wq[l],
 			(T*)w->wk[l],
 			(T*)w->wv[l],
 			(T*)w->wo[l],
+
 			w->rms_ffn_weight[l],
 			(T*)w->w1[l],
 			(T*)w->w2[l],
