@@ -769,9 +769,14 @@ struct CoopArgs {
 	int n_heads;
 	int n_kv_heads;
 	int seq_len;
+	int rotary_dim;
+
 	int kv_len;
+	int kv_pos;
+	int pos;
 
 	float norm_eps;
+	float theta_log2;
 };
 
 __device__ static void softmax(float* x, int size) {
@@ -822,9 +827,41 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	int head_size = dim / args.n_heads;
 	int kv_mul = args.n_heads / args.n_kv_heads;
+	int kv_dim = dim / kv_mul;
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	// qkv matmul + RoPE encoding + update KV cache
+	for (int j = i * 2; j < dim + kv_dim * 2; j += ib * 2) {
+		T* w = j < dim ? args.wq : (j < dim + kv_dim ? args.wk : args.wv);
+		int k = j < dim ? j : (j < dim + kv_dim ? j - dim : j - dim - kv_dim);
+
+		float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim);
+		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim);
+
+		if (threadIdx.x % warpSize == 0) {
+			int j_head = j % head_size; // TODO: optimize when head_size is a power of two
+			float freq = j_head >= args.rotary_dim ? 0.f : exp2f(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
+			float fcr, fci;
+			sincosf(args.pos * freq, &fci, &fcr);
+
+			if (j < dim) {
+				args.q[k + 0] = v0 * fcr - v1 * fci;
+				args.q[k + 1] = v0 * fci + v1 * fcr;
+			} else if (j < dim + kv_dim) {
+				// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
+				args.keyb[args.kv_pos * 2 + 0 + args.seq_len * k] = KVT(v0 * fcr - v1 * fci);
+				args.keyb[args.kv_pos * 2 + 1 + args.seq_len * k] = KVT(v0 * fci + v1 * fcr);
+			} else {
+				// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
+				args.valb[args.kv_pos + args.seq_len * (k + 0)] = KVT(v0);
+				args.valb[args.kv_pos + args.seq_len * (k + 1)] = KVT(v1);
+			}
+		}
+	}
+
+	gg.sync();
 
 	// attention score
 	int kv_len32 = (args.kv_len + 31) / 32;
@@ -966,14 +1003,10 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		// attention rmsnorm
 		kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
 
-		// qkv matmuls for this position + RoPE encoding + update KV cache
-		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
-		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
-		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, head_size, pos, kv_pos, log2(p->rope_theta), p->seq_len, p->rotary_dim);
-
 		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 		uint64_t bw = 0;
+		bw += (dim + kv_dim * 2) * dim * dbits / 8; // QKV
 		bw += kvbw * 2; // attn scoring and mixing
 		bw += dim * dim * dbits / 8; // attn output
 		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
@@ -1005,9 +1038,14 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			p->n_heads,
 			p->n_kv_heads,
 			p->seq_len,
+			p->rotary_dim,
+
 			kv_len,
+			kv_pos,
+			pos,
 
 			p->norm_eps,
+			log2(p->rope_theta),
 		};
 		void* argsp = &args;
 
