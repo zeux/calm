@@ -42,6 +42,9 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
 	config->vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
 
+	const char* head_dim = tensors_metadata_find(tensors, "head_dim");
+	config->head_dim = head_dim ? atoi(head_dim) : config->dim / config->n_heads;
+
 	// for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since window size isn't correctly specified
 	const char* max_seq_len = tensors_metadata_find(tensors, "max_seq_len");
 	config->seq_len = max_seq_len && atoi(max_seq_len) < 4096 ? atoi(max_seq_len) : 4096;
@@ -65,8 +68,6 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
 	const char* dtype = tensors_metadata(tensors, "dtype");
 
-	int head_size = config->dim / config->n_heads;
-
 	enum DType wtype = strcmp(dtype, "gf4") == 0 ? dt_i32 : (strcmp(dtype, "fp8") == 0 ? dt_f8e5m2 : dt_f16);
 	int gsize = strcmp(dtype, "gf4") == 0 ? 8 : 1;
 
@@ -82,10 +83,10 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 		}
 
-		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->dim, config->n_heads * head_size / gsize, 0, 0});
-		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim / gsize, 0, 0});
-		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * head_size, config->dim / gsize, 0, 0});
-		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->n_heads * head_size, config->dim / gsize, 0, 0});
+		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->dim, config->n_heads * config->head_dim / gsize, 0, 0});
+		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
+		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
+		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->n_heads * config->head_dim, config->dim / gsize, 0, 0});
 
 		if (config->arch == Mixtral) {
 			weights->moegate[l] = tensors_get(tensors, "model.layers.%d.moegate.weight", l, wtype, (int[]){config->n_experts, config->dim / gsize, 0, 0});
@@ -108,8 +109,8 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 
 			if (config->arch == Phi || config->arch == Qwen) {
 				weights->bq[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wq.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-				weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
-				weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * head_size, 0, 0, 0});
+				weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * config->head_dim, 0, 0, 0});
+				weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * config->head_dim, 0, 0, 0});
 			}
 
 			if (config->arch == Phi) {

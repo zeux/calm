@@ -20,6 +20,7 @@ struct Config {
 	enum Arch arch;   // model architecture
 	int dim;          // transformer dimension
 	int hidden_dim;   // for ffn layers
+	int head_dim;     // for attention heads; usually dim / n_heads
 	int n_layers;     // number of layers
 	int n_heads;      // number of query heads
 	int n_kv_heads;   // number of key/value heads (can be < query heads because of multiquery)
@@ -41,11 +42,11 @@ struct Weights {
 	float* ln_weight[MAX_LAYERS]; // (dim,)
 	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
 	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
-	// weights for matmuls. note dim == n_heads * head_size
-	void* wq[MAX_LAYERS]; // (dim, n_heads * head_size)
-	void* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
-	void* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_size)
-	void* wo[MAX_LAYERS]; // (n_heads * head_size, dim)
+	// weights for matmuls
+	void* wq[MAX_LAYERS]; // (dim, n_heads * head_dim)
+	void* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_dim)
+	void* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_dim)
+	void* wo[MAX_LAYERS]; // (n_heads * head_dim, dim)
 	// weights for ffn (w3 is absent for phi)
 	void* w1[MAX_LAYERS]; // (hidden_dim, dim)
 	void* w2[MAX_LAYERS]; // (dim, hidden_dim)

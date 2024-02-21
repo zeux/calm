@@ -228,9 +228,9 @@ static void matmul(float* xout, float* x, void* w, float* b, int n, int d, dotpr
 	}
 }
 
-static void rope(float* vec, int d, int head_size, int pos, float theta, int rotary_dim) {
+static void rope(float* vec, int d, int head_dim, int pos, float theta, int rotary_dim) {
 	for (int i = 0; i < d; i += 2) {
-		int j_head = i % head_size;
+		int j_head = i % head_dim;
 		float freq = j_head >= rotary_dim ? 0.f : 1.0f / powf(theta, (float)j_head / (float)rotary_dim);
 		float val = pos * freq;
 		float fcr = cosf(val);
@@ -243,16 +243,16 @@ static void rope(float* vec, int d, int head_size, int pos, float theta, int rot
 	}
 }
 
-static void attn(float* xout, float* atth, float* qh, kvtype_t* kh, kvtype_t* vh, int head_size, int kv_dim, int kv_len) {
+static void attn(float* xout, float* atth, float* qh, kvtype_t* kh, kvtype_t* vh, int head_dim, int kv_dim, int kv_len) {
 	float score_max = -FLT_MAX;
 
 	// calculate attention scores as dot products of q and k; also track score max for this head
 	for (int t = 0; t < kv_len; ++t) {
 		float score = 0.0f;
-		for (int j = 0; j < head_size; ++j) {
+		for (int j = 0; j < head_dim; ++j) {
 			score += qh[j] * kh[t * kv_dim + j];
 		}
-		score /= sqrtf(head_size);
+		score /= sqrtf(head_dim);
 		score_max = (score_max < score) ? score : score_max;
 		atth[t] = score;
 	}
@@ -265,7 +265,7 @@ static void attn(float* xout, float* atth, float* qh, kvtype_t* kh, kvtype_t* vh
 	}
 
 	// mix values with attention weights
-	for (int j = 0; j < head_size; ++j) {
+	for (int j = 0; j < head_dim; ++j) {
 		float res = 0.f;
 		for (int t = 0; t < kv_len; ++t) {
 			res += (atth[t] / score_sum) * vh[t * kv_dim + j];
@@ -328,7 +328,6 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
 	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
-	int head_size = dim / p->n_heads;
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
@@ -375,8 +374,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		matmul(s->v, s->xb, w->wv[l], w->bv[l], dim, kv_dim, dotprod);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
-		rope(s->q, dim, head_size, pos, p->rope_theta, p->rotary_dim);
-		rope(s->k, kv_dim, head_size, pos, p->rope_theta, p->rotary_dim);
+		rope(s->q, dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);
+		rope(s->k, kv_dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);
 
 		// update kv cache
 		for (int i = 0; i < kv_dim; i++) {
@@ -390,7 +389,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				s->k[i] = kb[r * kv_dim + i];
 			}
 
-			rope(s->k, kv_dim, head_size, 1, p->rope_theta, p->rotary_dim);
+			rope(s->k, kv_dim, p->head_dim, 1, p->rope_theta, p->rotary_dim);
 
 			for (int i = 0; i < kv_dim; i++) {
 				kb[r * kv_dim + i] = s->k[i];
@@ -401,12 +400,12 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		int h;
 #pragma omp parallel for private(h)
 		for (h = 0; h < p->n_heads; h++) {
-			float* qh = s->q + h * head_size;
+			float* qh = s->q + h * p->head_dim;
 			float* atth = s->att + h * p->seq_len;
-			kvtype_t* kh = kb + (h / kv_mul) * head_size;
-			kvtype_t* vh = vb + (h / kv_mul) * head_size;
+			kvtype_t* kh = kb + (h / kv_mul) * p->head_dim;
+			kvtype_t* vh = vb + (h / kv_mul) * p->head_dim;
 
-			attn(s->xb2 + h * head_size, atth, qh, kh, vh, head_size, kv_dim, kv_len);
+			attn(s->xb2 + h * p->head_dim, atth, qh, kh, vh, p->head_dim, kv_dim, kv_len);
 		}
 
 		// final matmul to get the output of the attention

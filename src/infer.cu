@@ -212,11 +212,11 @@ __global__ static void kernel_matmul_cls(uint64_t, float* xout, float* x, T* w, 
 
 template <typename T, typename KVT>
 __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T* wq, T* wk, T* wv, float* bq, float* bk, float* bv, int n, int d, int kvd,
-                                              KVT* kb, KVT* vb, int head_size, int pos, int kv_pos, float theta_log2, int seq_len, int rotary_dim) {
+                                              KVT* kb, KVT* vb, int head_dim, int pos, int kv_pos, float theta_log2, int seq_len, int rotary_dim) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d + kvd * 2);
 
-	int j_head = i % head_size; // TODO: optimize when head_size is a power of two
+	int j_head = i % head_dim; // TODO: optimize when head_dim is a power of two
 	float freq = j_head >= rotary_dim ? 0.f : exp2f(-theta_log2 * (float)j_head / (float)rotary_dim);
 	float fcr, fci;
 	sincosf(pos * freq, &fci, &fcr);
@@ -427,10 +427,10 @@ __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
 }
 
 template <typename KVT>
-__device__ inline float2 attn_score2(KVT* kht, float* qh, int head_size, int seq_len, int t) {
+__device__ inline float2 attn_score2(KVT* kht, float* qh, int head_dim, int seq_len, int t) {
 	float score1 = 0.0f;
 	float score2 = 0.0f;
-	for (int j = 0; j < head_size; j += 2) {
+	for (int j = 0; j < head_dim; j += 2) {
 		float4 kk = attn_load4(&kht[j * seq_len + t * 2]);
 		float2 qq = *(float2*)&qh[j];
 		score1 += kk.x * qq.x;
@@ -439,8 +439,8 @@ __device__ inline float2 attn_score2(KVT* kht, float* qh, int head_size, int seq
 		score2 += kk.w * qq.y;
 	}
 
-	score1 /= sqrtf(head_size);
-	score2 /= sqrtf(head_size);
+	score1 /= sqrtf(head_dim);
+	score2 /= sqrtf(head_dim);
 
 	return {score1, score2};
 }
@@ -475,7 +475,7 @@ __device__ inline float attn_warpdot(KVT* val, float* atth, int kv_len) {
 }
 
 template <typename KVT>
-__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* kb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* kb, int n_kv_heads, int head_dim, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int t = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	if (t >= kv_len) {
 		return;
@@ -486,11 +486,11 @@ __global__ static void kernel_attn_score(uint64_t, float* attb, float* qb, KVT* 
 
 	int h = kvh * kv_mul + threadIdx.y;
 
-	float* qh = qb + h * head_size;
-	KVT* kh = kb + kvh * head_size * seq_len;
+	float* qh = qb + h * head_dim;
+	KVT* kh = kb + kvh * head_dim * seq_len;
 	float* atth = attb + h * seq_len;
 
-	float2 score = attn_score2(kh, qh, head_size, seq_len, t);
+	float2 score = attn_score2(kh, qh, head_dim, seq_len, t);
 
 	atth[t + 0] = score.x;
 	atth[t + 1] = score.y;
@@ -520,9 +520,9 @@ __global__ static void kernel_attn_softmax(float* attb, int n_heads, int seq_len
 }
 
 template <typename KVT>
-__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* valb, int n_kv_heads, int head_size, int seq_len, int kv_dim, int kv_mul, int kv_len) {
+__global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* valb, int n_kv_heads, int head_dim, int seq_len, int kv_dim, int kv_mul, int kv_len) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
-	assert(i < head_size);
+	assert(i < head_dim);
 
 	int kvh = blockIdx.y;
 	assert(kvh < n_kv_heads);
@@ -530,24 +530,24 @@ __global__ static void kernel_attn_mix(uint64_t, float* xout, float* attb, KVT* 
 	int h = kvh * kv_mul + threadIdx.y;
 
 	float* atth = attb + h * seq_len;
-	KVT* vh = valb + kvh * head_size * seq_len;
+	KVT* vh = valb + kvh * head_dim * seq_len;
 	KVT* val = vh + i * seq_len;
 
 	float res = attn_warpdot(val, atth, kv_len);
 
 	if (threadIdx.x % warpSize == 0) {
-		xout[h * head_size + i] = res;
+		xout[h * head_dim + i] = res;
 	}
 }
 
 template <typename KVT>
-__global__ static void kernel_rotate_sink(uint64_t, int kvd, KVT* key_cache, int head_size, int kv_sink, float theta_log2, int seq_len, int rotary_dim) {
+__global__ static void kernel_rotate_sink(uint64_t, int kvd, KVT* key_cache, int head_dim, int kv_sink, float theta_log2, int seq_len, int rotary_dim) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
 	assert(i < kv_sink * kvd);
 
 	int l = blockIdx.y;
 
-	int j_head = i % head_size;
+	int j_head = i % head_dim;
 	float freq = j_head >= rotary_dim ? 0.f : exp2f(-theta_log2 * (float)j_head / (float)rotary_dim);
 
 	// rotate sink tokens forward to keep pace with non-sink tokens
@@ -582,7 +582,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
 	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
-	int head_size = dim / p->n_heads;
 	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
@@ -613,7 +612,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {
 		kernel_rotate_sink<<<dim3(kv_sink * kv_dim / 64, p->n_layers), 32, 0, stream>>>(
-			PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, head_size, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+			PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, p->head_dim, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 	}
 
 	// forward all the layers
@@ -640,25 +639,25 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// qkv matmuls for this position + RoPE encoding + update KV cache
 		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
 		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
-		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, head_size, pos, kv_pos, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, p->head_dim, pos, kv_pos, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 
 		// only update kv cache and don't output logits
 		if (l == p->n_layers - 1 && (flags & FF_UPDATE_KV_ONLY) != 0) {
 			break;
 		}
 
-		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
+		size_t kvbw = p->n_kv_heads * p->head_dim * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 		// attention scores for all heads
 		kernel_attn_score<<<dim3((kv_len + 64 * attn_par - 1) / (64 * attn_par), p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->att, s->q, (KVT*)s->key_cache + loff, p->n_kv_heads, p->head_dim, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
 		// compute weighted sum of the values into xb2
-		kernel_attn_mix<<<dim3(head_size / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, head_size, p->seq_len, kv_dim, kv_mul, kv_len);
+		kernel_attn_mix<<<dim3(p->head_dim / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
+		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, p->head_dim, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
@@ -766,6 +765,7 @@ struct CoopArgs {
 
 	int dim;
 	int hidden_dim;
+	int head_dim;
 	int n_heads;
 	int n_kv_heads;
 	int seq_len;
@@ -824,8 +824,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
+	int head_dim = args.head_dim;
 
-	int head_size = dim / args.n_heads;
 	int kv_mul = args.n_heads / args.n_kv_heads;
 	int kv_dim = dim / kv_mul;
 
@@ -848,7 +848,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim);
 
 		if (threadIdx.x % warpSize == 0) {
-			int j_head = j % head_size; // TODO: optimize when head_size is a power of two
+			int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
 			float freq = j_head >= args.rotary_dim ? 0.f : exp2f(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
 			float fcr, fci;
 			sincosf(args.pos * freq, &fci, &fcr);
@@ -879,11 +879,11 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		int t = ((j / args.n_heads) * warpSize + (threadIdx.x % warpSize)) * 2;
 
 		if (t < args.kv_len) {
-			float* qh = args.q + h * head_size;
-			KVT* kh = args.keyb + kvh * head_size * args.seq_len;
+			float* qh = args.q + h * head_dim;
+			KVT* kh = args.keyb + kvh * head_dim * args.seq_len;
 			float* atth = args.att + h * args.seq_len;
 
-			float2 score = attn_score2(kh, qh, head_size, args.seq_len, t);
+			float2 score = attn_score2(kh, qh, head_dim, args.seq_len, t);
 
 			atth[t + 0] = score.x;
 			atth[t + 1] = score.y;
@@ -904,12 +904,12 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// attention mix
 	for (int j = i; j < dim; j += ib) {
-		int h = j / head_size;
+		int h = j / head_dim;
 		int kvh = h / kv_mul;
-		int j_head = j % head_size;
+		int j_head = j % head_dim;
 
 		float* atth = args.att + h * args.seq_len;
-		KVT* vh = args.valb + kvh * head_size * args.seq_len;
+		KVT* vh = args.valb + kvh * head_dim * args.seq_len;
 		KVT* val = vh + j_head * args.seq_len;
 
 		float res = attn_warpdot(val, atth, args.kv_len);
@@ -977,7 +977,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	int dim = p->dim;
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
 	int hidden_dim = p->hidden_dim;
-	int head_size = dim / p->n_heads;
 	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
@@ -999,14 +998,14 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {
 		kernel_rotate_sink<<<dim3(kv_sink * kv_dim / 64, p->n_layers), 32, 0, stream>>>(
-			PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, head_size, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+			PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, p->head_dim, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 	}
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
-		size_t kvbw = p->n_kv_heads * head_size * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
+		size_t kvbw = p->n_kv_heads * p->head_dim * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 		uint64_t bw = 0;
 		bw += (dim + kv_dim * 2) * dim * dbits / 8; // QKV
@@ -1040,6 +1039,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 			dim,
 			hidden_dim,
+			p->head_dim,
 			p->n_heads,
 			p->n_kv_heads,
 			p->seq_len,
