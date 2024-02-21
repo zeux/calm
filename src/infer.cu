@@ -9,9 +9,7 @@
 
 #include "helpers.cuh"
 
-namespace cg {
-	using namespace cooperative_groups;
-}
+namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
@@ -978,7 +976,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	float* x = s->x;
 	int dim = p->dim;
 	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
 	int head_size = dim / p->n_heads;
 	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
