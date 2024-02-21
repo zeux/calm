@@ -143,8 +143,9 @@ void prepare(struct Transformer* transformer) {
 	struct Config* p = &transformer->config;
 	struct RunState* s = &transformer->state;
 
+	int kv_dim = p->head_dim * p->n_kv_heads;
+
 	// we calloc instead of malloc to keep valgrind happy
-	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
 	s->x = calloc(p->dim, sizeof(float));
 	s->xb = calloc(p->dim, sizeof(float));
 	s->xb2 = calloc(p->dim, sizeof(float));
@@ -159,6 +160,7 @@ void prepare(struct Transformer* transformer) {
 	assert(s->kvbits == sizeof(kvtype_t) * 8);
 	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
 	s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
+
 	// ensure all mallocs went fine
 	if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
 		fprintf(stderr, "malloc failed!\n");
@@ -325,9 +327,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	struct RunState* s = &transformer->state;
 	float* x = s->x;
 	int dim = p->dim;
-	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
+	int kv_dim = p->head_dim * p->n_kv_heads;
+	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;

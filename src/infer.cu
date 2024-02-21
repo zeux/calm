@@ -74,7 +74,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
-	int kv_dim = (config->dim * config->n_kv_heads) / config->n_heads;
+	int kv_dim = config->head_dim * config->n_kv_heads;
 
 	if (config->n_experts) {
 		for (int l = 0; l < config->n_layers; ++l) {
@@ -579,9 +579,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	struct RunState* s = &transformer->state;
 	float* x = s->x;
 	int dim = p->dim;
-	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	int hidden_dim = p->hidden_dim;
+	int kv_dim = p->head_dim * p->n_kv_heads;
+	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
@@ -827,7 +827,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	int head_dim = args.head_dim;
 
 	int kv_mul = args.n_heads / args.n_kv_heads;
-	int kv_dim = dim / kv_mul;
+	int kv_dim = args.head_dim * args.n_kv_heads;
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
@@ -975,8 +975,8 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	// a few convenience variables
 	float* x = s->x;
 	int dim = p->dim;
-	int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
 	int hidden_dim = p->hidden_dim;
+	int kv_dim = p->head_dim * p->n_kv_heads;
 	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
