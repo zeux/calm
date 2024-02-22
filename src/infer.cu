@@ -74,6 +74,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
+	int q_dim = config->head_dim * config->n_heads;
 	int kv_dim = config->head_dim * config->n_kv_heads;
 
 	if (config->n_experts) {
@@ -86,11 +87,11 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
-	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->xb2 = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->xa = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
-	state->q = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->q = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
 	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
 
@@ -580,6 +581,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	float* x = s->x;
 	int dim = p->dim;
 	int hidden_dim = p->hidden_dim;
+	int q_dim = p->head_dim * p->n_heads;
 	int kv_dim = p->head_dim * p->n_kv_heads;
 	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 	size_t dbits = w->dbits; // size_t prevents integer overflow in multiplications below
@@ -637,8 +639,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		}
 
 		// qkv matmuls for this position + RoPE encoding + update KV cache
-		kernel_matmul_rope_qkv<<<(dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
-		    PROF_TOKEN((dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, dim, kv_dim,
+		kernel_matmul_rope_qkv<<<(q_dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
+		    PROF_TOKEN((q_dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, q_dim, kv_dim,
 		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, p->head_dim, pos, kv_pos, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 
 		// only update kv cache and don't output logits
@@ -661,7 +663,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-		    PROF_TOKEN(dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], dim, dim);
+		    PROF_TOKEN(q_dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], q_dim, dim);
 
 		if (p->arch == Mixtral) {
 			// ffn rmsnorm
@@ -827,6 +829,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	int head_dim = args.head_dim;
 
 	int kv_mul = args.n_heads / args.n_kv_heads;
+	int q_dim = args.head_dim * args.n_heads;
 	int kv_dim = args.head_dim * args.n_kv_heads;
 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
@@ -840,9 +843,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// qkv matmul + RoPE encoding + update KV cache
-	for (int j = i * 2; j < dim + kv_dim * 2; j += ib * 2) {
-		T* w = j < dim ? args.wq : (j < dim + kv_dim ? args.wk : args.wv);
-		int k = j < dim ? j : (j < dim + kv_dim ? j - dim : j - dim - kv_dim);
+	for (int j = i * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
+		T* w = j < q_dim ? args.wq : (j < q_dim + kv_dim ? args.wk : args.wv);
+		int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
 		float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim);
 		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim);
@@ -853,10 +856,10 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 			float fcr, fci;
 			sincosf(args.pos * freq, &fci, &fcr);
 
-			if (j < dim) {
+			if (j < q_dim) {
 				args.q[k + 0] = v0 * fcr - v1 * fci;
 				args.q[k + 1] = v0 * fci + v1 * fcr;
-			} else if (j < dim + kv_dim) {
+			} else if (j < q_dim + kv_dim) {
 				// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
 				args.keyb[args.kv_pos * 2 + 0 + args.seq_len * k] = KVT(v0 * fcr - v1 * fci);
 				args.keyb[args.kv_pos * 2 + 1 + args.seq_len * k] = KVT(v0 * fci + v1 * fcr);
@@ -903,7 +906,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// attention mix
-	for (int j = i; j < dim; j += ib) {
+	for (int j = i; j < q_dim; j += ib) {
 		int h = j / head_dim;
 		int kvh = h / kv_mul;
 		int j_head = j % head_dim;
@@ -923,7 +926,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// attention output
 	for (int j = i; j < dim; j += ib) {
-		float val = matmul_warppar(args.xb2, args.wo, j, dim, dim);
+		float val = matmul_warppar(args.xb2, args.wo, j, q_dim, q_dim);
 
 		if (threadIdx.x % warpSize == 0) {
 			args.x[j] += val;

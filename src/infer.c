@@ -143,6 +143,7 @@ void prepare(struct Transformer* transformer) {
 	struct Config* p = &transformer->config;
 	struct RunState* s = &transformer->state;
 
+	int q_dim = p->head_dim * p->n_heads;
 	int kv_dim = p->head_dim * p->n_kv_heads;
 
 	// we calloc instead of malloc to keep valgrind happy
@@ -151,7 +152,7 @@ void prepare(struct Transformer* transformer) {
 	s->xb2 = calloc(p->dim, sizeof(float));
 	s->hb = calloc(p->hidden_dim, sizeof(float));
 	s->hb2 = calloc(p->hidden_dim, sizeof(float));
-	s->q = calloc(p->dim, sizeof(float));
+	s->q = calloc(q_dim, sizeof(float));
 	s->k = calloc(kv_dim, sizeof(float));
 	s->v = calloc(kv_dim, sizeof(float));
 	s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
@@ -328,6 +329,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	float* x = s->x;
 	int dim = p->dim;
 	int hidden_dim = p->hidden_dim;
+	int q_dim = p->head_dim * p->n_heads;
 	int kv_dim = p->head_dim * p->n_kv_heads;
 	int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
 
@@ -371,12 +373,12 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		kvtype_t* vb = (kvtype_t*)s->value_cache + loff;
 
 		// qkv matmuls for this position
-		matmul(s->q, s->xb, w->wq[l], w->bq[l], dim, dim, dotprod);
+		matmul(s->q, s->xb, w->wq[l], w->bq[l], dim, q_dim, dotprod);
 		matmul(s->k, s->xb, w->wk[l], w->bk[l], dim, kv_dim, dotprod);
 		matmul(s->v, s->xb, w->wv[l], w->bv[l], dim, kv_dim, dotprod);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
-		rope(s->q, dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);
+		rope(s->q, q_dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);
 		rope(s->k, kv_dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);
 
 		// update kv cache
@@ -412,7 +414,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 		// final matmul to get the output of the attention
 		// TODO: we're using hb as a temporary storage, hacky
-		matmul(s->hb, s->xb2, w->wo[l], NULL, dim, dim, dotprod);
+		matmul(s->hb, s->xb2, w->wo[l], NULL, q_dim, dim, dotprod);
 
 		// residual connection back into x
 		for (int i = 0; i < dim; i++) {
