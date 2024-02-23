@@ -23,20 +23,6 @@ namespace cg = cooperative_groups;
 
 #define PROF_TOKEN(bytes) ((0xCDAFull << 48) | (bytes))
 
-template <typename T>
-struct CoopLayer {
-	float* rms_att_weight;
-	T* wq;
-	T* wk;
-	T* wv;
-	T* wo;
-
-	float* rms_ffn_weight;
-	T* w1;
-	T* w2;
-	T* w3;
-};
-
 static cudaStream_t stream, parstream;
 static cudaEvent_t parsync[2];
 
@@ -121,22 +107,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		coopsms = devprop.multiProcessorCount;
 
 		printf("# CUDA: Using cooperative groups (experimental)\n");
-
-		CoopLayer<void> layers[MAX_LAYERS];
-		for (int l = 0; l < config->n_layers; ++l) {
-			layers[l].rms_att_weight = weights->rms_att_weight[l];
-			layers[l].wq = weights->wq[l];
-			layers[l].wk = weights->wk[l];
-			layers[l].wv = weights->wv[l];
-			layers[l].wo = weights->wo[l];
-
-			layers[l].rms_ffn_weight = weights->rms_ffn_weight[l];
-			layers[l].w1 = weights->w1[l];
-			layers[l].w2 = weights->w2[l];
-			layers[l].w3 = weights->w3[l];
-		}
-
-		weights->layers = cuda_devicecopy(layers, config->n_layers * sizeof(CoopLayer<void>));
 	}
 }
 
@@ -804,18 +774,25 @@ struct CoopArgs {
 	float* q;
 	float* att;
 
-	KVT* keyc;
-	KVT* valc;
+	KVT* keyb;
+	KVT* valb;
 
-	CoopLayer<T>* layers;
-	float* rms_final_weight;
+	float* rms_att_weight;
+	T* wq;
+	T* wk;
+	T* wv;
+	T* wo;
+
+	float* rms_ffn_weight;
+	T* w1;
+	T* w2;
+	T* w3;
 
 	int dim;
 	int hidden_dim;
 	int head_dim;
 	int n_heads;
 	int n_kv_heads;
-	int n_layers;
 	int seq_len;
 	int rotary_dim;
 
@@ -881,150 +858,134 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
-	for (int l = 0; l < args.n_layers; ++l) {
-		size_t loff = (size_t)l * args.seq_len * kv_dim; // kv cache layer offset for convenience
-
-		KVT* keys = args.keyc + loff;
-		KVT* vals = args.valc + loff;
-
-		const CoopLayer<T>& L = args.layers[l];
-
-		// pre-attention rmsnorm
-		if (blockIdx.x == 0) {
-			rmsnorm(args.xb, args.x, L.rms_att_weight, dim, args.norm_eps);
-		}
-
-		gg.sync();
-
-		// qkv matmul + RoPE encoding + update KV cache
-		for (int j = i * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
-			T* w = j < q_dim ? L.wq : (j < q_dim + kv_dim ? L.wk : L.wv);
-			int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
-
-			float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim);
-			float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim);
-
-			if (threadIdx.x % warpSize == 0) {
-				int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
-				float freq = j_head >= args.rotary_dim ? 0.f : exp2f(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
-				float fcr, fci;
-				sincosf(args.pos * freq, &fci, &fcr);
-
-				if (j < q_dim) {
-					args.q[k + 0] = v0 * fcr - v1 * fci;
-					args.q[k + 1] = v0 * fci + v1 * fcr;
-				} else if (j < q_dim + kv_dim) {
-					// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
-					keys[args.kv_pos * 2 + 0 + args.seq_len * k] = KVT(v0 * fcr - v1 * fci);
-					keys[args.kv_pos * 2 + 1 + args.seq_len * k] = KVT(v0 * fci + v1 * fcr);
-				} else {
-					// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
-					vals[args.kv_pos + args.seq_len * (k + 0)] = KVT(v0);
-					vals[args.kv_pos + args.seq_len * (k + 1)] = KVT(v1);
-				}
-			}
-		}
-
-		gg.sync();
-
-		// attention score
-		int kv_len32 = (args.kv_len + 31) / 32;
-
-		for (int j = i; j < kv_len32 * args.n_heads; j += ib) {
-			int h = j % args.n_heads;
-			int kvh = h / kv_mul;
-			int t = ((j / args.n_heads) * warpSize + (threadIdx.x % warpSize)) * 2;
-
-			if (t < args.kv_len) {
-				float* qh = args.q + h * head_dim;
-				KVT* kh = keys + kvh * head_dim * args.seq_len;
-				float* atth = args.att + h * args.seq_len;
-
-				float2 score = attn_score2(kh, qh, head_dim, args.seq_len, t);
-
-				atth[t + 0] = score.x;
-				atth[t + 1] = score.y;
-			}
-		}
-
-		gg.sync();
-
-		// attention softmax
-		if (blockIdx.x < args.n_heads) {
-			int h = blockIdx.x;
-			float* atth = args.att + h * args.seq_len;
-
-			softmax(atth, args.kv_len);
-		}
-
-		gg.sync();
-
-		// attention mix
-		for (int j = i; j < q_dim; j += ib) {
-			int h = j / head_dim;
-			int kvh = h / kv_mul;
-			int j_head = j % head_dim;
-
-			float* atth = args.att + h * args.seq_len;
-			KVT* vh = vals + kvh * head_dim * args.seq_len;
-			KVT* val = vh + j_head * args.seq_len;
-
-			float res = attn_warpdot(val, atth, args.kv_len);
-
-			if (threadIdx.x % warpSize == 0) {
-				args.xb2[j] = res;
-			}
-		}
-
-		gg.sync();
-
-		// attention output
-		for (int j = i; j < dim; j += ib) {
-			float val = matmul_warppar(args.xb2, L.wo, j, q_dim, q_dim);
-
-			if (threadIdx.x % warpSize == 0) {
-				args.x[j] += val;
-			}
-		}
-
-		gg.sync();
-
-		// post-attention rmsnorm
-		if (blockIdx.x == 0) {
-			rmsnorm(args.xb, args.x, L.rms_ffn_weight, dim, args.norm_eps);
-		}
-
-		gg.sync();
-
-		// F.silu(self.w1(x)) * self.w3(x)
-		for (int j = i; j < hidden_dim; j += ib) {
-			float v1 = matmul_warppar(args.xb, L.w1, j, dim, dim);
-			float v3 = matmul_warppar(args.xb, L.w3, j, dim, dim);
-
-			float val = silu(v1) * v3;
-
-			if (threadIdx.x % warpSize == 0) {
-				args.hb[j] = val;
-			}
-		}
-
-		gg.sync();
-
-		// self.w2(...) + pre-rmsnorm residual
-		for (int j = i; j < dim; j += ib) {
-			float val = matmul_warppar(args.hb, L.w2, j, hidden_dim, hidden_dim);
-
-			if (threadIdx.x % warpSize == 0) {
-				args.x[j] += val;
-			}
-		}
-
-		gg.sync();
+	// pre-attention rmsnorm
+	if (blockIdx.x == 0) {
+		rmsnorm(args.xb, args.x, args.rms_att_weight, dim, args.norm_eps);
 	}
 
-	// final rmsnorm
+	gg.sync();
+
+	// qkv matmul + RoPE encoding + update KV cache
+	for (int j = i * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
+		T* w = j < q_dim ? args.wq : (j < q_dim + kv_dim ? args.wk : args.wv);
+		int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
+
+		float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim);
+		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim);
+
+		if (threadIdx.x % warpSize == 0) {
+			int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
+			float freq = j_head >= args.rotary_dim ? 0.f : exp2f(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
+			float fcr, fci;
+			sincosf(args.pos * freq, &fci, &fcr);
+
+			if (j < q_dim) {
+				args.q[k + 0] = v0 * fcr - v1 * fci;
+				args.q[k + 1] = v0 * fci + v1 * fcr;
+			} else if (j < q_dim + kv_dim) {
+				// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
+				args.keyb[args.kv_pos * 2 + 0 + args.seq_len * k] = KVT(v0 * fcr - v1 * fci);
+				args.keyb[args.kv_pos * 2 + 1 + args.seq_len * k] = KVT(v0 * fci + v1 * fcr);
+			} else {
+				// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
+				args.valb[args.kv_pos + args.seq_len * (k + 0)] = KVT(v0);
+				args.valb[args.kv_pos + args.seq_len * (k + 1)] = KVT(v1);
+			}
+		}
+	}
+
+	gg.sync();
+
+	// attention score
+	int kv_len32 = (args.kv_len + 31) / 32;
+
+	for (int j = i; j < kv_len32 * args.n_heads; j += ib) {
+		int h = j % args.n_heads;
+		int kvh = h / kv_mul;
+		int t = ((j / args.n_heads) * warpSize + (threadIdx.x % warpSize)) * 2;
+
+		if (t < args.kv_len) {
+			float* qh = args.q + h * head_dim;
+			KVT* kh = args.keyb + kvh * head_dim * args.seq_len;
+			float* atth = args.att + h * args.seq_len;
+
+			float2 score = attn_score2(kh, qh, head_dim, args.seq_len, t);
+
+			atth[t + 0] = score.x;
+			atth[t + 1] = score.y;
+		}
+	}
+
+	gg.sync();
+
+	// attention softmax
+	if (blockIdx.x < args.n_heads) {
+		int h = blockIdx.x;
+		float* atth = args.att + h * args.seq_len;
+
+		softmax(atth, args.kv_len);
+	}
+
+	gg.sync();
+
+	// attention mix
+	for (int j = i; j < q_dim; j += ib) {
+		int h = j / head_dim;
+		int kvh = h / kv_mul;
+		int j_head = j % head_dim;
+
+		float* atth = args.att + h * args.seq_len;
+		KVT* vh = args.valb + kvh * head_dim * args.seq_len;
+		KVT* val = vh + j_head * args.seq_len;
+
+		float res = attn_warpdot(val, atth, args.kv_len);
+
+		if (threadIdx.x % warpSize == 0) {
+			args.xb2[j] = res;
+		}
+	}
+
+	gg.sync();
+
+	// attention output
+	for (int j = i; j < dim; j += ib) {
+		float val = matmul_warppar(args.xb2, args.wo, j, q_dim, q_dim);
+
+		if (threadIdx.x % warpSize == 0) {
+			args.x[j] += val;
+		}
+	}
+
+	gg.sync();
+
+	// post-attention rmsnorm
 	if (blockIdx.x == 0) {
-		rmsnorm(args.x, args.x, args.rms_final_weight, dim, args.norm_eps);
+		rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
+	}
+
+	gg.sync();
+
+	// F.silu(self.w1(x)) * self.w3(x)
+	for (int j = i; j < hidden_dim; j += ib) {
+		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim);
+		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim);
+
+		float val = silu(v1) * v3;
+
+		if (threadIdx.x % warpSize == 0) {
+			args.hb[j] = val;
+		}
+	}
+
+	gg.sync();
+
+	// self.w2(...) + pre-rmsnorm residual
+	for (int j = i; j < dim; j += ib) {
+		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim, hidden_dim);
+
+		if (threadIdx.x % warpSize == 0) {
+			args.x[j] += val;
+		}
 	}
 }
 
@@ -1052,6 +1013,9 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 	assert(p->vocab_size % 32 == 0);
 
+	// rmsnorm and softmax require a larger-than-warp block size for efficiency
+	const int rmsnorm_size = 1024;
+
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
 	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim, p->embed_scale);
@@ -1063,54 +1027,68 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	}
 
 	// forward all the layers
+	for (int l = 0; l < p->n_layers; l++) {
+		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
-	uint64_t bw = 0;
-	bw += (dim + kv_dim * 2) * dim * dbits / 8; // QKV
-	bw += 2 * (p->n_kv_heads * p->head_dim * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float)); // attn scoring and mixing
-	bw += dim * dim * dbits / 8;                                                                          // attn output
-	bw += 3 * (hidden_dim * dim * dbits / 8);                                                             // MLP
-	bw *= p->n_layers;
+		size_t kvbw = p->n_kv_heads * p->head_dim * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
-	CoopArgs<T, KVT> args = {
-	    PROF_TOKEN(bw),
+		uint64_t bw = 0;
+		bw += (dim + kv_dim * 2) * dim * dbits / 8; // QKV
+		bw += kvbw * 2; // attn scoring and mixing
+		bw += dim * dim * dbits / 8; // attn output
+		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
 
-	    x,
-	    s->hb,
-	    s->xb,
-	    s->xb2,
-	    s->q,
-	    s->att,
+		CoopArgs<T, KVT> args = {
+			PROF_TOKEN(bw),
 
-	    (KVT*)s->key_cache,
-	    (KVT*)s->value_cache,
+			x,
+			s->hb,
+			s->xb,
+			s->xb2,
+			s->q,
+			s->att,
 
-		(CoopLayer<T>*)w->layers,
-		w->rms_final_weight,
+			(KVT*)s->key_cache + loff,
+			(KVT*)s->value_cache + loff,
 
-	    dim,
-	    hidden_dim,
-	    p->head_dim,
-	    p->n_heads,
-	    p->n_kv_heads,
-		p->n_layers,
-	    p->seq_len,
-	    p->rotary_dim,
+			w->rms_att_weight[l],
+			(T*)w->wq[l],
+			(T*)w->wk[l],
+			(T*)w->wv[l],
+			(T*)w->wo[l],
 
-	    kv_len,
-	    kv_pos,
-	    pos,
+			w->rms_ffn_weight[l],
+			(T*)w->w1[l],
+			(T*)w->w2[l],
+			(T*)w->w3[l],
 
-	    p->norm_eps,
-	    log2(p->rope_theta),
-	};
-	void* argsp = &args;
+			dim,
+			hidden_dim,
+			p->head_dim,
+			p->n_heads,
+			p->n_kv_heads,
+			p->seq_len,
+			p->rotary_dim,
 
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T, KVT>, coopsms, 1024, &argsp, 0, stream));
+			kv_len,
+			kv_pos,
+			pos,
+
+			p->norm_eps,
+			log2(p->rope_theta),
+		};
+		void* argsp = &args;
+
+		CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T, KVT>, coopsms, 1024, &argsp, 0, stream));
+	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
 		return NULL;
 	}
+
+	// final rmsnorm
+	kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);
 
 	// classifier into logits
 	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(
