@@ -100,11 +100,12 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 
-	if (const char* coop_env = getenv("CALM_CG")) {
-		coop = atoi(coop_env);
+	const char* coop_env = getenv("CALM_COOP");
+	if (coop_env && atoi(coop_env)) {
+		coop = 1;
 		coopsms = devprop.multiProcessorCount;
 
-		printf("# CUDA: Using cooperative groups (experimental)\n");
+		printf("# CUDA: Using cooperative kernel (experimental)\n");
 	}
 }
 
