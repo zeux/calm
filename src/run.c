@@ -29,12 +29,12 @@ float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigne
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* arch = tensors_metadata(tensors, "arch");
 
-	config->arch = strcmp(arch, "mixtral") == 0                              ? Mixtral
-	               : strcmp(arch, "phi") == 0                                ? Phi
-	               : strcmp(arch, "qwen") == 0 || strcmp(arch, "qwen2") == 0 ? Qwen
-	               : strcmp(arch, "olmo") == 0                               ? Olmo
-	               : strcmp(arch, "gemma") == 0                              ? Gemma
-	                                                                         : LlamaLike;
+	config->arch = strcmp(arch, "mixtral") == 0 ? Mixtral
+	               : strcmp(arch, "phi") == 0   ? Phi
+	               : strcmp(arch, "qwen2") == 0 ? Qwen
+	               : strcmp(arch, "olmo") == 0  ? Olmo
+	               : strcmp(arch, "gemma") == 0 ? Gemma
+	                                            : LlamaLike;
 
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));

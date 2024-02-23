@@ -48,7 +48,7 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OlmoModelForCausalLM": "olmo", "GemmaForCausalLM": "gemma"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OlmoModelForCausalLM": "olmo", "GemmaForCausalLM": "gemma"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
@@ -79,19 +79,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
     if arch in ["mixtral"]:
         metadata["n_experts"] = config["num_local_experts"]
         metadata["n_experts_active"] = config["num_experts_per_tok"]
-elif arch == "qwen":
-    # customizable
-    metadata["dim"] = config["hidden_size"]
-    metadata["hidden_dim"] = config["intermediate_size"] // 2
-    metadata["n_layers"] = config["num_hidden_layers"]
-    metadata["n_heads"] = config["num_attention_heads"]
-    metadata["n_kv_heads"] = config["num_attention_heads"]
-    metadata["vocab_size"] = config["vocab_size"]
-    metadata["max_seq_len"] = config["seq_length"]
-    metadata["bos_token_id"] = -1
-    metadata["eos_token_id"] = 151643 # <|endoftext|> hardcoded in tokenization_qwen.py
-    metadata["rope_theta"] = config.get("rope_theta", 10000.0)
-    metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
 elif arch == "phi":
     # hardcoded in C
     assert config["hidden_act"] == "gelu_new"
@@ -314,36 +301,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
     tensors["model.norm.weight"] = norm(weights["model.norm.weight"])
     if arch != "gemma":
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
-elif arch == "qwen":
-    tensors["model.embed.weight"] = conv(weights["transformer.wte.weight"])
-
-    for l in range(config["num_hidden_layers"]):
-        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"transformer.h.{l}.ln_1.weight"].float()
-
-        dim = config["hidden_size"]
-        head_dim = dim // config["num_attention_heads"]
-
-        wkv_w = weights[f"transformer.h.{l}.attn.c_attn.weight"]
-        wkv_b = weights[f"transformer.h.{l}.attn.c_attn.bias"]
-        assert wkv_w.shape[0] == 3 * dim and wkv_b.shape[0] == 3 * dim
-
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wkv_w[:dim], config["num_attention_heads"], head_dim))
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wkv_w[dim:dim*2], config["num_attention_heads"], head_dim))
-        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wkv_w[dim*2:])
-        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"transformer.h.{l}.attn.c_proj.weight"])
-
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(wkv_b[:dim], config["num_attention_heads"], head_dim).float()
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(wkv_b[dim:dim*2], config["num_attention_heads"], head_dim).float()
-        tensors[f"model.layers.{l}.attn.wv.bias"] = wkv_b[dim*2:].float()
-
-        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"transformer.h.{l}.ln_2.weight"].float()
-
-        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"transformer.h.{l}.mlp.w2.weight"])
-        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"transformer.h.{l}.mlp.c_proj.weight"])
-        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"transformer.h.{l}.mlp.w1.weight"])
-
-    tensors["model.norm.weight"] = weights["transformer.ln_f.weight"].float()
-    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "phi":
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
