@@ -9,8 +9,6 @@
 
 #include "helpers.cuh"
 
-namespace cg = cooperative_groups;
-
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -841,10 +839,13 @@ __device__ static float rmsnorm(float* o, float* x, float* weight, int size, flo
 	return rsqrtf(ss / size + eps);
 }
 
+__device__ static void syncgrid() {
+	using namespace cooperative_groups::details;
+	grid::sync(&get_grid_workspace()->barrier);
+}
+
 template <typename T, typename KVT>
 __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, KVT> args) {
-	cg::grid_group gg = cg::this_grid();
-
 	static __device__ float rmsscale;
 
 	int dim = args.dim;
@@ -868,7 +869,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// qkv matmul + RoPE encoding + update KV cache
 	for (int j = io * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
@@ -899,7 +900,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// attention score
 	int kv_len32 = (args.kv_len + 31) / 32;
@@ -921,7 +922,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// attention softmax
 	if (blockIdx.x < args.n_heads) {
@@ -931,7 +932,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		softmax(atth, args.kv_len);
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// attention mix
 	for (int j = io; j < q_dim; j += ib) {
@@ -950,7 +951,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// attention output
 	for (int j = io; j < dim; j += ib) {
@@ -961,7 +962,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// post-attention rmsnorm
 	if (blockIdx.x == 0) {
@@ -972,7 +973,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// F.silu(self.w1(x)) * self.w3(x)
 	for (int j = io; j < hidden_dim; j += ib) {
@@ -986,7 +987,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		}
 	}
 
-	gg.sync();
+	syncgrid();
 
 	// self.w2(...) + pre-rmsnorm residual
 	for (int j = io; j < dim; j += ib) {
