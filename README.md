@@ -37,6 +37,7 @@ calm currently supports the following model architectures:
 - Llama-like (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE)
 - Phi (LayerNorm normalization, GELU activation, parallel attention mixing, partial RoPE)
 - Mixtral (Llama-like with FFN in every layer replaced by a mixture of experts)
+- Gemma (Llama-like with GELU activation and custom head dimension)
 
 It has been tested on following models:
 
@@ -52,9 +53,6 @@ It has been tested on following models:
   - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
   - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
   - GritLM 7B (GritLM/GritLM-7B)
-- Qwen architecture (*deprecated*)
-  - Qwen 7B (Qwen/Qwen-7B-Chat)
-  - Qwen 14B (Qwen/Qwen-14B-Chat)
 - Qwen2 architecture
   - Qwen1.5 0.5B (Qwen/Qwen1.5-0.5B)
   - Qwen1.5 1.8B (Qwen/Qwen1.5-1.8B)
@@ -70,6 +68,9 @@ It has been tested on following models:
 - OLMo architecture
   - OLMo 1B (allenai/OLMo-1B)
   - OLMo 7B (allenai/OLMo-7B)
+- Gemma architecture
+  - Gemma 2B (google/gemma-2b-it)
+  - Gemma 7B (google/gemma-7b-it)
 
 ## Supported formats
 
