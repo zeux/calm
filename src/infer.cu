@@ -110,6 +110,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	}
 }
 
+__device__ inline float gelu(float x) {
+	return 0.5f * x * (1.0f + tanhf(0.797885f * (x + 0.044715f * x * x * x)));
+}
+
+__device__ inline float silu(float x) {
+	return x / (1.0f + expf(-x));
+}
+
 template <typename T>
 __device__ inline float embed(T* weight, int idx) {
 	return float(weight[idx]);
@@ -289,8 +297,7 @@ __global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x,
 	float v1 = matmul_warppar(x, w1, i, n, n);
 	float v3 = matmul_warppar(x, w3, i, n, n);
 
-	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-	float val = (v1 / (1.0f + expf(-v1))) * v3;
+	float val = silu(v1) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
@@ -305,7 +312,7 @@ __global__ static void kernel_matmul_ffn13_gelu(uint64_t, float* xout, float* x,
 	float v1 = matmul_warppar(x, w1, i, n, n);
 	float v3 = matmul_warppar(x, w3, i, n, n);
 
-	float val = 0.5f * v1 * (1.0f + tanhf(0.797885f * (v1 + 0.044715f * v1 * v1 * v1))) * v3;
+	float val = gelu(v1) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
@@ -319,10 +326,7 @@ __global__ static void kernel_matmul_ffn1_gelu(uint64_t, float* xout, float* x, 
 
 	float v1 = matmul_warppar(x, w1, i, n, n);
 
-	float val = v1 + b1[i];
-
-	// GELU (0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x^3))))
-	val = 0.5f * val * (1.0f + tanhf(0.797885f * (val + 0.044715f * val * val * val)));
+	float val = gelu(v1 + b1[i]);
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
@@ -398,8 +402,7 @@ __global__ static void kernel_matmul_moe_ffn13_silu(uint64_t, float* xout, float
 	float v1 = matmul_warppar(x, w1[moe_experts[e]], i, n, n);
 	float v3 = matmul_warppar(x, w3[moe_experts[e]], i, n, n);
 
-	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-	float val = (v1 / (1.0f + expf(-v1))) * v3;
+	float val = silu(v1) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i + e * d] = val;
@@ -967,8 +970,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim);
 		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim);
 
-		// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-		float val = (v1 / (1.0f + expf(-v1))) * v3;
+		float val = silu(v1) * v3;
 
 		if (threadIdx.x % warpSize == 0) {
 			args.hb[j] = val;
