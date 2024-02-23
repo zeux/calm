@@ -14,23 +14,25 @@ enum Arch {
 	Phi,
 	Mixtral,
 	Olmo,
+	Gemma,
 };
 
 struct Config {
-	enum Arch arch;   // model architecture
-	int dim;          // transformer dimension
-	int hidden_dim;   // for ffn layers
-	int head_dim;     // for attention heads; usually dim / n_heads
-	int n_layers;     // number of layers
-	int n_heads;      // number of query heads
-	int n_kv_heads;   // number of key/value heads (can be < query heads because of multiquery)
-	int vocab_size;   // vocabulary size, usually 256 (byte-level)
-	int seq_len;      // max sequence length
-	float rope_theta; // RoPE theta
-	int rotary_dim;   // RoPE rotary dimension (elements after that don't get rotated)
-	int n_experts;    // number of experts for MoE models
-	int n_experts_ac; // number of active experts for MoE models
-	float norm_eps;   // epsilon for layer normalization
+	enum Arch arch;    // model architecture
+	int dim;           // transformer dimension
+	int hidden_dim;    // for ffn layers
+	int head_dim;      // for attention heads; usually dim / n_heads
+	int n_layers;      // number of layers
+	int n_heads;       // number of query heads
+	int n_kv_heads;    // number of key/value heads (can be < query heads because of multiquery)
+	int vocab_size;    // vocabulary size, usually 256 (byte-level)
+	int seq_len;       // max sequence length
+	float rope_theta;  // RoPE theta
+	int rotary_dim;    // RoPE rotary dimension (elements after that don't get rotated)
+	int n_experts;     // number of experts for MoE models
+	int n_experts_ac;  // number of active experts for MoE models
+	float norm_eps;    // epsilon for layer normalization
+	float embed_scale; // scale factor for token embeddings (useful for tied weights)
 };
 
 struct Weights {

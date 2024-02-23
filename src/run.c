@@ -33,6 +33,7 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	               : strcmp(arch, "phi") == 0                                ? Phi
 	               : strcmp(arch, "qwen") == 0 || strcmp(arch, "qwen2") == 0 ? Qwen
 	               : strcmp(arch, "olmo") == 0                               ? Olmo
+	               : strcmp(arch, "gemma") == 0                              ? Gemma
 	                                                                         : LlamaLike;
 
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
@@ -63,6 +64,9 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 
 	const char* norm_eps = tensors_metadata_find(tensors, "norm_eps");
 	config->norm_eps = norm_eps ? atof(norm_eps) : 1e-5;
+
+	const char* embed_scale = tensors_metadata_find(tensors, "embed_scale");
+	config->embed_scale = embed_scale ? atof(embed_scale) : 1;
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
@@ -126,7 +130,7 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	}
 
-	if (config->arch == Olmo && tensors_find(tensors, "model.output.weight", 0) == NULL) {
+	if ((config->arch == Olmo || config->arch == Gemma) && tensors_find(tensors, "model.output.weight", 0) == NULL) {
 		weights->wcls = weights->token_embedding_table; // tied weights
 	} else {
 		weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
@@ -208,7 +212,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	char* tokens_env = getenv("CALM_TOKENS");
 	if (tokens_env && atoi(tokens_env)) {
 		for (int i = 0; i < num_prompt_tokens; i++) {
-			printf("[%s]", tokenizer_decode(tokenizer, prompt_tokens[i], prompt_tokens[i]));
+			printf("[%s:%d]", tokenizer_decode(tokenizer, prompt_tokens[i], prompt_tokens[i]), prompt_tokens[i]);
 		}
 		printf("\n");
 	}
@@ -515,6 +519,9 @@ int main(int argc, char* argv[]) {
 	get_config(&transformer.config, &tensors, context);
 	transformer.n_bytes = count_bytes(&tensors, "model.", NULL, &transformer.n_params);
 	transformer.n_bandwidth = transformer.n_bytes - count_bytes(&tensors, "model.embed.", NULL, NULL);
+	if (tensors_find(&tensors, "model.output.weight", 0) == NULL) {
+		transformer.n_bandwidth += tensors_find(&tensors, "model.embed.weight", 0)->size;
+	}
 	if (transformer.config.arch == Mixtral) {
 		size_t mlp = count_bytes(&tensors, "model.layers.", ".experts.", NULL);
 		transformer.n_bandwidth -= mlp;

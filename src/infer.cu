@@ -120,11 +120,11 @@ __device__ inline float embed(uint32_t* weight, int idx) {
 }
 
 template <typename T>
-__global__ static void kernel_embed(float* o, T* weight, int token, int n) {
+__global__ static void kernel_embed(float* o, T* weight, int token, int n, float scale) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < n);
 
-	o[i] = embed(weight, token * n + i);
+	o[i] = embed(weight, token * n + i) * scale;
 }
 
 __global__ static void kernel_rmsnorm(float* o, float* x, float* weight, int size, float eps) {
@@ -291,6 +291,21 @@ __global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x,
 
 	// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
 	float val = (v1 / (1.0f + expf(-v1))) * v3;
+
+	if (threadIdx.x % warpSize == 0) {
+		xout[i] = val;
+	}
+}
+
+template <typename T>
+__global__ static void kernel_matmul_ffn13_gelu(uint64_t, float* xout, float* x, T* w1, T* w3, int n, int d) {
+	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+	assert(i < d);
+
+	float v1 = matmul_warppar(x, w1, i, n, n);
+	float v3 = matmul_warppar(x, w3, i, n, n);
+
+	float val = 0.5f * v1 * (1.0f + tanhf(0.797885f * (v1 + 0.044715f * v1 * v1 * v1))) * v3;
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val;
@@ -609,7 +624,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim, p->embed_scale);
 
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {
@@ -706,8 +721,13 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			}
 
 			// self.w2(F.silu(self.w1(x)) * self.w3(x)) + pre-rmsnorm residual
-			kernel_matmul_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-			    PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			if (p->arch == Gemma) {
+				kernel_matmul_ffn13_gelu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
+					PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			} else {
+				kernel_matmul_ffn13_silu<<<hidden_dim / matmul_par, 32 * matmul_par, 0, stream>>>(
+					PROF_TOKEN(2 * hidden_dim * dim * dbits / 8), s->hb, s->xb, (T*)w->w1[l], (T*)w->w3[l], dim, hidden_dim);
+			}
 
 			kernel_matmul_ffn2<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
 			    PROF_TOKEN(dim * hidden_dim * dbits / 8), x, s->hb, (T*)w->w2[l], x, hidden_dim, dim);
@@ -996,7 +1016,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim, p->embed_scale);
 
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {

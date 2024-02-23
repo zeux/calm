@@ -353,6 +353,10 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 	}
 
+	for (int i = 0; i < dim; ++i) {
+		x[i] *= p->embed_scale;
+	}
+
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 
@@ -469,9 +473,16 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim, dotprod);
 				matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim, dotprod);
 
-				// SwiGLU non-linearity
-				for (int i = 0; i < hidden_dim; i++) {
-					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
+				if (p->arch == Gemma) {
+					// GEGLU non-linearity
+					for (int i = 0; i < hidden_dim; i++) {
+						s->hb[i] = gelu(s->hb[i]) * s->hb2[i];
+					}
+				} else {
+					// SwiGLU non-linearity
+					for (int i = 0; i < hidden_dim; i++) {
+						s->hb[i] = silu(s->hb[i]) * s->hb2[i];
+					}
 				}
 			}
 
