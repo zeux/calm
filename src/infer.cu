@@ -85,7 +85,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
-	state->xb2 = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->xa = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
@@ -674,13 +673,13 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// softmax the scores to get attention weights over [0..kv_len)
 		kernel_attn_softmax<<<p->n_heads, softmax_size, 0, stream>>>(s->att, p->n_heads, p->seq_len, kv_len);
 
-		// compute weighted sum of the values into xb2
+		// compute weighted sum of the values into q
 		kernel_attn_mix<<<dim3(p->head_dim / attn_par, p->n_kv_heads), dim3(32 * attn_par, kv_mul), 0, stream>>>(
-		    PROF_TOKEN(kvbw), s->xb2, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, p->head_dim, p->seq_len, kv_dim, kv_mul, kv_len);
+		    PROF_TOKEN(kvbw), s->q, s->att, (KVT*)s->value_cache + loff, p->n_kv_heads, p->head_dim, p->seq_len, kv_dim, kv_mul, kv_len);
 
 		// final matmul to get the output of the attention
 		kernel_matmul_attn<<<dim / matmul_par, 32 * matmul_par, 0, stream>>>(
-		    PROF_TOKEN(q_dim * dim * dbits / 8), x, s->xb2, (T*)w->wo[l], q_dim, dim);
+		    PROF_TOKEN(q_dim * dim * dbits / 8), x, s->q, (T*)w->wo[l], q_dim, dim);
 
 		if (p->arch == Mixtral) {
 			// ffn rmsnorm
@@ -769,7 +768,6 @@ struct CoopArgs {
 	float* x;
 	float* hb;
 	float* xb;
-	float* xb2;
 	float* q;
 	float* att;
 
@@ -948,7 +946,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		float res = attn_warpdot(val, atth, args.kv_len);
 
 		if (threadIdx.x % warpSize == 0) {
-			args.xb2[j] = res;
+			args.q[j] = res;
 		}
 	}
 
@@ -956,7 +954,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// attention output
 	for (int j = io; j < dim; j += ib) {
-		float val = matmul_warppar(args.xb2, args.wo, j, q_dim, q_dim);
+		float val = matmul_warppar(args.q, args.wo, j, q_dim, q_dim);
 
 		if (threadIdx.x % warpSize == 0) {
 			args.x[j] += val;
@@ -1055,7 +1053,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			x,
 			s->hb,
 			s->xb,
-			s->xb2,
 			s->q,
 			s->att,
 
