@@ -855,7 +855,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	int q_dim = args.head_dim * args.n_heads;
 	int kv_dim = args.head_dim * args.n_kv_heads;
 
-	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+	const int IK = 2; // K consecutive warps per block, groups of K are interleaved across SMs for better work distribution
+	int io = blockIdx.x * IK + (threadIdx.x / warpSize % IK) + gridDim.x * IK * (threadIdx.x / warpSize / IK);
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
 	// pre-attention rmsnorm
@@ -866,7 +867,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// qkv matmul + RoPE encoding + update KV cache
-	for (int j = i * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
+	for (int j = io * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
 		T* w = j < q_dim ? args.wq : (j < q_dim + kv_dim ? args.wk : args.wv);
 		int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
@@ -899,7 +900,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	// attention score
 	int kv_len32 = (args.kv_len + 31) / 32;
 
-	for (int j = i; j < kv_len32 * args.n_heads; j += ib) {
+	for (int j = io; j < kv_len32 * args.n_heads; j += ib) {
 		int h = j % args.n_heads;
 		int kvh = h / kv_mul;
 		int t = ((j / args.n_heads) * warpSize + (threadIdx.x % warpSize)) * 2;
@@ -929,7 +930,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// attention mix
-	for (int j = i; j < q_dim; j += ib) {
+	for (int j = io; j < q_dim; j += ib) {
 		int h = j / head_dim;
 		int kvh = h / kv_mul;
 		int j_head = j % head_dim;
@@ -948,7 +949,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// attention output
-	for (int j = i; j < dim; j += ib) {
+	for (int j = io; j < dim; j += ib) {
 		float val = matmul_warppar(args.xb2, args.wo, j, q_dim, q_dim);
 
 		if (threadIdx.x % warpSize == 0) {
@@ -966,7 +967,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// F.silu(self.w1(x)) * self.w3(x)
-	for (int j = i; j < hidden_dim; j += ib) {
+	for (int j = io; j < hidden_dim; j += ib) {
 		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim);
 		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim);
 
@@ -980,7 +981,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	gg.sync();
 
 	// self.w2(...) + pre-rmsnorm residual
-	for (int j = i; j < dim; j += ib) {
+	for (int j = io; j < dim; j += ib) {
 		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim, hidden_dim);
 
 		if (threadIdx.x % warpSize == 0) {
