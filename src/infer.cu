@@ -822,7 +822,7 @@ __device__ static void softmax(float* x, int size) {
 	}
 }
 
-__device__ static void rmsnorm(float* o, float* x, float* weight, int size, float eps) {
+__device__ static float rmsnorm(float* o, float* x, float* weight, int size, float eps) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -831,21 +831,21 @@ __device__ static void rmsnorm(float* o, float* x, float* weight, int size, floa
 	for (int j = i; j < size; j += blockSize) {
 		float v = x[j];
 		ss += v * v;
+		o[j] = v * weight[j];
 	}
 
 	// sum across threads in block
 	ss = blockreduce_sum(ss);
 
-	// normalize and scale
-	float scale = rsqrtf(ss / size + eps);
-	for (int j = i; j < size; j += blockSize) {
-		o[j] = x[j] * scale * weight[j];
-	}
+	// caller is responsible for normalization
+	return rsqrtf(ss / size + eps);
 }
 
 template <typename T, typename KVT>
 __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, KVT> args) {
 	cg::grid_group gg = cg::this_grid();
+
+	static __device__ float rmsscale;
 
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
@@ -861,7 +861,11 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// pre-attention rmsnorm
 	if (blockIdx.x == 0) {
-		rmsnorm(args.xb, args.x, args.rms_att_weight, dim, args.norm_eps);
+		float scale = rmsnorm(args.xb, args.x, args.rms_att_weight, dim, args.norm_eps);
+
+		if (threadIdx.x == 0) {
+			rmsscale = scale;
+		}
 	}
 
 	gg.sync();
@@ -871,8 +875,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		T* w = j < q_dim ? args.wq : (j < q_dim + kv_dim ? args.wk : args.wv);
 		int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
-		float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim);
-		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim);
+		float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim) * rmsscale;
+		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim) * rmsscale;
 
 		if (threadIdx.x % warpSize == 0) {
 			int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
@@ -961,15 +965,19 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// post-attention rmsnorm
 	if (blockIdx.x == 0) {
-		rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
+		float scale = rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
+
+		if (threadIdx.x == 0) {
+			rmsscale = scale;
+		}
 	}
 
 	gg.sync();
 
 	// F.silu(self.w1(x)) * self.w3(x)
 	for (int j = io; j < hidden_dim; j += ib) {
-		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim);
-		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim);
+		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim) * rmsscale;
+		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim) * rmsscale;
 
 		float val = silu(v1) * v3;
 
