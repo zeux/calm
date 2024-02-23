@@ -48,20 +48,21 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OlmoModelForCausalLM": "olmo"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "QWenLMHeadModel": "qwen", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OlmoModelForCausalLM": "olmo", "GemmaForCausalLM": "gemma"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
     # hardcoded in C
-    assert config["hidden_act"] == "silu"
+    assert config["hidden_act"] == ("gelu" if arch == "gemma" else "silu")
 
     # customizable
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
+    metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
     metadata["n_layers"] = config["num_hidden_layers"]
     metadata["n_heads"] = config["num_attention_heads"]
     metadata["n_kv_heads"] = config["num_key_value_heads"]
@@ -72,6 +73,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2"]:
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
     metadata["norm_eps"] = config["rms_norm_eps"]
+    metadata["embed_scale"] = config["hidden_size"] ** 0.5 if arch == "gemma" else 1
 
     # moe
     if arch in ["mixtral"]:
@@ -224,6 +226,7 @@ for fn in args.models:
 # see https://github.com/huggingface/transformers/blob/b132c1703eb1c8bd9dfa4ad6a9be2bfd6ef819e9/src/transformers/models/llama/convert_llama_weights_to_hf.py#L122
 def permute_reverse(w, heads, rotary_dim):
     head_dim = w.shape[0] // heads
+    assert rotary_dim <= head_dim
     w = torch.unflatten(w, 0, (-1, head_dim))
     # wr is the rotary part, wk is the part kept unrotated
     wr = w[:, :rotary_dim]
@@ -273,13 +276,16 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral", "mixtral", "qwen2"]:
+def norm(t):
+    return t.float() + (1 if arch == "gemma" else 0)
+
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
-        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
+        tensors[f"model.layers.{l}.attn.norm.weight"] = norm(weights[f"model.layers.{l}.input_layernorm.weight"])
 
-        head_dim = config["hidden_size"] // config["num_attention_heads"]
+        head_dim = metadata["head_dim"]
 
         tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"], head_dim))
         tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_key_value_heads"], head_dim))
@@ -291,7 +297,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2"]:
             tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_key_value_heads"], head_dim).float()
             tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
 
-        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = norm(weights[f"model.layers.{l}.post_attention_layernorm.weight"])
 
         if arch in ["mixtral"]:
             tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
@@ -305,8 +311,9 @@ if arch in ["llama", "mistral", "mixtral", "qwen2"]:
             tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
             tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
-    tensors["model.norm.weight"] = weights["model.norm.weight"].float()
-    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+    tensors["model.norm.weight"] = norm(weights["model.norm.weight"])
+    if arch != "gemma":
+        tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "qwen":
     tensors["model.embed.weight"] = conv(weights["transformer.wte.weight"])
 
