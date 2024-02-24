@@ -51,6 +51,7 @@ It has been tested on following models:
   - DeepSeekMath 7B (deepseek-ai/deepseek-math-7b-instruct)
 - Mistral architecture
   - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
+  - Mistral Pro 8B (TencentARC/Mistral_Pro_8B_v0.1)
   - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
   - GritLM 7B (GritLM/GritLM-7B)
 - Qwen2 architecture
