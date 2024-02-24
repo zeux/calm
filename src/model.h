@@ -45,10 +45,10 @@ struct Weights {
 	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
 	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
 	// weights for matmuls
-	void* wq[MAX_LAYERS]; // (dim, n_heads * head_dim)
-	void* wk[MAX_LAYERS]; // (dim, n_kv_heads * head_dim)
-	void* wv[MAX_LAYERS]; // (dim, n_kv_heads * head_dim)
-	void* wo[MAX_LAYERS]; // (n_heads * head_dim, dim)
+	void* wq[MAX_LAYERS]; // (n_heads * head_dim, dim)
+	void* wk[MAX_LAYERS]; // (n_kv_heads * head_dim, dim)
+	void* wv[MAX_LAYERS]; // (n_kv_heads * head_dim, dim)
+	void* wo[MAX_LAYERS]; // (dim, n_heads * head_dim)
 	// weights for ffn (w3 is absent for phi)
 	void* w1[MAX_LAYERS]; // (hidden_dim, dim)
 	void* w2[MAX_LAYERS]; // (dim, hidden_dim)
