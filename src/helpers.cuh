@@ -97,11 +97,11 @@ __device__ inline float matmul(float* x, T* w, int i, int n) {
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for half weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, half* w, int i, int n, int stride) {
+__device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	for (int j = lane * 2; j < n; j += warpSize * 2) {
-		float2 ww = __half22float2(*(half2*)&w[i * stride + j]);
+		float2 ww = __half22float2(*(half2*)&w[i * n + j]);
 		float2 xx = *(float2*)&x[j];
 		val += ww.x * xx.x;
 		val += ww.y * xx.y;
@@ -111,11 +111,11 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n, int stri
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n, int stride) {
+__device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	for (int j = lane * 4; j < n; j += warpSize * 4) {
-		float4 ww = fp8x4_e5m2_ff(*(__nv_fp8x4_e5m2*)&w[i * stride + j]);
+		float4 ww = fp8x4_e5m2_ff(*(__nv_fp8x4_e5m2*)&w[i * n + j]);
 		float4 xx = *(float4*)&x[j];
 		val += ww.x * xx.x;
 		val += ww.y * xx.y;
@@ -132,13 +132,13 @@ union float8 {
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int stride) {
+__device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	if (n % (warpSize * 16) == 0) {
 		float val = 0.0f;
 		for (int j = lane * 8; j < n; j += warpSize * 16) {
-			uint32_t wg0 = w[i * stride / 8 + j / 8];
-			uint32_t wg1 = w[i * stride / 8 + j / 8 + warpSize];
+			uint32_t wg0 = w[i * n / 8 + j / 8];
+			uint32_t wg1 = w[i * n / 8 + j / 8 + warpSize];
 
 			float8 xx0 = *(float8*)&x[j];
 #pragma unroll
@@ -156,7 +156,7 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n, int 
 	} else {
 		float val = 0.0f;
 		for (int j = lane * 8; j < n; j += warpSize * 8) {
-			uint32_t wg = w[i * stride / 8 + j / 8];
+			uint32_t wg = w[i * n / 8 + j / 8];
 
 			float8 xx = *(float8*)&x[j];
 #pragma unroll

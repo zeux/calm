@@ -194,7 +194,7 @@ __global__ static void kernel_matmul_cls(uint64_t, float* xout, float* x, T* w, 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n, n);
+	float val = matmul_warppar(x, w, i, n);
 
 	if (b) {
 		val += b[i];
@@ -223,7 +223,7 @@ __global__ static void kernel_matmul_rope_qkv(uint64_t, float* qout, float* x, T
 	float* b = i < d ? bq : (i < d + kvd ? bk : bv);
 	int j = i < d ? i : (i < d + kvd ? i - d : i - d - kvd);
 
-	float val = matmul_warppar(x, w, j, n, n);
+	float val = matmul_warppar(x, w, j, n);
 
 	if (b) {
 		val += b[j];
@@ -270,7 +270,7 @@ __global__ static void kernel_matmul_attn(uint64_t, float* xout, float* x, T* w,
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n, n);
+	float val = matmul_warppar(x, w, i, n);
 
 	if (threadIdx.x % warpSize == 0) {
 		// += for residual
@@ -283,8 +283,8 @@ __global__ static void kernel_matmul_ffn13_silu(uint64_t, float* xout, float* x,
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float v1 = matmul_warppar(x, w1, i, n, n);
-	float v3 = matmul_warppar(x, w3, i, n, n);
+	float v1 = matmul_warppar(x, w1, i, n);
+	float v3 = matmul_warppar(x, w3, i, n);
 
 	float val = silu(v1) * v3;
 
@@ -298,8 +298,8 @@ __global__ static void kernel_matmul_ffn13_gelu(uint64_t, float* xout, float* x,
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float v1 = matmul_warppar(x, w1, i, n, n);
-	float v3 = matmul_warppar(x, w3, i, n, n);
+	float v1 = matmul_warppar(x, w1, i, n);
+	float v3 = matmul_warppar(x, w3, i, n);
 
 	float val = gelu(v1) * v3;
 
@@ -313,7 +313,7 @@ __global__ static void kernel_matmul_ffn1_gelu(uint64_t, float* xout, float* x, 
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float v1 = matmul_warppar(x, w1, i, n, n);
+	float v1 = matmul_warppar(x, w1, i, n);
 
 	float val = gelu(v1 + b1[i]);
 
@@ -327,7 +327,7 @@ __global__ static void kernel_matmul_ffn2(uint64_t, float* xout, float* x, T* w,
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n, n);
+	float val = matmul_warppar(x, w, i, n);
 
 	if (threadIdx.x % warpSize == 0) {
 		xout[i] = val + acc[i];
@@ -373,7 +373,7 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	assert(i < experts);
 
-	float val = matmul_warppar(x, w, i, n, n);
+	float val = matmul_warppar(x, w, i, n);
 
 	__shared__ float ws[32];
 	ws[i] = val;
@@ -393,8 +393,8 @@ __global__ static void kernel_matmul_moe_ffn13_silu(uint64_t, float* xout, float
 	int e = threadIdx.y;
 	int eo = moe_experts[e] * d;
 
-	float v1 = matmul_warppar(x, w1, i + eo, n, n);
-	float v3 = matmul_warppar(x, w3, i + eo, n, n);
+	float v1 = matmul_warppar(x, w1, i + eo, n);
+	float v3 = matmul_warppar(x, w3, i + eo, n);
 
 	float val = silu(v1) * v3;
 
@@ -411,7 +411,7 @@ __global__ static void kernel_matmul_moe_ffn2(uint64_t, float* xout, float* x, T
 	int e = threadIdx.y;
 	int eo = moe_experts[e] * d;
 
-	float val = matmul_warppar(x + e * n, w2, i + eo, n, n);
+	float val = matmul_warppar(x + e * n, w2, i + eo, n);
 
 	__shared__ float rs[32];
 	rs[threadIdx.y] = val;
@@ -872,8 +872,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		T* w = j < q_dim ? args.wq : (j < q_dim + kv_dim ? args.wk : args.wv);
 		int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
-		float v0 = matmul_warppar(args.xb, w, k + 0, dim, dim) * rmsscale;
-		float v1 = matmul_warppar(args.xb, w, k + 1, dim, dim) * rmsscale;
+		float v0 = matmul_warppar(args.xb, w, k + 0, dim) * rmsscale;
+		float v1 = matmul_warppar(args.xb, w, k + 1, dim) * rmsscale;
 
 		if (threadIdx.x % warpSize == 0) {
 			int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
@@ -951,7 +951,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// attention output
 	for (int j = io; j < dim; j += ib) {
-		float val = matmul_warppar(args.q, args.wo, j, q_dim, q_dim);
+		float val = matmul_warppar(args.q, args.wo, j, q_dim);
 
 		if (threadIdx.x % warpSize == 0) {
 			args.x[j] += val;
@@ -973,8 +973,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// F.silu(self.w1(x)) * self.w3(x)
 	for (int j = io; j < hidden_dim; j += ib) {
-		float v1 = matmul_warppar(args.xb, args.w1, j, dim, dim) * rmsscale;
-		float v3 = matmul_warppar(args.xb, args.w3, j, dim, dim) * rmsscale;
+		float v1 = matmul_warppar(args.xb, args.w1, j, dim) * rmsscale;
+		float v3 = matmul_warppar(args.xb, args.w3, j, dim) * rmsscale;
 
 		float val = silu(v1) * v3;
 
@@ -987,7 +987,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// self.w2(...) + pre-rmsnorm residual
 	for (int j = io; j < dim; j += ib) {
-		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim, hidden_dim);
+		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim);
 
 		if (threadIdx.x % warpSize == 0) {
 			args.x[j] += val;
