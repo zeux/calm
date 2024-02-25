@@ -437,15 +437,16 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 			// mix self.w2(F.silu(self.w1(x)) * self.w3(x))
 			for (int e = 0; e < p->n_experts_ac; ++e) {
-				matmul(s->hb, s->xb, w->moew1[l][moe_experts[e]], NULL, dim, hidden_dim, dotprod);
-				matmul(s->hb2, s->xb, w->moew3[l][moe_experts[e]], NULL, dim, hidden_dim, dotprod);
+				size_t esize = dim * hidden_dim * (size_t)w->dbits / 8;
+				matmul(s->hb, s->xb, (char*)w->w1[l] + moe_experts[e] * esize, NULL, dim, hidden_dim, dotprod);
+				matmul(s->hb2, s->xb, (char*)w->w3[l] + moe_experts[e] * esize, NULL, dim, hidden_dim, dotprod);
 
 				// SwiGLU non-linearity
 				for (int i = 0; i < hidden_dim; i++) {
 					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
 				}
 
-				matmul(s->xb2, s->hb, w->moew2[l][moe_experts[e]], NULL, hidden_dim, dim, dotprod);
+				matmul(s->xb2, s->hb, (char*)w->w2[l] + moe_experts[e] * esize, NULL, hidden_dim, dim, dotprod);
 
 				for (int i = 0; i < dim; i++) {
 					x[i] += s->xb2[i] * moe_weights[e];

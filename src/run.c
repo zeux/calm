@@ -95,14 +95,9 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		if (config->arch == Mixtral) {
 			weights->moegate[l] = tensors_get(tensors, "model.layers.%d.moegate.weight", l, wtype, (int[]){config->n_experts, config->dim / gsize, 0, 0});
 
-			for (int e = 0; e < config->n_experts; ++e) {
-				char pattern[128];
-				snprintf(pattern, sizeof(pattern), "model.layers.%d.experts.%d.w%%d.weight", l, e);
-
-				weights->moew1[l][e] = tensors_get(tensors, pattern, 1, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
-				weights->moew2[l][e] = tensors_get(tensors, pattern, 2, wtype, (int[]){config->dim, config->hidden_dim / gsize, 0, 0});
-				weights->moew3[l][e] = tensors_get(tensors, pattern, 3, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
-			}
+			weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->n_experts, config->hidden_dim, config->dim / gsize, 0});
+			weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->n_experts, config->dim, config->hidden_dim / gsize, 0});
+			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->n_experts, config->hidden_dim, config->dim / gsize, 0});
 		} else {
 			weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 			weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim / gsize, 0, 0});
@@ -523,7 +518,7 @@ int main(int argc, char* argv[]) {
 		transformer.n_bandwidth += tensors_find(&tensors, "model.embed.weight", 0)->size;
 	}
 	if (transformer.config.arch == Mixtral) {
-		size_t mlp = count_bytes(&tensors, "model.layers.", ".experts.", NULL);
+		size_t mlp = count_bytes(&tensors, "model.layers.", ".mlp.w", NULL);
 		transformer.n_bandwidth -= mlp;
 		transformer.n_bandwidth += mlp / transformer.config.n_experts * transformer.config.n_experts_ac;
 	}

@@ -289,10 +289,9 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
         if arch in ["mixtral"]:
             tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
 
-            for e in range(config["num_local_experts"]):
-                tensors[f"model.layers.{l}.experts.{e}.w1.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w1.weight"])
-                tensors[f"model.layers.{l}.experts.{e}.w2.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w2.weight"])
-                tensors[f"model.layers.{l}.experts.{e}.w3.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w3.weight"])
+            tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w1.weight"]) for e in range(config["num_local_experts"])])
+            tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w2.weight"]) for e in range(config["num_local_experts"])])
+            tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w3.weight"]) for e in range(config["num_local_experts"])])
         else:
             tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
             tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])

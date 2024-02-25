@@ -50,9 +50,9 @@ struct Weights {
 	void* wv[MAX_LAYERS]; // (n_kv_heads * head_dim, dim)
 	void* wo[MAX_LAYERS]; // (dim, n_heads * head_dim)
 	// weights for ffn (w3 is absent for phi)
-	void* w1[MAX_LAYERS]; // (hidden_dim, dim)
-	void* w2[MAX_LAYERS]; // (dim, hidden_dim)
-	void* w3[MAX_LAYERS]; // (hidden_dim, dim)
+	void* w1[MAX_LAYERS]; // (n_experts?, hidden_dim, dim)
+	void* w2[MAX_LAYERS]; // (n_experts?, dim, hidden_dim)
+	void* w3[MAX_LAYERS]; // (n_experts?, hidden_dim, dim)
 	// final norm (ln for phi)
 	float* ln_final_weight; // (dim,)
 	float* rms_final_weight; // (dim,)
@@ -68,11 +68,6 @@ struct Weights {
 	float* bcls;
 	// moe gate weights (mixtral)
 	void* moegate[MAX_LAYERS]; // (n_experts, dim)
-	// moe ffn weights (mixtral)
-	void* moew1[MAX_LAYERS][MAX_EXPERTS]; // (hidden_dim, dim)
-	void* moew2[MAX_LAYERS][MAX_EXPERTS]; // (dim, hidden_dim)
-	void* moew3[MAX_LAYERS][MAX_EXPERTS]; // (hidden_dim, dim)
-	void** moewr[MAX_LAYERS][3];          // (n_experts)
 };
 
 struct RunState {
