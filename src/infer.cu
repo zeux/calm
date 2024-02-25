@@ -52,7 +52,6 @@ extern "C" void* upload_cuda(void* host, size_t size) {
 
 extern "C" void prepare_cuda(struct Transformer* transformer) {
 	struct Config* config = &transformer->config;
-	struct Weights* weights = &transformer->weights;
 	struct RunState* state = &transformer->state;
 
 	cudaDeviceProp devprop = {};
@@ -335,6 +334,40 @@ __global__ static void kernel_matmul_ffn2(uint64_t, float* xout, float* x, T* w,
 	}
 }
 
+__device__ static void moe_gate_warp(float* moe_weights, int* moe_experts, float* weights, int experts, int active) {
+	int i = threadIdx.x;
+
+	// (unscaled) softmax across experts
+	float w = (i < experts) ? weights[i] : -FLT_MAX;
+	float max_val = warpreduce_max(w);
+	w = expf(w - max_val);
+
+	// weight in top 24 bits, index in bottom 8
+	int wi = (__float_as_int(w) & 0xffffff00) | i;
+
+	// top k within warp
+	float sumw = 0.f;
+	int acti = -1;
+
+	for (int k = 0; k < active; ++k) {
+		int maxi = warpreduce_maxi(wi);
+
+		sumw += __int_as_float(maxi);
+
+		// keeps top weight in thread k, clears weight for thread with max thread to avoid re-selection
+		acti = (i == k) ? maxi : acti;
+		wi = (wi == maxi) ? 0 : wi;
+	}
+
+	// write normalized weights
+	if (i < active) {
+		assert(acti >= 0);
+
+		moe_experts[i] = acti & 0xff;
+		moe_weights[i] = __int_as_float(acti) / sumw;
+	}
+}
+
 template <typename T>
 __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, float* x, T* w, int n, int experts, int active) {
 	int i = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
@@ -348,37 +381,7 @@ __global__ static void kernel_moe_gate(float* moe_weights, int* moe_experts, flo
 
 	// warp-parallel top expert selection within the first warp
 	if (threadIdx.x < warpSize) {
-		i = threadIdx.x;
-
-		// (unscaled) softmax across experts
-		float w = (i < experts) ? ws[i] : -FLT_MAX;
-		float max_val = warpreduce_max(w);
-		w = expf(w - max_val);
-
-		// weight in top 24 bits, index in bottom 8
-		int wi = (*(int*)&w & 0xffffff00) | i;
-
-		// top k within warp
-		float sumw = 0.f;
-		int acti = -1;
-
-		for (int k = 0; k < active; ++k) {
-			int maxi = warpreduce_maxi(wi);
-
-			sumw += *(float*)&maxi;
-
-			// keeps top weight in thread k, clears weight for thread with max thread to avoid re-selection
-			acti = (i == k) ? maxi : acti;
-			wi = (wi == maxi) ? 0 : wi;
-		}
-
-		// write normalized weights
-		if (i < active) {
-			assert(acti >= 0);
-
-			moe_experts[i] = acti & 0xff;
-			moe_weights[i] = *(float*)&acti / sumw;
-		}
+		moe_gate_warp(moe_weights, moe_experts, ws, experts, active);
 	}
 }
 
