@@ -81,7 +81,13 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
-	state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
+
+	if (config->n_experts) {
+		state->exp = (float*)cuda_devicealloc((config->n_experts + config->n_experts_ac * 2) * sizeof(float));
+	} else {
+		float expdummy[] = { 1.0f, 0 }; // 0 is used as expert index (n_expert_ac = 1)
+		state->exp = (float*)cuda_devicecopy(expdummy, sizeof(expdummy));
+	}
 
 	assert(state->kvbits == 8 || state->kvbits == 16);
 	state->key_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * (state->kvbits / 8));
@@ -767,6 +773,7 @@ struct CoopArgs {
 	float* xb;
 	float* q;
 	float* att;
+	float* exp;
 
 	KVT* keyb;
 	KVT* valb;
@@ -778,6 +785,7 @@ struct CoopArgs {
 	T* wo;
 
 	float* rms_ffn_weight;
+	T* moegate;
 	T* w1;
 	T* w2;
 	T* w3;
@@ -787,6 +795,8 @@ struct CoopArgs {
 	int head_dim;
 	int n_heads;
 	int n_kv_heads;
+	int n_experts;
+	int n_experts_ac;
 	int seq_len;
 	int rotary_dim;
 
@@ -960,6 +970,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	syncgrid();
 
+	float* moe_weights = args.exp + args.n_experts;
+	int* moe_experts = (int*)moe_weights + args.n_experts_ac;
+
 	// post-attention rmsnorm
 	if (blockIdx.x == 0) {
 		float scale = rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
@@ -971,10 +984,30 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	syncgrid();
 
+	// moe gate
+	if (args.moegate) {
+		int j = blockIdx.x;
+
+		if (j < args.n_experts) {
+			float val = matmul_warppar(args.xb, args.moegate, j, dim) * rmsscale;
+
+			args.exp[j] = val;
+		}
+
+		syncgrid();
+
+		if (blockIdx.x == 0 && threadIdx.x < warpSize) {
+			moe_gate_warp(moe_weights, moe_experts, args.exp, args.n_experts, args.n_experts_ac);
+		}
+
+		syncgrid();
+	}
+
 	// F.silu(self.w1(x)) * self.w3(x)
-	for (int j = io; j < hidden_dim; j += ib) {
-		float v1 = matmul_warppar(args.xb, args.w1, j, dim) * rmsscale;
-		float v3 = matmul_warppar(args.xb, args.w3, j, dim) * rmsscale;
+	for (int j = io; j < hidden_dim * args.n_experts_ac; j += ib) {
+		int je = (j % hidden_dim) + moe_experts[j / hidden_dim] * hidden_dim;
+		float v1 = matmul_warppar(args.xb, args.w1, je, dim) * rmsscale;
+		float v3 = matmul_warppar(args.xb, args.w3, je, dim) * rmsscale;
 
 		float val = silu(v1) * v3;
 
@@ -986,11 +1019,12 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	syncgrid();
 
 	// self.w2(...) + pre-rmsnorm residual
-	for (int j = io; j < dim; j += ib) {
-		float val = matmul_warppar(args.hb, args.w2, j, hidden_dim);
+	for (int j = io; j < dim * args.n_experts_ac; j += ib) {
+		int je = (j % dim) + moe_experts[j / dim] * dim;
+		float val = matmul_warppar(args.hb + (j / dim) * hidden_dim, args.w2, je, hidden_dim);
 
 		if (threadIdx.x % warpSize == 0) {
-			args.x[j] += val;
+			atomicAdd(&args.x[j % dim], val * moe_weights[j / dim]);
 		}
 	}
 }
@@ -1001,7 +1035,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	struct Weights* w = &transformer->weights;
 	struct RunState* s = &transformer->state;
 
-	assert(p->arch == LlamaLike);
+	assert(p->arch == LlamaLike || p->arch == Mixtral);
 
 	// a few convenience variables
 	float* x = s->x;
@@ -1048,10 +1082,11 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			PROF_TOKEN(bw),
 
 			x,
-			s->hb,
+			p->arch == Mixtral ? s->he : s->hb,
 			s->xb,
 			s->q,
 			s->att,
+			s->exp,
 
 			(KVT*)s->key_cache + loff,
 			(KVT*)s->value_cache + loff,
@@ -1063,6 +1098,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			(T*)w->wo[l],
 
 			w->rms_ffn_weight[l],
+			(T*)w->moegate[l],
 			(T*)w->w1[l],
 			(T*)w->w2[l],
 			(T*)w->w3[l],
@@ -1072,6 +1108,8 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			p->head_dim,
 			p->n_heads,
 			p->n_kv_heads,
+			p->n_experts,
+			p->arch == Mixtral ? p->n_experts_ac : 1,
 			p->seq_len,
 			p->rotary_dim,
 
