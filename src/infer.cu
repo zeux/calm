@@ -799,6 +799,7 @@ struct CoopArgs {
 	int n_experts_ac;
 	int seq_len;
 	int rotary_dim;
+	bool act_gelu;
 
 	int kv_len;
 	int kv_pos;
@@ -1009,7 +1010,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 		float v1 = matmul_warppar(args.xb, args.w1, je, dim) * rmsscale;
 		float v3 = matmul_warppar(args.xb, args.w3, je, dim) * rmsscale;
 
-		float val = silu(v1) * v3;
+		float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
 		if (threadIdx.x % warpSize == 0) {
 			args.hb[j] = val;
@@ -1035,7 +1036,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	struct Weights* w = &transformer->weights;
 	struct RunState* s = &transformer->state;
 
-	assert(p->arch == LlamaLike || p->arch == Mixtral);
+	assert(p->arch == LlamaLike || p->arch == Mixtral || p->arch == Gemma);
 
 	// a few convenience variables
 	float* x = s->x;
@@ -1112,6 +1113,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 			p->arch == Mixtral ? p->n_experts_ac : 1,
 			p->seq_len,
 			p->rotary_dim,
+			p->arch == Gemma,
 
 			kv_len,
 			kv_pos,
