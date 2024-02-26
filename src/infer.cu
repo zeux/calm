@@ -1077,7 +1077,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		bw += (dim + kv_dim * 2) * dim * dbits / 8; // QKV
 		bw += kvbw * 2; // attn scoring and mixing
 		bw += dim * dim * dbits / 8; // attn output
-		bw += 3 * (hidden_dim * dim * dbits / 8); // MLP
+		bw += 3 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1); // MLP
 
 		CoopArgs<T, KVT> args = {
 			PROF_TOKEN(bw),
