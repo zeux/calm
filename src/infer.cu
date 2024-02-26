@@ -987,18 +987,20 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 
 	// moe gate
 	if (args.moegate) {
-		int j = blockIdx.x;
+		if (blockIdx.x == 0) {
+			int j = threadIdx.x / warpSize;
 
-		if (j < args.n_experts) {
-			float val = matmul_warppar(args.xb, args.moegate, j, dim) * rmsscale;
+			if (j < args.n_experts) {
+				float val = matmul_warppar(args.xb, args.moegate, j, dim) * rmsscale;
 
-			args.exp[j] = val;
-		}
+				args.exp[j] = val;
+			}
 
-		syncgrid();
+			__syncthreads();
 
-		if (blockIdx.x == 0 && threadIdx.x < warpSize) {
-			moe_gate_warp(moe_weights, moe_experts, args.exp, args.n_experts, args.n_experts_ac);
+			if (threadIdx.x < warpSize) {
+				moe_gate_warp(moe_weights, moe_experts, args.exp, args.n_experts, args.n_experts_ac);
+			}
 		}
 
 		syncgrid();
