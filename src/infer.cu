@@ -974,20 +974,15 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	float* moe_weights = args.exp + args.n_experts;
 	int* moe_experts = (int*)moe_weights + args.n_experts_ac;
 
-	// post-attention rmsnorm
+	// post-attention rmsnorm and moegate
 	if (blockIdx.x == 0) {
 		float scale = rmsnorm(args.xb, args.x, args.rms_ffn_weight, dim, args.norm_eps);
 
 		if (threadIdx.x == 0) {
 			rmsscale = scale;
 		}
-	}
 
-	syncgrid();
-
-	// moe gate
-	if (args.moegate) {
-		if (blockIdx.x == 0) {
+		if (args.n_experts) {
 			int j = threadIdx.x / warpSize;
 
 			if (j < args.n_experts) {
@@ -1002,9 +997,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 				moe_gate_warp(moe_weights, moe_experts, args.exp, args.n_experts, args.n_experts_ac);
 			}
 		}
-
-		syncgrid();
 	}
+
+	syncgrid();
 
 	// F.silu(self.w1(x)) * self.w3(x)
 	for (int j = io; j < hidden_dim * args.n_experts_ac; j += ib) {
