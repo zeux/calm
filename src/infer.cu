@@ -804,7 +804,6 @@ struct CoopArgs {
 
 	float* x;
 	float* hb;
-	float* xb;
 	float* q;
 	float* att;
 	float* exp;
@@ -877,7 +876,8 @@ __device__ static void syncgrid() {
 
 template <typename T, typename KVT>
 __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_constant__ CoopArgs<T, KVT> args) {
-	static __device__ float rmsscale;
+	extern __shared__ float xs[];
+	__shared__ float rmsscale;
 
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
@@ -894,16 +894,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	for (int l = 0; l < args.n_layers; ++l) {
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
 
-		// pre-attention rmsnorm
-		if (blockIdx.x == 0) {
-			float scale = rmsnorm(args.xb, args.x, L->rms_att_weight, dim, args.norm_eps);
-
-			if (threadIdx.x == 0) {
-				rmsscale = scale;
-			}
-		}
-
-		syncgrid();
+		// pre-attention rmsnorm (into shared memory)
+		rmsscale = rmsnorm(xs, args.x, L->rms_att_weight, dim, args.norm_eps);
 
 		size_t loff = (size_t)l * args.seq_len * kv_dim; // kv cache layer offset for convenience
 		KVT* keyb = args.key_cache + loff;
@@ -914,8 +906,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			T* w = j < q_dim ? L->wq : (j < q_dim + kv_dim ? L->wk : L->wv);
 			int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
-			float v0 = matmul_warppar(args.xb, w, k + 0, dim) * rmsscale;
-			float v1 = matmul_warppar(args.xb, w, k + 1, dim) * rmsscale;
+			float v0 = matmul_warppar(xs, w, k + 0, dim) * rmsscale;
+			float v1 = matmul_warppar(xs, w, k + 1, dim) * rmsscale;
 
 			if (threadIdx.x % warpSize == 0) {
 				int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
@@ -1005,19 +997,16 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		float* moe_weights = args.exp + args.n_experts;
 		int* moe_experts = (int*)moe_weights + args.n_experts_ac;
 
-		// post-attention rmsnorm and moegate
-		if (blockIdx.x == 0) {
-			float scale = rmsnorm(args.xb, args.x, L->rms_ffn_weight, dim, args.norm_eps);
+		// post-attention rmsnorm (into shared memory)
+		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps);
 
-			if (threadIdx.x == 0) {
-				rmsscale = scale;
-			}
-
-			if (args.n_experts) {
+		// moegate
+		if (args.n_experts) {
+			if (blockIdx.x == 0) {
 				int j = threadIdx.x / warpSize;
 
 				if (j < args.n_experts) {
-					float val = matmul_warppar(args.xb, L->moegate, j, dim) * rmsscale;
+					float val = matmul_warppar(xs, L->moegate, j, dim) * rmsscale;
 
 					args.exp[j] = val;
 				}
@@ -1028,15 +1017,15 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 					moe_gate_warp(moe_weights, moe_experts, args.exp, args.n_experts, args.n_experts_ac);
 				}
 			}
-		}
 
-		syncgrid();
+			syncgrid();
+		}
 
 		// F.silu(self.w1(x)) * self.w3(x)
 		for (int j = io; j < hidden_dim * args.n_experts_ac; j += ib) {
 			int je = (j % hidden_dim) + moe_experts[j / hidden_dim] * hidden_dim;
-			float v1 = matmul_warppar(args.xb, L->w1, je, dim) * rmsscale;
-			float v3 = matmul_warppar(args.xb, L->w3, je, dim) * rmsscale;
+			float v1 = matmul_warppar(xs, L->w1, je, dim) * rmsscale;
+			float v3 = matmul_warppar(xs, L->w3, je, dim) * rmsscale;
 
 			float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
@@ -1131,7 +1120,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 		x,
 		p->arch == Mixtral ? s->he : s->hb,
-		s->xb,
 		s->q,
 		s->att,
 		s->exp,
@@ -1161,7 +1149,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	};
 	void* argsp = &args;
 
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, 0, stream));
+	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, dim * sizeof(float), stream));
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
