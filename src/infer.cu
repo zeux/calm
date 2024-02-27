@@ -1061,6 +1061,27 @@ __global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, 
 	}
 }
 
+template <typename T>
+__global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, float* rms_weight, int n, int d, float norm_eps) {
+	extern __shared__ float xs[];
+
+	float rmsscale = rmsnorm(xs, x, rms_weight, n, norm_eps);
+
+	int io = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	for (int j = io; j < d; j += ib) {
+		float val = matmul_warppar(xs, w, j, n) * rmsscale;
+
+		// instead of writing one value per block, we transpose the values and write all results from first warp
+		val = blocktranspose(val, 0.f);
+
+		if (threadIdx.x < blockDim.x / warpSize) {
+			xout[j + threadIdx.x] = val;
+		}
+	}
+}
+
 template <typename T, typename KVT>
 static float* forwardcoop(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	struct Config* p = &transformer->config;
@@ -1084,9 +1105,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 	assert(p->vocab_size % 32 == 0);
-
-	// rmsnorm and softmax require a larger-than-warp block size for efficiency
-	const int rmsnorm_size = 1024;
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
@@ -1150,12 +1168,9 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		return NULL;
 	}
 
-	// final rmsnorm
-	kernel_rmsnorm<<<1, rmsnorm_size, dim * sizeof(float), stream>>>(x, x, w->rms_final_weight, dim, p->norm_eps);
-
 	// classifier into logits
-	kernel_matmul_cls<<<p->vocab_size / 32, 32 * 32, 0, stream>>>(
-	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->bcls, dim, p->vocab_size);
+	kernel_output<<<coopsms, 32 * 32, dim * sizeof(float), stream>>>(
+	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 	CUDA_CHECK(cudaGetLastError()); // check for kernel launch errors; they might fail with OOM due to lazy kernel compilation
