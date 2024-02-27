@@ -876,7 +876,7 @@ __device__ static void syncgrid() {
 }
 
 template <typename T, typename KVT>
-__global__ __launch_bounds__(1024, 1) static void kernel_fused_coop(CoopArgs<T, KVT> args) {
+__global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_constant__ CoopArgs<T, KVT> args) {
 	static __device__ float rmsscale;
 
 	int dim = args.dim;
@@ -1161,7 +1161,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	};
 	void* argsp = &args;
 
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_fused_coop<T, KVT>, coopsms, 1024, &argsp, 0, stream));
+	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, 0, stream));
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
