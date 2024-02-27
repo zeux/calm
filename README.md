@@ -43,6 +43,7 @@ It has been tested on following models:
 
 - Llama architecture
   - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+  - Cosmo 1B (HuggingFaceTB/cosmo-1b)
   - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
   - Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
   - LLaMA Pro 8B (TencentARC/LLaMA-Pro-8B-Instruct)
