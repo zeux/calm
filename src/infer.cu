@@ -910,7 +910,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			float v1 = matmul_warppar(xs, w, k + 1, dim) * rmsscale;
 
 			if (threadIdx.x % warpSize == 0) {
-				int j_head = j % head_dim; // TODO: optimize when head_dim is a power of two
+				int j_head = j % head_dim;
 				float freq = j_head >= args.rotary_dim ? 0.f : exp2f(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
 				float fcr, fci;
 				sincosf(args.pos * freq, &fci, &fcr);
