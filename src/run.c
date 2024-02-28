@@ -107,9 +107,7 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 			}
 
 			if (config->arch == Phi || config->arch == Qwen) {
-				weights->bq[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wq.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-				weights->bk[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wk.bias", l, dt_f32, (int[]){config->n_kv_heads * config->head_dim, 0, 0, 0});
-				weights->bv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wv.bias", l, dt_f32, (int[]){config->n_kv_heads * config->head_dim, 0, 0, 0});
+				weights->bqkv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wqkv.bias", l, dt_f32, (int[]){(config->n_heads + config->n_kv_heads * 2) * config->head_dim, 0, 0, 0});
 			}
 
 			if (config->arch == Phi) {

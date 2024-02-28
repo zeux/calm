@@ -59,9 +59,7 @@ struct Weights {
 	// classifier weights for the logits, on the last layer
 	void* wcls;
 	// biases for qkv (qwen, phi)
-	float* bq[MAX_LAYERS]; // (dim)
-	float* bk[MAX_LAYERS]; // (dim)
-	float* bv[MAX_LAYERS]; // (dim)
+	float* bqkv[MAX_LAYERS]; // ((n_heads + n_kv_heads * 2) * head_dim)
 	// biases for ffn, cls (phi)
 	float* b1[MAX_LAYERS]; // (hidden_dim)
 	float* b2[MAX_LAYERS]; // (dim)

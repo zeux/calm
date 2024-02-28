@@ -280,9 +280,11 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
 
         if arch in ["qwen2"]:
-            tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], config["num_attention_heads"], head_dim).float()
-            tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_key_value_heads"], head_dim).float()
-            tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
+            tensors[f"model.layers.{l}.attn.wqkv.bias"] = torch.cat([
+                permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], config["num_attention_heads"], head_dim).float(),
+                permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], config["num_key_value_heads"], head_dim).float(),
+                weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
+            ])
 
         tensors[f"model.layers.{l}.mlp.norm.weight"] = norm(weights[f"model.layers.{l}.post_attention_layernorm.weight"])
 
@@ -316,9 +318,11 @@ elif arch == "phi":
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.dense.weight"])
 
         # note: we fold norm bias into qkv/mlp bias to reduce redundancy
-        tensors[f"model.layers.{l}.attn.wq.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"] + weights[f"model.layers.{l}.self_attn.q_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float()
-        tensors[f"model.layers.{l}.attn.wk.bias"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"] + weights[f"model.layers.{l}.self_attn.k_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float()
-        tensors[f"model.layers.{l}.attn.wv.bias"] = weights[f"model.layers.{l}.self_attn.v_proj.bias"].float() + weights[f"model.layers.{l}.self_attn.v_proj.weight"].float() @ norm_bias
+        tensors[f"model.layers.{l}.attn.wqkv.bias"] = torch.cat([
+            permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"] + weights[f"model.layers.{l}.self_attn.q_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float(),
+            permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"] + weights[f"model.layers.{l}.self_attn.k_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float(),
+            weights[f"model.layers.{l}.self_attn.v_proj.bias"].float() + weights[f"model.layers.{l}.self_attn.v_proj.weight"].float() @ norm_bias,
+        ])
 
         # note: we fold attn output bias into mlp w2 bias to reduce redundancy
         tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.fc1.weight"])

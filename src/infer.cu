@@ -31,6 +31,7 @@ struct CoopLayer {
 	T* wk;
 	T* wv;
 	T* wo;
+	float* bqkv;
 
 	float* rms_ffn_weight;
 	T* moegate;
@@ -126,6 +127,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 			layers[l].wk = weights->wk[l];
 			layers[l].wv = weights->wv[l];
 			layers[l].wo = weights->wo[l];
+			layers[l].bqkv = weights->bqkv[l];
 			layers[l].rms_ffn_weight = weights->rms_ffn_weight[l];
 			layers[l].moegate = weights->moegate[l];
 			layers[l].w1 = weights->w1[l];
@@ -693,7 +695,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 		// qkv matmuls for this position + RoPE encoding + update KV cache
 		kernel_matmul_rope_qkv<<<(q_dim + kv_dim * 2) / 2, 32 * 2, 0, stream>>>(
-		    PROF_TOKEN((q_dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bq[l], w->bk[l], w->bv[l], dim, q_dim, kv_dim,
+		    PROF_TOKEN((q_dim + kv_dim * 2) * dim * dbits / 8), s->q, s->xb, (T*)w->wq[l], (T*)w->wk[l], (T*)w->wv[l], w->bqkv[l], w->bqkv[l] ? w->bqkv[l] + q_dim : NULL, w->bqkv[l] ? w->bqkv[l] + q_dim + kv_dim : NULL, dim, q_dim, kv_dim,
 		    (KVT*)s->key_cache + loff, (KVT*)s->value_cache + loff, p->head_dim, pos, kv_pos, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 
 		// only update kv cache and don't output logits
@@ -915,6 +917,11 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			float v0 = matmul_warppar(xs, w, k + 0, dim) * rmsscale;
 			float v1 = matmul_warppar(xs, w, k + 1, dim) * rmsscale;
 
+			if (L->bqkv) {
+				v0 += L->bqkv[j + 0];
+				v1 += L->bqkv[j + 1];
+			}
+
 			if (threadIdx.x % warpSize == 0) {
 				int j_head = j % head_dim;
 				float freq = j_head >= args.rotary_dim ? 0.f : exp2f(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
@@ -1079,7 +1086,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	struct Weights* w = &transformer->weights;
 	struct RunState* s = &transformer->state;
 
-	assert(p->arch == LlamaLike || p->arch == Mixtral || p->arch == Gemma);
+	assert(p->arch == LlamaLike || p->arch == Mixtral || p->arch == Gemma || p->arch == Qwen);
 
 	// a few convenience variables
 	float* x = s->x;

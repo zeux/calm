@@ -377,9 +377,9 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		kvtype_t* vb = (kvtype_t*)s->value_cache + loff;
 
 		// qkv matmuls for this position
-		matmul(s->q, s->xb, w->wq[l], w->bq[l], dim, q_dim, dotprod);
-		matmul(s->k, s->xb, w->wk[l], w->bk[l], dim, kv_dim, dotprod);
-		matmul(s->v, s->xb, w->wv[l], w->bv[l], dim, kv_dim, dotprod);
+		matmul(s->q, s->xb, w->wq[l], w->bqkv[l], dim, q_dim, dotprod);
+		matmul(s->k, s->xb, w->wk[l], w->bqkv[l] ? w->bqkv[l] + q_dim : NULL, dim, kv_dim, dotprod);
+		matmul(s->v, s->xb, w->wv[l], w->bqkv[l] ? w->bqkv[l] + q_dim + kv_dim : NULL, dim, kv_dim, dotprod);
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		rope(s->q, q_dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);
