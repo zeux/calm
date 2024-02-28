@@ -806,7 +806,6 @@ struct CoopArgs {
 	float* hb;
 	float* q;
 	float* att;
-	float* exp;
 
 	KVT* key_cache;
 	KVT* val_cache;
@@ -879,6 +878,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	extern __shared__ float xs[];
 	__shared__ float rmsscale;
 
+	__shared__ float moe_weights[32];
+	__shared__ int moe_experts[32];
+
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
 	int head_dim = args.head_dim;
@@ -890,6 +892,10 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	const int IK = 2; // K consecutive warps per block, groups of K are interleaved across SMs for better work distribution
 	int io = blockIdx.x * IK + (threadIdx.x / warpSize % IK) + gridDim.x * IK * (threadIdx.x / warpSize / IK);
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+
+	// dummy moe weights for non-moe models; will be overwritten by moe gate
+	moe_weights[0] = 1.f;
+	moe_experts[0] = 0;
 
 	for (int l = 0; l < args.n_layers; ++l) {
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
@@ -994,31 +1000,27 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 		syncgrid();
 
-		float* moe_weights = args.exp + args.n_experts;
-		int* moe_experts = (int*)moe_weights + args.n_experts_ac;
-
 		// post-attention rmsnorm (into shared memory)
 		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps);
 
 		// moegate
 		if (args.n_experts) {
-			if (blockIdx.x == 0) {
-				int j = threadIdx.x / warpSize;
+			__shared__ float exp[32];
+			int j = threadIdx.x / warpSize;
 
-				if (j < args.n_experts) {
-					float val = matmul_warppar(xs, L->moegate, j, dim) * rmsscale;
+			if (j < args.n_experts) {
+				float val = matmul_warppar(xs, L->moegate, j, dim) * rmsscale;
 
-					args.exp[j] = val;
-				}
-
-				__syncthreads();
-
-				if (threadIdx.x < warpSize) {
-					moe_gate_warp(moe_weights, moe_experts, args.exp, args.n_experts, args.n_experts_ac);
-				}
+				exp[j] = val;
 			}
 
-			syncgrid();
+			__syncthreads();
+
+			if (threadIdx.x < warpSize) {
+				moe_gate_warp(moe_weights, moe_experts, exp, args.n_experts, args.n_experts_ac);
+			}
+
+			__syncthreads();
 		}
 
 		// F.silu(self.w1(x)) * self.w3(x)
@@ -1122,7 +1124,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		p->arch == Mixtral ? s->he : s->hb,
 		s->q,
 		s->att,
-		s->exp,
 
 		(KVT*)s->key_cache,
 		(KVT*)s->value_cache,
