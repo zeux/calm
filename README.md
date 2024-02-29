@@ -32,12 +32,15 @@ python tools/download.py Mistral-7B-Instruct-v0.2/ mistralai/Mistral-7B-Instruct
 
 ## Supported models
 
-calm currently supports the following model architectures:
+calm supports a subset of decoder-only transformer architectures:
 
-- Llama-like (RMSNorm normalization, SiLU activation, sequential attention mixing and FFN, RoPE)
-- Phi (LayerNorm normalization, GELU activation, parallel attention mixing, partial RoPE)
-- Mixtral (Llama-like with FFN in every layer replaced by a mixture of experts)
-- Gemma (Llama-like with GELU activation and custom head dimension)
+- Llama-like baseline (pre/post normalization, gated FFN, sequential attention mixing and FFN, RoPE)
+- RoPE enhancements (partial rotary dimension, independent head dimension)
+- SiLU or GELU FFN gate activation
+- RMSNorm or LayerNorm* normalization (no bias support)
+- Optional QKV bias
+- Optional weight tying with scalar embedding scaling
+- Optional mixture of experts (with top-k expert selection)
 
 It has been tested on following models:
 
@@ -61,9 +64,6 @@ It has been tested on following models:
   - Qwen1.5 4B (Qwen/Qwen1.5-4B)
   - Qwen1.5 7B (Qwen/Qwen1.5-7B)
   - Qwen1.5 14B (Qwen/Qwen1.5-14B)
-- Phi architecture
-  - Phi1.5 (microsoft/phi-1_5)
-  - Phi2 (microsoft/phi-2)
 - Mixtral architecture
   - Mixtral 8x7B (mistralai/Mixtral-8x7B-Instruct-v0.1)
   - GritLM 8x7B (GritLM/GritLM-8x7B)
@@ -73,6 +73,8 @@ It has been tested on following models:
 - Gemma architecture
   - Gemma 2B (google/gemma-2b-it)
   - Gemma 7B (google/gemma-7b-it)
+- MiniCPM architecture
+  - MiniCPM 2B (openbmb/MiniCPM-2B-dpo-bf16)
 
 ## Supported formats
 
@@ -102,9 +104,6 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Mistral 7B (4096), fp16 | 63 tok/s (903 GB/s) | 61 tok/s (905 GB/s) |
 | Mistral 7B (4096), fp8 | 120 tok/s (859 GB/s) | 113 tok/s (863 GB/s) |
 | Mistral 7B (4096), gf4 | 219 tok/s (779 GB/s) | 196 tok/s (801 GB/s) |
-| Phi 2.7B (2048), fp16 | 167 tok/s (888 GB/s) | 150 tok/s (895 GB/s) |
-| Phi 2.7B (2048), fp8 | 313 tok/s (833 GB/s) | 256 tok/s (847 GB/s) |
-| Phi 2.7B (2048), gf4 | 551 tok/s (735 GB/s) | 395 tok/s (785 GB/s) |
 | Mixtral 8x7B (4096), gf4 | 128 tok/s (816 GB/s) | 119 tok/s (827 GB/s) |
 | Mixtral 8x7B (16384), gf4 | 127 tok/s (812 GB/s) | 105 tok/s (781 GB/s) |
 | Yi 34B (4096), gf4 | 49 tok/s (842 GB/s) | 46 tok/s (832 GB/s) |
