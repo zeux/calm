@@ -48,7 +48,7 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
@@ -84,23 +84,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     if arch in ["mixtral"]:
         metadata["n_experts"] = config["num_local_experts"]
         metadata["n_experts_active"] = config["num_experts_per_tok"]
-elif arch == "phi":
-    # hardcoded in C
-    assert config["hidden_act"] == "gelu_new"
-
-    # customizable
-    metadata["dim"] = config["hidden_size"]
-    metadata["hidden_dim"] = config["intermediate_size"]
-    metadata["n_layers"] = config["num_hidden_layers"]
-    metadata["n_heads"] = config["num_attention_heads"]
-    metadata["n_kv_heads"] = config["num_key_value_heads"] or config["num_attention_heads"]
-    metadata["vocab_size"] = config["vocab_size"]
-    metadata["max_seq_len"] = config["max_position_embeddings"]
-    metadata["bos_token_id"] = -1
-    metadata["eos_token_id"] = config["eos_token_id"] or 50256 # todo: read from tokenizer_config
-    metadata["rope_theta"] = config.get("rope_theta", 10000.0)
-    metadata["rotary_dim"] = int(config["hidden_size"] / config["num_attention_heads"] * config["partial_rotary_factor"])
-    metadata["norm_eps"] = config["layer_norm_eps"]
 elif arch == "olmo":
     # hardcoded in C
     assert config["activation_type"] == "swiglu"
@@ -187,7 +170,6 @@ gpt2_decode = {v: k for k, v in gpt2_bytes_to_unicode().items()}
 for i, t in enumerate(tokens):
     if tokens_gpt2:
         b = bytes([gpt2_decode.get(c, 0) for c in t])
-        b = b"" if b == b"\n\n" else b # special case for double newline because phi-2 is stupid
         b = b.replace(b"\0", b"\7") # replace null bytes with bell characters
     else:
         t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
@@ -319,38 +301,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     tensors["model.norm.weight"] = norm(weights["model.norm.weight"])
     if arch not in ["gemma", "minicpm"]:
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
-elif arch == "phi":
-    tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
-
-    for l in range(config["num_hidden_layers"]):
-        tensors[f"model.layers.{l}.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
-
-        dim = config["hidden_size"]
-        rotary_dim = metadata["rotary_dim"]
-        norm_bias = weights[f"model.layers.{l}.input_layernorm.bias"].float()
-
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], config["num_attention_heads"], rotary_dim))
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], config["num_attention_heads"], rotary_dim))
-        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
-        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.dense.weight"])
-
-        # note: we fold norm bias into qkv/mlp bias to reduce redundancy
-        tensors[f"model.layers.{l}.attn.wqkv.bias"] = torch.cat([
-            permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"] + weights[f"model.layers.{l}.self_attn.q_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float(),
-            permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"] + weights[f"model.layers.{l}.self_attn.k_proj.weight"].float() @ norm_bias, config["num_attention_heads"], rotary_dim).float(),
-            weights[f"model.layers.{l}.self_attn.v_proj.bias"].float() + weights[f"model.layers.{l}.self_attn.v_proj.weight"].float() @ norm_bias,
-        ])
-
-        # note: we fold attn output bias into mlp w2 bias to reduce redundancy
-        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.fc1.weight"])
-        tensors[f"model.layers.{l}.mlp.w1.bias"] = weights[f"model.layers.{l}.mlp.fc1.bias"].float() + weights[f"model.layers.{l}.mlp.fc1.weight"].float() @ norm_bias
-        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.fc2.weight"])
-        tensors[f"model.layers.{l}.mlp.w2.bias"] = weights[f"model.layers.{l}.mlp.fc2.bias"].float() + weights[f"model.layers.{l}.self_attn.dense.bias"].float()
-
-    # note: we fold norm bias into output bias to reduce redundancy
-    tensors["model.norm.weight"] = weights["model.final_layernorm.weight"].float()
-    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
-    tensors["model.output.bias"] = weights["lm_head.bias"].float() + weights["lm_head.weight"].float() @ weights["model.final_layernorm.bias"].float()
 elif arch == "olmo":
     tensors["model.embed.weight"] = conv(weights["model.transformer.wte.weight"])
 
