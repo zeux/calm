@@ -40,7 +40,6 @@ struct CoopLayer {
 	T* w3;
 };
 
-static int coop;
 static int coopsms;
 
 static __constant__ CoopLayer<void> cooplayers[MAX_LAYERS];
@@ -116,8 +115,11 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->logits = (float*)cuda_hostalloc(config->vocab_size * sizeof(float));
 
 	const char* coop_env = getenv("CALM_COOP");
-	if (coop_env && atoi(coop_env)) {
-		coop = 1;
+	if (coop_env && atoi(coop_env) == 0) {
+		coopsms = 0;
+
+		printf("# CUDA: Using legacy kernels (deprecated)\n");
+	} else {
 		coopsms = devprop.multiProcessorCount;
 
 		CoopLayer<void> layers[MAX_LAYERS];
@@ -136,8 +138,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		}
 
 		cudaMemcpyToSymbol(cooplayers, layers, sizeof(layers));
-
-		printf("# CUDA: Using cooperative kernel (experimental)\n");
 	}
 }
 
@@ -1192,7 +1192,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
 #define CASE(dbits_, dtype, kvbits_, kvtype)                                          \
 	if (transformer->weights.dbits == dbits_ && transformer->state.kvbits == kvbits_) \
-	return (coop ? &forwardcoop<dtype, kvtype> : &forward<dtype, kvtype>)(transformer, token, pos, flags)
+	return (coopsms ? &forwardcoop<dtype, kvtype> : &forward<dtype, kvtype>)(transformer, token, pos, flags)
 
 	CASE(4, uint32_t, 8, __nv_fp8_e5m2);
 	CASE(4, uint32_t, 16, __half);
