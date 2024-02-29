@@ -56,10 +56,6 @@ metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
 if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
-    # hardcoded in C
-    assert config["hidden_act"] == ("gelu" if arch == "gemma" else "silu")
-
-    # customizable
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -73,6 +69,10 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
     metadata["norm_eps"] = config["rms_norm_eps"]
+    metadata["norm_type"] = "rmsnorm"
+
+    assert config["hidden_act"] in ["gelu", "silu"]
+    metadata["act_type"] = config["hidden_act"]
 
     if arch == "gemma":
         metadata["embed_scale"] = config["hidden_size"] ** 0.5
@@ -85,10 +85,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
         metadata["n_experts"] = config["num_local_experts"]
         metadata["n_experts_active"] = config["num_experts_per_tok"]
 elif arch == "olmo":
-    # hardcoded in C
-    assert config["activation_type"] == "swiglu"
-
-    # customizable
     metadata["dim"] = config["d_model"]
     metadata["hidden_dim"] = (config["mlp_hidden_size"] or config["d_model"] * config["mlp_ratio"]) // 2
     metadata["n_layers"] = config["n_layers"]
@@ -101,6 +97,10 @@ elif arch == "olmo":
     metadata["rope_theta"] = 10000.0
     metadata["rotary_dim"] = config["d_model"] // config["n_heads"]
     metadata["norm_eps"] = 1e-5
+    metadata["norm_type"] = "layernorm"
+
+    assert config["activation_type"] == "swiglu"
+    metadata["act_type"] = "silu"
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
 # this has poisoned all HF tokenizer configs that use ByteLevel decoder/preprocessor
