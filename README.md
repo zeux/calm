@@ -53,6 +53,7 @@ It has been tested on following models:
   - Yi 34B (01-ai/Yi-34B-Chat)
   - H2O Danube 1.8B (h2oai/h2o-danube-1.8b-chat)
   - DeepSeekMath 7B (deepseek-ai/deepseek-math-7b-instruct)
+  - LargeWorldModel 7B 1M (LargeWorldModel/LWM-Text-Chat-1M)
 - Mistral architecture
   - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
   - Mistral Pro 8B (TencentARC/Mistral_Pro_8B_v0.1)
@@ -96,17 +97,17 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 
 | Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
 | ----------- | ----------- | ----------- |
-| Llama2 7B (4096), fp16 | 67 tok/s (892 GB/s) | 58 tok/s (901 GB/s) |
-| Llama2 7B (4096), fp8 | 128 tok/s (846 GB/s) | 99 tok/s (868 GB/s) |
-| Llama2 7B (4096), gf4 | 225 tok/s (746 GB/s) | 151 tok/s (816 GB/s) |
-| Llama2 13B (4096), fp8 | 68 tok/s (877 GB/s) | 55 tok/s (889 GB/s) |
-| Llama2 13B (4096), gf4 | 126 tok/s (811 GB/s) | 87 tok/s (847 GB/s) |
-| Mistral 7B (4096), fp16 | 63 tok/s (903 GB/s) | 61 tok/s (905 GB/s) |
-| Mistral 7B (4096), fp8 | 120 tok/s (859 GB/s) | 113 tok/s (863 GB/s) |
-| Mistral 7B (4096), gf4 | 219 tok/s (779 GB/s) | 196 tok/s (801 GB/s) |
-| Mixtral 8x7B (4096), gf4 | 128 tok/s (816 GB/s) | 119 tok/s (827 GB/s) |
-| Mixtral 8x7B (16384), gf4 | 127 tok/s (812 GB/s) | 105 tok/s (781 GB/s) |
-| Yi 34B (4096), gf4 | 49 tok/s (842 GB/s) | 46 tok/s (832 GB/s) |
+| Llama2 7B (4096), fp16 | 68 tok/s (904 GB/s) | 59 tok/s (912 GB/s) |
+| Llama2 7B (4096), fp8 | 131 tok/s (871 GB/s) | 102 tok/s (888 GB/s) |
+| Llama2 7B (4096), gf4 | 235 tok/s (779 GB/s) | 156 tok/s (844 GB/s) |
+| Llama2 13B (4096), fp8 | 69 tok/s (891 GB/s) | 55 tok/s (898 GB/s) |
+| Llama2 13B (4096), gf4 | 128 tok/s (824 GB/s) | 88 tok/s (854 GB/s) |
+| Mistral 7B (4096), fp16 | 64 tok/s (913 GB/s) | 61 tok/s (909 GB/s) |
+| Mistral 7B (4096), fp8 | 123 tok/s (878 GB/s) | 114 tok/s (872 GB/s) |
+| Mistral 7B (4096), gf4 | 230 tok/s (819 GB/s) | 200 tok/s (816 GB/s) |
+| Mixtral 8x7B (4096), gf4 | 134 tok/s (857 GB/s) | 123 tok/s (852 GB/s) |
+| Mixtral 8x7B (16384), gf4 | 134 tok/s (857 GB/s) | 103 tok/s (768 GB/s) |
+| Yi 34B (4096), gf4 | 51 tok/s (870 GB/s) | 47 tok/s (848 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
