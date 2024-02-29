@@ -180,30 +180,19 @@ void prepare(struct Transformer* transformer) {
 #endif
 }
 
-static void rmsnorm(float* o, float* x, float* weight, int size, float eps) {
-	// calculate sum of squares
-	float ss = 0.0f;
-	for (int j = 0; j < size; j++) {
-		ss += x[j] * x[j];
-	}
-	// normalize and scale
-	float scale = 1.0f / sqrtf(ss / size + eps);
-	for (int j = 0; j < size; j++) {
-		o[j] = weight[j] * (scale * x[j]);
-	}
-}
+static void rmsnorm(float* o, float* x, float* weight, int size, float eps, bool ln) {
+	// calculate mean
+	float mean = 0.0f;
 
-static void layernorm(float* o, float* x, float* weight, int size, float eps) {
-	// calculate sum
-	float ss = 0.0f;
-	for (int j = 0; j < size; j++) {
-		ss += x[j];
+	if (ln) {
+		for (int j = 0; j < size; j++) {
+			mean += x[j];
+		}
+		mean /= size;
 	}
-
-	float mean = ss / size;
 
 	// calculate sum of squared deltas
-	ss = 0.0f;
+	float ss = 0.0f;
 	for (int j = 0; j < size; j++) {
 		ss += (x[j] - mean) * (x[j] - mean);
 	}
@@ -360,13 +349,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 
-		if (p->norm_mean) {
-			// attention layernorm
-			layernorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
-		} else {
-			// attention rmsnorm
-			rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
-		}
+		// attention rmsnorm
+		rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps, p->norm_mean);
 
 		// key and value point to the kv cache
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
@@ -422,13 +406,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			x[i] += s->hb[i];
 		}
 
-		if (p->norm_mean) {
-			// ffn layernorm
-			layernorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-		} else {
-			// ffn rmsnorm
-			rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-		}
+		// ffn rmsnorm
+		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps, p->norm_mean);
 
 		float* moe_weights = s->exp + p->n_experts;
 		int* moe_experts = (int*)moe_weights + p->n_experts_ac;
@@ -481,13 +460,8 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		return NULL;
 	}
 
-	if (p->norm_mean) {
-		// final layernorm
-		layernorm(x, x, w->rms_final_weight, dim, p->norm_eps);
-	} else {
-		// final rmsnorm
-		rmsnorm(x, x, w->rms_final_weight, dim, p->norm_eps);
-	}
+	// final rmsnorm
+	rmsnorm(x, x, w->rms_final_weight, dim, p->norm_eps, p->norm_mean);
 
 	// classifier into logits
 	matmul(s->logits, x, w->wcls, NULL, p->dim, p->vocab_size, dotprod);
