@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdbool.h>
 
 #define MAX_LAYERS 128
 #define MAX_EXPERTS 64
@@ -33,6 +34,8 @@ struct Config {
 	int n_experts_ac;  // number of active experts for MoE models
 	float norm_eps;    // epsilon for layer normalization
 	float embed_scale; // scale factor for token embeddings (useful for tied weights)
+	bool act_gelu;     // use GELU activation function
+	bool norm_mean;    // use full LN normalization
 };
 
 struct Weights {

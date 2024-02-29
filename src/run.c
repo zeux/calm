@@ -67,6 +67,9 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 
 	const char* embed_scale = tensors_metadata_find(tensors, "embed_scale");
 	config->embed_scale = embed_scale ? atof(embed_scale) : 1;
+
+	config->act_gelu = config->arch == Gemma;
+	config->norm_mean = config->arch == Olmo;
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {

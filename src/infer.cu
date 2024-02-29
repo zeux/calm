@@ -1100,8 +1100,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 	struct Weights* w = &transformer->weights;
 	struct RunState* s = &transformer->state;
 
-	assert(p->arch == LlamaLike || p->arch == Mixtral || p->arch == Gemma || p->arch == Qwen || p->arch == Olmo);
-
 	// a few convenience variables
 	float* x = s->x;
 	int dim = p->dim;
@@ -1141,7 +1139,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		PROF_TOKEN(bw),
 
 		x,
-		p->arch == Mixtral ? s->he : s->hb,
+		p->n_experts ? s->he : s->hb,
 		s->q,
 		s->att,
 
@@ -1156,12 +1154,12 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 		p->n_heads,
 		p->n_kv_heads,
 		p->n_experts,
-		p->arch == Mixtral ? p->n_experts_ac : 1,
+		max(p->n_experts_ac, 1),
 		p->seq_len,
 		p->rotary_dim,
 
-		p->arch == Olmo,
-		p->arch == Gemma,
+		p->norm_mean,
+		p->act_gelu,
 
 		kv_len,
 		kv_pos,
@@ -1181,7 +1179,7 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 	// classifier into logits
 	kernel_output<<<coopsms, 32 * 32, dim * sizeof(float), stream>>>(
-	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->arch == Olmo);
+	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_mean);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 	CUDA_CHECK(cudaGetLastError()); // check for kernel launch errors; they might fail with OOM due to lazy kernel compilation
