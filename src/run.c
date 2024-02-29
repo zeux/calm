@@ -83,12 +83,8 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 	weights->token_embedding_table = tensors_get(tensors, "model.embed.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
 
 	for (int l = 0; l < config->n_layers; ++l) {
-		if (config->arch == Phi) {
-			weights->ln_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-		} else {
-			weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-		}
+		weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 
 		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->n_heads * config->head_dim, config->dim / gsize, 0, 0});
 		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
@@ -104,36 +100,20 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		} else {
 			weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 			weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim / gsize, 0, 0});
+			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 
-			if (config->arch != Phi) {
-				weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
-			}
-
-			if (config->arch == Phi || config->arch == Qwen) {
+			if (config->arch == Qwen) {
 				weights->bqkv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wqkv.bias", l, dt_f32, (int[]){(config->n_heads + config->n_kv_heads * 2) * config->head_dim, 0, 0, 0});
-			}
-
-			if (config->arch == Phi) {
-				weights->b1[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w1.bias", l, dt_f32, (int[]){config->hidden_dim, 0, 0, 0});
-				weights->b2[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.w2.bias", l, dt_f32, (int[]){config->dim, 0, 0, 0});
 			}
 		}
 	}
 
-	if (config->arch == Phi) {
-		weights->ln_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
-	} else {
-		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
-	}
+	weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 
 	if (tensors_find(tensors, "model.output.weight", 0) == NULL) {
 		weights->wcls = weights->token_embedding_table; // tied weights
 	} else {
 		weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});
-	}
-
-	if (config->arch == Phi) {
-		weights->bcls = (float*)tensors_get(tensors, "model.output.bias", 0, dt_f32, (int[]){config->vocab_size, 0, 0, 0});
 	}
 }
 

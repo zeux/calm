@@ -43,8 +43,7 @@ struct Weights {
 
 	// token embedding table
 	void* token_embedding_table; // (vocab_size, dim)
-	// weights for norms (ln for phi)
-	float* ln_weight[MAX_LAYERS]; // (dim,)
+	// weights for norms
 	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
 	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
 	// weights for matmuls
@@ -52,21 +51,16 @@ struct Weights {
 	void* wk[MAX_LAYERS]; // (n_kv_heads * head_dim, dim)
 	void* wv[MAX_LAYERS]; // (n_kv_heads * head_dim, dim)
 	void* wo[MAX_LAYERS]; // (dim, n_heads * head_dim)
-	// weights for ffn (w3 is absent for phi)
+	// weights for ffn
 	void* w1[MAX_LAYERS]; // (n_experts?, hidden_dim, dim)
 	void* w2[MAX_LAYERS]; // (n_experts?, dim, hidden_dim)
 	void* w3[MAX_LAYERS]; // (n_experts?, hidden_dim, dim)
-	// final norm (ln for phi)
-	float* ln_final_weight; // (dim,)
+	// final norm
 	float* rms_final_weight; // (dim,)
 	// classifier weights for the logits, on the last layer
 	void* wcls;
-	// biases for qkv (qwen, phi)
+	// biases for qkv (qwen)
 	float* bqkv[MAX_LAYERS]; // ((n_heads + n_kv_heads * 2) * head_dim)
-	// biases for ffn, cls (phi)
-	float* b1[MAX_LAYERS]; // (hidden_dim)
-	float* b2[MAX_LAYERS]; // (dim)
-	float* bcls;
 	// moe gate weights (mixtral)
 	void* moegate[MAX_LAYERS]; // (n_experts, dim)
 };
@@ -76,7 +70,6 @@ struct RunState {
 	float* x;      // activation at current time stamp (dim,)
 	float* xb;     // same, but inside a residual branch (dim,)
 	float* xb2;    // an additional buffer just for convenience (dim,)
-	float* xa;     // buffer for parallel activation accumulation (dim,)
 	float* hb;     // buffer for hidden dimension in the ffn (hidden_dim,)
 	float* hb2;    // buffer for hidden dimension in the ffn (hidden_dim,)
 	float* he;     // buffer for hidden dimension in the ffn (n_experts_ac,hidden_dim,)

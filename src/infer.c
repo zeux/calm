@@ -468,7 +468,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 
 		// final matmul to get the output of the ffn
-		matmul(s->xb, s->hb, w->w2[l], w->b2[l], hidden_dim, dim, dotprod);
+		matmul(s->xb, s->hb, w->w2[l], NULL, hidden_dim, dim, dotprod);
 
 		// residual connection
 		for (int i = 0; i < dim; i++) {
@@ -490,7 +490,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	}
 
 	// classifier into logits
-	matmul(s->logits, x, w->wcls, w->bcls, p->dim, p->vocab_size, dotprod);
+	matmul(s->logits, x, w->wcls, NULL, p->dim, p->vocab_size, dotprod);
 
 	return s->logits;
 }
