@@ -29,13 +29,6 @@ float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigne
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* arch = tensors_metadata(tensors, "arch");
 
-	config->arch = strcmp(arch, "mixtral") == 0 ? Mixtral
-	               : strcmp(arch, "phi") == 0   ? Phi
-	               : strcmp(arch, "qwen2") == 0 ? Qwen
-	               : strcmp(arch, "olmo") == 0  ? Olmo
-	               : strcmp(arch, "gemma") == 0 ? Gemma
-	                                            : LlamaLike;
-
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
 	config->n_layers = atoi(tensors_metadata(tensors, "n_layers"));
@@ -57,7 +50,7 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->rope_theta = atof(tensors_metadata(tensors, "rope_theta"));
 	config->rotary_dim = atoi(tensors_metadata(tensors, "rotary_dim"));
 
-	if (config->arch == Mixtral) {
+	if (strcmp(arch, "mixtral") == 0) {
 		config->n_experts = atoi(tensors_metadata(tensors, "n_experts"));
 		config->n_experts_ac = atoi(tensors_metadata(tensors, "n_experts_active"));
 	}
@@ -68,8 +61,8 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* embed_scale = tensors_metadata_find(tensors, "embed_scale");
 	config->embed_scale = embed_scale ? atof(embed_scale) : 1;
 
-	config->act_gelu = config->arch == Gemma;
-	config->norm_mean = config->arch == Olmo;
+	config->act_gelu = strcmp(arch, "gemma") == 0;
+	config->norm_mean = strcmp(arch, "olmo") == 0;
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
@@ -91,7 +84,7 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
 		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->dim, config->n_heads * config->head_dim / gsize, 0, 0});
 
-		if (config->arch == Mixtral) {
+		if (config->n_experts) {
 			weights->moegate[l] = tensors_get(tensors, "model.layers.%d.moegate.weight", l, wtype, (int[]){config->n_experts, config->dim / gsize, 0, 0});
 
 			weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->n_experts, config->hidden_dim, config->dim / gsize, 0});
@@ -102,7 +95,7 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 			weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim / gsize, 0, 0});
 			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 
-			if (config->arch == Qwen) {
+			if (tensors_find(tensors, "model.layers.%d.attn.wqkv.bias", l)) {
 				weights->bqkv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wqkv.bias", l, dt_f32, (int[]){(config->n_heads + config->n_kv_heads * 2) * config->head_dim, 0, 0, 0});
 			}
 		}
@@ -498,7 +491,7 @@ int main(int argc, char* argv[]) {
 	if (tensors_find(&tensors, "model.output.weight", 0) == NULL) {
 		transformer.n_bandwidth += tensors_find(&tensors, "model.embed.weight", 0)->size;
 	}
-	if (transformer.config.arch == Mixtral) {
+	if (transformer.config.n_experts) {
 		size_t mlp = count_bytes(&tensors, "model.layers.", ".mlp.w", NULL);
 		transformer.n_bandwidth -= mlp;
 		transformer.n_bandwidth += mlp / transformer.config.n_experts * transformer.config.n_experts_ac;

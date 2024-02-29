@@ -9,17 +9,7 @@
 // How many attention sinks to use for rolling buffer
 #define KV_SINKS 2
 
-enum Arch {
-	LlamaLike,
-	Qwen,
-	Phi,
-	Mixtral,
-	Olmo,
-	Gemma,
-};
-
 struct Config {
-	enum Arch arch;    // model architecture
 	int dim;           // transformer dimension
 	int hidden_dim;    // for ffn layers
 	int head_dim;      // for attention heads; usually dim / n_heads
