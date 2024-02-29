@@ -1116,7 +1116,6 @@ static float* forwardcoop(struct Transformer* transformer, int token, int pos, u
 
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
-	assert(p->vocab_size % 32 == 0);
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);

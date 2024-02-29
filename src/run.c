@@ -123,7 +123,7 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		weights->rms_final_weight = (float*)tensors_get(tensors, "model.norm.weight", 0, dt_f32, (int[]){config->dim, 0, 0, 0});
 	}
 
-	if ((config->arch == Olmo || config->arch == Gemma) && tensors_find(tensors, "model.output.weight", 0) == NULL) {
+	if (tensors_find(tensors, "model.output.weight", 0) == NULL) {
 		weights->wcls = weights->token_embedding_table; // tied weights
 	} else {
 		weights->wcls = tensors_get(tensors, "model.output.weight", 0, wtype, (int[]){config->vocab_size, config->dim / gsize, 0, 0});

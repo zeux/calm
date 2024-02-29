@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "PhiForCausalLM": "phi", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     # hardcoded in C
     assert config["hidden_act"] == ("gelu" if arch == "gemma" else "silu")
 
@@ -73,7 +73,12 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
     metadata["norm_eps"] = config["rms_norm_eps"]
-    metadata["embed_scale"] = config["hidden_size"] ** 0.5 if arch == "gemma" else 1
+
+    if arch == "gemma":
+        metadata["embed_scale"] = config["hidden_size"] ** 0.5
+
+    if arch == "minicpm":
+        metadata["embed_scale"] = config["scale_emb"]
 
     # moe
     if arch in ["mixtral"]:
@@ -255,6 +260,18 @@ def gf4(t):
     gtr += gmax.squeeze(-1).to(torch.float8_e5m2).view(torch.uint8)
     return gtr.cpu()
 
+# preprocess weights
+if arch == "minicpm":
+    resid_scale = config["scale_depth"] / (config["num_hidden_layers"] ** 0.5)
+    final_scale = config["dim_model_base"] / config["hidden_size"]
+
+    metadata["embed_scale"] /= final_scale
+    weights["model.embed_tokens.weight"] *= final_scale
+
+    for l in range(config["num_hidden_layers"]):
+        weights[f"model.layers.{l}.self_attn.o_proj.weight"] *= resid_scale
+        weights[f"model.layers.{l}.mlp.down_proj.weight"] *= resid_scale
+
 # convert weights
 progress = 0
 def conv(t):
@@ -266,7 +283,7 @@ def conv(t):
 def norm(t):
     return t.float() + (1 if arch == "gemma" else 0)
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
@@ -300,7 +317,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma"]:
             tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
     tensors["model.norm.weight"] = norm(weights["model.norm.weight"])
-    if arch != "gemma":
+    if arch not in ["gemma", "minicpm"]:
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "phi":
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
