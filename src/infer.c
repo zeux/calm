@@ -360,10 +360,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 
-		if (p->arch == Phi) {
-			// input layernorm
-			layernorm(s->xb, x, w->ln_weight[l], dim, p->norm_eps);
-		} else if (p->arch == Olmo) {
+		if (p->arch == Olmo) {
 			// attention layernorm
 			layernorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
 		} else {
@@ -453,47 +450,38 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				}
 			}
 		} else {
-			if (p->arch == Phi) {
-				matmul(s->hb, s->xb, w->w1[l], w->b1[l], dim, hidden_dim, dotprod);
+			if (p->arch == Olmo) {
+				// ffn layernorm
+				layernorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+			} else {
+				// ffn rmsnorm
+				rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+			}
 
-				// GELU non-linearity
+			// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
+			// first calculate self.w1(x) and self.w3(x)
+			matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim, dotprod);
+			matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim, dotprod);
+
+			if (p->arch == Gemma) {
+				// GEGLU non-linearity
 				for (int i = 0; i < hidden_dim; i++) {
-					s->hb[i] = gelu(s->hb[i]);
+					s->hb[i] = gelu(s->hb[i]) * s->hb2[i];
 				}
 			} else {
-				if (p->arch == Olmo) {
-					// ffn layernorm
-					layernorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-				} else {
-					// ffn rmsnorm
-					rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-				}
-
-				// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-				// first calculate self.w1(x) and self.w3(x)
-				matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim, dotprod);
-				matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim, dotprod);
-
-				if (p->arch == Gemma) {
-					// GEGLU non-linearity
-					for (int i = 0; i < hidden_dim; i++) {
-						s->hb[i] = gelu(s->hb[i]) * s->hb2[i];
-					}
-				} else {
-					// SwiGLU non-linearity
-					for (int i = 0; i < hidden_dim; i++) {
-						s->hb[i] = silu(s->hb[i]) * s->hb2[i];
-					}
+				// SwiGLU non-linearity
+				for (int i = 0; i < hidden_dim; i++) {
+					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
 				}
 			}
+		}
 
-			// final matmul to get the output of the ffn
-			matmul(s->xb, s->hb, w->w2[l], w->b2[l], hidden_dim, dim, dotprod);
+		// final matmul to get the output of the ffn
+		matmul(s->xb, s->hb, w->w2[l], w->b2[l], hidden_dim, dim, dotprod);
 
-			// residual connection
-			for (int i = 0; i < dim; i++) {
-				x[i] += s->xb[i];
-			}
+		// residual connection
+		for (int i = 0; i < dim; i++) {
+			x[i] += s->xb[i];
 		}
 	}
 
@@ -502,10 +490,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		return NULL;
 	}
 
-	if (p->arch == Phi) {
-		// final layernorm
-		layernorm(x, x, w->ln_final_weight, dim, p->norm_eps);
-	} else if (p->arch == Olmo) {
+	if (p->arch == Olmo) {
 		// final layernorm
 		layernorm(x, x, w->rms_final_weight, dim, p->norm_eps);
 	} else {
