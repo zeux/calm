@@ -156,7 +156,7 @@ void prepare(struct Transformer* transformer) {
 	s->k = calloc(kv_dim, sizeof(float));
 	s->v = calloc(kv_dim, sizeof(float));
 	s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
-	s->exp = calloc(p->n_experts + p->n_experts_ac * 2, sizeof(float));
+	s->exp = calloc(p->n_experts + (p->n_experts_ac ? p->n_experts_ac : 1) * 2, sizeof(float));
 	s->logits = calloc(p->vocab_size, sizeof(float));
 	assert(s->kvbits == sizeof(kvtype_t) * 8);
 	s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(kvtype_t));
@@ -360,7 +360,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 
-		if (p->arch == Olmo) {
+		if (p->norm_mean) {
 			// attention layernorm
 			layernorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps);
 		} else {
@@ -422,48 +422,33 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			x[i] += s->hb[i];
 		}
 
-		if (p->arch == Mixtral) {
+		if (p->norm_mean) {
+			// ffn layernorm
+			layernorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+		} else {
 			// ffn rmsnorm
 			rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
+		}
 
+		float* moe_weights = s->exp + p->n_experts;
+		int* moe_experts = (int*)moe_weights + p->n_experts_ac;
+
+		if (p->n_experts) {
 			// moe gate
-			float* moe_weights = s->exp + p->n_experts;
-			int* moe_experts = (int*)moe_weights + p->n_experts_ac;
 			matmul(s->exp, s->xb, w->moegate[l], NULL, dim, p->n_experts, dotprod);
 			moe_gate(moe_weights, moe_experts, s->exp, p->n_experts, p->n_experts_ac);
-
-			// mix self.w2(F.silu(self.w1(x)) * self.w3(x))
-			for (int e = 0; e < p->n_experts_ac; ++e) {
-				size_t esize = dim * hidden_dim * (size_t)w->dbits / 8;
-				matmul(s->hb, s->xb, (char*)w->w1[l] + moe_experts[e] * esize, NULL, dim, hidden_dim, dotprod);
-				matmul(s->hb2, s->xb, (char*)w->w3[l] + moe_experts[e] * esize, NULL, dim, hidden_dim, dotprod);
-
-				// SwiGLU non-linearity
-				for (int i = 0; i < hidden_dim; i++) {
-					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
-				}
-
-				matmul(s->xb2, s->hb, (char*)w->w2[l] + moe_experts[e] * esize, NULL, hidden_dim, dim, dotprod);
-
-				for (int i = 0; i < dim; i++) {
-					x[i] += s->xb2[i] * moe_weights[e];
-				}
-			}
 		} else {
-			if (p->arch == Olmo) {
-				// ffn layernorm
-				layernorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-			} else {
-				// ffn rmsnorm
-				rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps);
-			}
+			moe_weights[0] = 1.0f;
+			moe_experts[0] = 0;
+		}
 
-			// Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-			// first calculate self.w1(x) and self.w3(x)
-			matmul(s->hb, s->xb, w->w1[l], NULL, dim, hidden_dim, dotprod);
-			matmul(s->hb2, s->xb, w->w3[l], NULL, dim, hidden_dim, dotprod);
+		// mix self.w2(F.silu(self.w1(x)) * self.w3(x))
+		for (int e = 0; e < (p->n_experts_ac ? p->n_experts_ac : 1); ++e) {
+			size_t esize = dim * hidden_dim * (size_t)w->dbits / 8;
+			matmul(s->hb, s->xb, (char*)w->w1[l] + moe_experts[e] * esize, NULL, dim, hidden_dim, dotprod);
+			matmul(s->hb2, s->xb, (char*)w->w3[l] + moe_experts[e] * esize, NULL, dim, hidden_dim, dotprod);
 
-			if (p->arch == Gemma) {
+			if (p->act_gelu) {
 				// GEGLU non-linearity
 				for (int i = 0; i < hidden_dim; i++) {
 					s->hb[i] = gelu(s->hb[i]) * s->hb2[i];
@@ -473,6 +458,12 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 				for (int i = 0; i < hidden_dim; i++) {
 					s->hb[i] = silu(s->hb[i]) * s->hb2[i];
 				}
+			}
+
+			matmul(s->xb2, s->hb, (char*)w->w2[l] + moe_experts[e] * esize, NULL, hidden_dim, dim, dotprod);
+
+			for (int i = 0; i < dim; i++) {
+				x[i] += s->xb2[i] * moe_weights[e];
 			}
 		}
 
@@ -490,7 +481,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		return NULL;
 	}
 
-	if (p->arch == Olmo) {
+	if (p->norm_mean) {
 		// final layernorm
 		layernorm(x, x, w->rms_final_weight, dim, p->norm_eps);
 	} else {
