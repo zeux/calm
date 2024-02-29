@@ -27,8 +27,6 @@ void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
-	const char* arch = tensors_metadata(tensors, "arch");
-
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
 	config->n_layers = atoi(tensors_metadata(tensors, "n_layers"));
@@ -50,7 +48,7 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->rope_theta = atof(tensors_metadata(tensors, "rope_theta"));
 	config->rotary_dim = atoi(tensors_metadata(tensors, "rotary_dim"));
 
-	if (strcmp(arch, "mixtral") == 0) {
+	if (tensors_metadata_find(tensors, "n_experts")) {
 		config->n_experts = atoi(tensors_metadata(tensors, "n_experts"));
 		config->n_experts_ac = atoi(tensors_metadata(tensors, "n_experts_active"));
 	}
@@ -61,8 +59,11 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* embed_scale = tensors_metadata_find(tensors, "embed_scale");
 	config->embed_scale = embed_scale ? atof(embed_scale) : 1;
 
-	config->act_gelu = strcmp(arch, "gemma") == 0;
-	config->norm_mean = strcmp(arch, "olmo") == 0;
+	const char* act_type = tensors_metadata_find(tensors, "act_type");
+	config->act_gelu = act_type && strcmp(act_type, "gelu") == 0;
+
+	const char* norm_type = tensors_metadata_find(tensors, "norm_type");
+	config->norm_mean = norm_type && strcmp(norm_type, "layernorm") == 0; // note: we currently don't support layernorm bias
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
