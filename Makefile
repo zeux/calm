@@ -27,7 +27,7 @@ else
 endif
 
 ifneq ($(UNAME),Darwin)
-  CUFLAGS+=-g -O2 -arch compute_80
+  CUFLAGS+=-g -O2 -arch compute_80 -lineinfo
   LDFLAGS+=-lcudart
 endif
 
