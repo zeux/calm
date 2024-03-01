@@ -77,9 +77,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     if arch == "gemma":
         metadata["embed_scale"] = config["hidden_size"] ** 0.5
 
-    if arch == "minicpm":
-        metadata["embed_scale"] = config["scale_emb"]
-
     # moe
     if arch in ["mixtral"]:
         metadata["n_experts"] = config["num_local_experts"]
@@ -244,11 +241,12 @@ def gf4(t):
 
 # preprocess weights
 if arch == "minicpm":
+    embed_scale = config["scale_emb"]
     resid_scale = config["scale_depth"] / (config["num_hidden_layers"] ** 0.5)
     final_scale = config["dim_model_base"] / config["hidden_size"]
 
-    metadata["embed_scale"] /= final_scale
-    weights["model.embed_tokens.weight"] *= final_scale
+    weights["model.norm.weight"] *= final_scale / embed_scale
+    weights["model.embed_tokens.weight"] *= embed_scale
 
     for l in range(config["num_hidden_layers"]):
         weights[f"model.layers.{l}.self_attn.o_proj.weight"] *= resid_scale
