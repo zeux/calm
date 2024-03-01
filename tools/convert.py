@@ -251,6 +251,12 @@ if arch == "minicpm":
     for l in range(config["num_hidden_layers"]):
         weights[f"model.layers.{l}.self_attn.o_proj.weight"] *= resid_scale
         weights[f"model.layers.{l}.mlp.down_proj.weight"] *= resid_scale
+elif arch == "gemma":
+    weights["model.norm.weight"] = weights["model.norm.weight"].float() + 1
+
+    for l in range(config["num_hidden_layers"]):
+        weights[f"model.layers.{l}.input_layernorm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float() + 1
+        weights[f"model.layers.{l}.post_attention_layernorm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float() + 1
 
 # convert weights
 progress = 0
@@ -260,14 +266,11 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-def norm(t):
-    return t.float() + (1 if arch == "gemma" else 0)
-
 if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
-        tensors[f"model.layers.{l}.attn.norm.weight"] = norm(weights[f"model.layers.{l}.input_layernorm.weight"])
+        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
 
         head_dim = metadata["head_dim"]
         n_heads = config["num_attention_heads"]
@@ -285,7 +288,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
                 weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
             ])
 
-        tensors[f"model.layers.{l}.mlp.norm.weight"] = norm(weights[f"model.layers.{l}.post_attention_layernorm.weight"])
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
         if arch in ["mixtral"]:
             tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
@@ -298,7 +301,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
             tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
             tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
-    tensors["model.norm.weight"] = norm(weights["model.norm.weight"])
+    tensors["model.norm.weight"] = weights["model.norm.weight"].float()
     if arch not in ["gemma", "minicpm"]:
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "olmo":
