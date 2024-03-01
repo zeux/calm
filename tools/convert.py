@@ -67,7 +67,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     metadata["bos_token_id"] = -1 if arch in ["qwen2"] else config["bos_token_id"]
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
-    metadata["rotary_dim"] = config["hidden_size"] // config["num_attention_heads"]
+    metadata["rotary_dim"] = int(metadata["head_dim"] * config.get("partial_rotary_factor", 1))
     metadata["norm_eps"] = config["rms_norm_eps"]
     metadata["norm_type"] = "rmsnorm"
 
@@ -272,19 +272,19 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     for l in range(config["num_hidden_layers"]):
         tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
 
-        head_dim = metadata["head_dim"]
+        rotary_dim = metadata["rotary_dim"]
         n_heads = config["num_attention_heads"]
         n_kv_heads = config.get("num_key_value_heads", n_heads)
 
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, head_dim))
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, head_dim))
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, rotary_dim))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, rotary_dim))
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
 
         if arch in ["qwen2"]:
             tensors[f"model.layers.{l}.attn.wqkv.bias"] = torch.cat([
-                permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], n_heads, head_dim).float(),
-                permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], n_kv_heads, head_dim).float(),
+                permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.bias"], n_heads, rotary_dim).float(),
+                permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], n_kv_heads, rotary_dim).float(),
                 weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
             ])
 
