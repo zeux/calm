@@ -238,6 +238,7 @@ def gf4(t):
 
 # preprocess weights
 if arch == "minicpm":
+    # apply various scaling factors that other models don't have to tensors
     embed_scale = config["scale_emb"]
     resid_scale = config["scale_depth"] / (config["num_hidden_layers"] ** 0.5)
     final_scale = config["dim_model_base"] / config["hidden_size"]
@@ -249,12 +250,15 @@ if arch == "minicpm":
         weights[f"model.layers.{l}.self_attn.o_proj.weight"] *= resid_scale
         weights[f"model.layers.{l}.mlp.down_proj.weight"] *= resid_scale
 elif arch == "gemma":
+    # gemma's norm weights are stored relative to 1.0
     weights["model.norm.weight"] = weights["model.norm.weight"].float() + 1
 
     for l in range(config["num_hidden_layers"]):
         weights[f"model.layers.{l}.input_layernorm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float() + 1
         weights[f"model.layers.{l}.post_attention_layernorm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float() + 1
 
+    # apply embedding scale (and counter it since output weights are tied)
+    # this improves precision for fp8
     embed_scale = config["hidden_size"] ** 0.5
 
     weights["model.norm.weight"] *= 1 / embed_scale
