@@ -26,7 +26,7 @@ __global__ static void kernel_matmul(float* xout, float* x, half* w, int n, int 
 	int i = blockIdx.x;
 	assert(i < d);
 
-	float val = matmul_warppar(x, w, i, n, n);
+	float val = matmul_warppar(x, w, i, n);
 
 	if (threadIdx.x == 0) {
 		xout[i] = val;
