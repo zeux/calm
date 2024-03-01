@@ -350,7 +350,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	for (int l = 0; l < p->n_layers; l++) {
 
 		// attention rmsnorm
-		rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps, p->norm_mean);
+		rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps, p->norm_ln);
 
 		// key and value point to the kv cache
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
@@ -407,7 +407,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 
 		// ffn rmsnorm
-		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps, p->norm_mean);
+		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps, p->norm_ln);
 
 		float* moe_weights = s->exp + p->n_experts;
 		int* moe_experts = (int*)moe_weights + p->n_experts_ac;
@@ -461,7 +461,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 	}
 
 	// final rmsnorm
-	rmsnorm(x, x, w->rms_final_weight, dim, p->norm_eps, p->norm_mean);
+	rmsnorm(x, x, w->rms_final_weight, dim, p->norm_eps, p->norm_ln);
 
 	// classifier into logits
 	matmul(s->logits, x, w->wcls, NULL, p->dim, p->vocab_size, dotprod);

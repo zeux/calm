@@ -290,21 +290,21 @@ __device__ static void softmax(float* x, int size) {
 	}
 }
 
-__device__ static float rmsmean(float* x, int size) {
+__device__ static float rmsnorm(float* o, float* x, float* weight, int size, float eps, bool ln) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
-	float sum = 0.0f;
-	for (int j = i; j < size; j += blockSize) {
-		sum += x[j];
+	float mean = 0.0f;
+	if (ln) {
+		// calculate sum (per thread)
+		float sum = 0.0f;
+		for (int j = i; j < size; j += blockSize) {
+			sum += x[j];
+		}
+
+		// sum across threads in block
+		mean = blockreduce_sum(sum) / size;
 	}
-
-	return blockreduce_sum(sum) / size;
-}
-
-__device__ static float rmsnorm(float* o, float* x, float* weight, int size, float eps, float mean) {
-	int i = threadIdx.x;
-	int blockSize = blockDim.x;
 
 	// calculate sum of squares (per thread)
 	float ss = 0.0f;
@@ -350,7 +350,7 @@ struct CoopArgs {
 	int seq_len;
 	int rotary_dim;
 
-	bool norm_mean;
+	bool norm_ln;
 	bool act_gelu;
 
 	int kv_len;
@@ -389,7 +389,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
 
 		// pre-attention rmsnorm (into shared memory)
-		rmsscale = rmsnorm(xs, args.x, L->rms_att_weight, dim, args.norm_eps, args.norm_mean ? rmsmean(args.x, dim) : 0.f);
+		rmsscale = rmsnorm(xs, args.x, L->rms_att_weight, dim, args.norm_eps, args.norm_ln);
 
 		size_t loff = (size_t)l * args.seq_len * kv_dim; // kv cache layer offset for convenience
 		KVT* keyb = args.key_cache + loff;
@@ -494,7 +494,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		syncgrid();
 
 		// post-attention rmsnorm (into shared memory)
-		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_mean ? rmsmean(args.x, dim) : 0.f);
+		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
 
 		// moegate
 		if (args.n_experts) {
@@ -546,10 +546,10 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 }
 
 template <typename T>
-__global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, float* rms_weight, int n, int d, float norm_eps, bool norm_mean) {
+__global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, float* rms_weight, int n, int d, float norm_eps, bool norm_ln) {
 	extern __shared__ float xs[];
 
-	float rmsscale = rmsnorm(xs, x, rms_weight, n, norm_eps, norm_mean ? rmsmean(x, n) : 0.f);
+	float rmsscale = rmsnorm(xs, x, rms_weight, n, norm_eps, norm_ln);
 
 	int io = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
 	int ib = (gridDim.x * blockDim.x) / warpSize;
@@ -630,7 +630,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		p->seq_len,
 		p->rotary_dim,
 
-		p->norm_mean,
+		p->norm_ln,
 		p->act_gelu,
 
 		kv_len,
@@ -651,7 +651,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// classifier into logits
 	kernel_output<<<coopsms, 32 * 32, dim * sizeof(float), stream>>>(
-	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_mean);
+	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_ln);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
 	CUDA_CHECK(cudaGetLastError()); // check for kernel launch errors; they might fail with OOM due to lazy kernel compilation

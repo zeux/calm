@@ -25,7 +25,7 @@ struct Config {
 	float norm_eps;    // epsilon for layer normalization
 	float embed_scale; // scale factor for token embeddings (useful for tied weights)
 	bool act_gelu;     // use GELU activation function
-	bool norm_mean;    // use full LN normalization
+	bool norm_ln;     /// use full LN normalization
 };
 
 struct Weights {

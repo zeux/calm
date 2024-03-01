@@ -63,7 +63,7 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->act_gelu = act_type && strcmp(act_type, "gelu") == 0;
 
 	const char* norm_type = tensors_metadata_find(tensors, "norm_type");
-	config->norm_mean = norm_type && strcmp(norm_type, "layernorm") == 0; // note: we currently don't support layernorm bias
+	config->norm_ln = norm_type && strcmp(norm_type, "layernorm") == 0; // note: we currently don't support layernorm bias
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
