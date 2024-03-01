@@ -74,9 +74,6 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     assert config["hidden_act"] in ["gelu", "silu"]
     metadata["act_type"] = config["hidden_act"]
 
-    if arch == "gemma":
-        metadata["embed_scale"] = config["hidden_size"] ** 0.5
-
     # moe
     if arch in ["mixtral"]:
         metadata["n_experts"] = config["num_local_experts"]
@@ -257,6 +254,11 @@ elif arch == "gemma":
     for l in range(config["num_hidden_layers"]):
         weights[f"model.layers.{l}.input_layernorm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float() + 1
         weights[f"model.layers.{l}.post_attention_layernorm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float() + 1
+
+    embed_scale = config["hidden_size"] ** 0.5
+
+    weights["model.norm.weight"] *= 1 / embed_scale
+    weights["model.embed_tokens.weight"] *= embed_scale
 
 # convert weights
 progress = 0
