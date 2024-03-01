@@ -85,6 +85,10 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
 		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->dim, config->n_heads * config->head_dim / gsize, 0, 0});
 
+		if (tensors_find(tensors, "model.layers.%d.attn.wqkv.bias", l)) {
+			weights->bqkv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wqkv.bias", l, dt_f32, (int[]){(config->n_heads + config->n_kv_heads * 2) * config->head_dim, 0, 0, 0});
+		}
+
 		if (config->n_experts) {
 			weights->moegate[l] = tensors_get(tensors, "model.layers.%d.moegate.weight", l, wtype, (int[]){config->n_experts, config->dim / gsize, 0, 0});
 
@@ -95,10 +99,6 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 			weights->w1[l] = tensors_get(tensors, "model.layers.%d.mlp.w1.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
 			weights->w2[l] = tensors_get(tensors, "model.layers.%d.mlp.w2.weight", l, wtype, (int[]){config->dim, config->hidden_dim / gsize, 0, 0});
 			weights->w3[l] = tensors_get(tensors, "model.layers.%d.mlp.w3.weight", l, wtype, (int[]){config->hidden_dim, config->dim / gsize, 0, 0});
-
-			if (tensors_find(tensors, "model.layers.%d.attn.wqkv.bias", l)) {
-				weights->bqkv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wqkv.bias", l, dt_f32, (int[]){(config->n_heads + config->n_kv_heads * 2) * config->head_dim, 0, 0, 0});
-			}
 		}
 	}
 
