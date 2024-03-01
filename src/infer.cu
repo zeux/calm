@@ -609,36 +609,21 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	CoopArgs<T, KVT> args = {
 		PROF_TOKEN(bw),
-
-		x,
-		p->n_experts ? s->he : s->hb,
-		s->q,
-		s->att,
-
-		(KVT*)s->key_cache,
-		(KVT*)s->value_cache,
-
+		// token state
+		x, p->n_experts ? s->he : s->hb, s->q, s->att,
+		// key/value cache; note that layers are passed via cooplayers[]
+		(KVT*)s->key_cache, (KVT*)s->value_cache,
+		// model dimensions
 		p->n_layers,
-
-		dim,
-		hidden_dim,
-		p->head_dim,
-		p->n_heads,
-		p->n_kv_heads,
-		p->n_experts,
-		max(p->n_experts_ac, 1),
-		p->seq_len,
-		p->rotary_dim,
-
-		p->norm_ln,
-		p->act_gelu,
-
-		kv_len,
-		kv_pos,
-		pos,
-
-		p->norm_eps,
-		log2(p->rope_theta),
+		dim, hidden_dim, p->head_dim,
+		p->n_heads, p->n_kv_heads, p->n_experts, max(p->n_experts_ac, 1),
+		p->seq_len, p->rotary_dim,
+		// model configuration
+		p->norm_ln, p->act_gelu,
+		// token position (and derived data)
+		kv_len, kv_pos, pos,
+		// model parameters
+		p->norm_eps, log2(p->rope_theta),
 	};
 	void* argsp = &args;
 

@@ -217,6 +217,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 		} else {
 			// otherwise sample the next token from the logits
 			next = sample(sampler, logits);
+			assert(next >= 0);
 		}
 		pos++;
 
