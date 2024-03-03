@@ -25,6 +25,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 void* upload_cuda(void* host, size_t size);
 void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
+void perf_cuda(void);
 
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
@@ -573,6 +574,12 @@ int main(int argc, char* argv[]) {
 			generate(&transformer, &tokenizer, &sampler, prompt, steps, pos_offset);
 		}
 	}
+
+#ifdef __linux__
+	if (cuda && getenv("CUDA_INJECTION64_PATH")) {
+		perf_cuda();
+	}
+#endif
 
 	// memory and file handles cleanup
 	// TODO: free transformer.state and transformer.weights for CUDA

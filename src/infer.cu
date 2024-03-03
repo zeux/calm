@@ -43,6 +43,10 @@ static int coopsms;
 
 static __constant__ CoopLayer<void> cooplayers[MAX_LAYERS];
 
+static __device__ uint64_t coopperf[16];
+static uint64_t coopperfbw[16];
+static int coopruns;
+
 static void* cuda_devicecopy(void* host, size_t size) {
 	void* device = NULL;
 	CUDA_CHECK(cudaMalloc(&device, size));
@@ -361,6 +365,20 @@ struct CoopArgs {
 	float theta_log2;
 };
 
+__device__ static void coopstage(int stage) {
+	__shared__ uint64_t lastt;
+
+	if (blockIdx.x == 0 && threadIdx.x == 0) {
+		uint64_t t;
+        asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
+
+		if (stage >= 0) {
+			coopperf[stage] += t - lastt;
+		}
+		lastt = t;
+	}
+}
+
 template <typename T, typename KVT>
 __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_constant__ CoopArgs<T, KVT> args) {
 	extern __shared__ float xs[];
@@ -384,6 +402,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	// dummy moe weights for non-moe models; will be overwritten by moe gate
 	moe_weights[0] = 1.f;
 	moe_experts[0] = 0;
+
+	coopstage(-1); // init timing
 
 	for (int l = 0; l < args.n_layers; ++l) {
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
@@ -430,6 +450,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(0);
 
 		// attention score
 		int kv_len32 = (args.kv_len + 31) / 32;
@@ -452,6 +473,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(1);
 
 		// attention softmax
 		if (blockIdx.x < args.n_heads) {
@@ -462,6 +484,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(2);
 
 		// attention mix
 		for (int j = io; j < q_dim; j += ib) {
@@ -481,6 +504,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(3);
 
 		// attention output
 		for (int j = io; j < dim; j += ib) {
@@ -492,6 +516,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(4);
 
 		// post-attention rmsnorm (into shared memory)
 		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
@@ -530,6 +555,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(5);
 
 		// self.w2(...) + pre-rmsnorm residual
 		for (int j = io; j < dim * args.n_experts_ac; j += ib) {
@@ -542,6 +568,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		coopstage(6);
 	}
 }
 
@@ -607,6 +634,15 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	bw += 3 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1); // MLP
 	bw *= p->n_layers;
 
+	coopruns++;
+	coopperfbw[0] += (size_t)p->n_layers * ((dim + kv_dim * 2) * dim * dbits / 8); // QKV
+	coopperfbw[1] += (size_t)p->n_layers * kvbw; // attn scoring
+	coopperfbw[2] += 0; // attn softmax
+	coopperfbw[3] += (size_t)p->n_layers * kvbw; // attn mixing
+	coopperfbw[4] += (size_t)p->n_layers * (dim * dim * dbits / 8); // attn output
+	coopperfbw[5] += (size_t)p->n_layers * (2 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
+	coopperfbw[6] += (size_t)p->n_layers * (1 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
+
 	CoopArgs<T, KVT> args = {
 		PROF_TOKEN(bw),
 		// token state
@@ -664,4 +700,42 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 	return NULL;
 
 #undef CASE
+}
+
+extern "C" void perf_cuda() {
+	uint64_t hostperf[16];
+	cudaMemcpyFromSymbol(hostperf, coopperf, sizeof(coopperf));
+
+	const char* stagenames[16] = {
+		"qkv",
+		"attn_score",
+		"attn_softmax",
+		"attn_mix",
+		"attn_output",
+		"mlp_up",
+		"mlp_down",
+	};
+
+	double freq = 1e9;
+
+	uint64_t total = 0;
+	for (int stage = 0; stage < 16; ++stage) {
+		total += hostperf[stage];
+	}
+
+	printf("\nProfile (over %d runs, avg %.1f usec/run):\n",
+		coopruns, (double)total / (double)coopruns / freq * 1e6);
+
+	for (int stage = 0; stage < 16; ++stage) {
+		if (hostperf[stage] == 0) continue;
+
+		uint64_t t = hostperf[stage];
+		uint64_t tbw = coopperfbw[stage];
+
+		printf("\t[%d] %16s: %4.1f%%; %8.1f usec/run, %6.1f GB/s\n",
+			stage, stagenames[stage],
+			(double)t / (double)total * 100,
+			(double)(t / coopruns) / freq * 1e6,
+			((double)tbw / 1e9) / ((double)t / freq));
+	}
 }
