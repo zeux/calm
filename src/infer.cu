@@ -718,14 +718,14 @@ extern "C" void perf_cuda() {
 	uint64_t hostperf[16];
 	cudaMemcpyFromSymbol(hostperf, coopperf, sizeof(coopperf));
 
-	const char* stagenames[16] = {
-	    "qkv",
+	static const char* stagenames[16] = {
+	    "matmul_qkv",
 	    "attn_score",
 	    "attn_softmax",
 	    "attn_mix",
-	    "attn_output",
-	    "mlp_up",
-	    "mlp_down",
+	    "matmul_attn",
+	    "matmul_ffn_up",
+	    "matmul_ffn_down",
 	};
 
 	double freq = 1e9;
