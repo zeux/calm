@@ -30,7 +30,7 @@ struct KernelInfo {
 	float call_m2;
 	float peak_bw;
 	float peak_util;
-	float peak_occ;
+	int limit_occ;
 };
 
 static CUpti_ActivityDevice3 device;
@@ -111,8 +111,7 @@ static void CUPTIAPI buffer_completed(CUcontext ctx, uint32_t streamId, uint8_t*
 			int occ_limit_smem = (activity->sharedMemoryExecuted) / (activity->staticSharedMemory + activity->dynamicSharedMemory + 1024);
 			int occ_limit_regs = device.maxRegistersPerMultiprocessor / (((activity->registersPerThread * device.numThreadsPerWarp + 255) & ~255) * block_size_warps);
 			int occ_limit = min(occ_limit_blocks, min(occ_limit_warps, min(occ_limit_smem, occ_limit_regs)));
-
-			info->peak_occ = fmaxf(info->peak_occ, (float)occ_limit * block_size_warps);
+			info->limit_occ = max(info->limit_occ, occ_limit * block_size_warps);
 			break;
 		}
 		default:
@@ -205,7 +204,7 @@ static void atexit_handler(void) {
 			         sqrtf(kernel->call_m2 / kernel->calls) * 1e3);
 
 			char util[64];
-			snprintf(util, sizeof(util), "%.0f%% SMs, %.0f wrp/SM", kernel->peak_util * 100, kernel->peak_occ);
+			snprintf(util, sizeof(util), "%.0f%% SMs, %d wrp/SM", kernel->peak_util * 100, kernel->limit_occ);
 
 			printf("%20.*s%s%9.1f%%%24s%12d%15.1f%25s\n", (int)length, name, namecont,
 			       kernel->total_time / total_time * 100, avgtime, kernel->calls, kernel->peak_bw, util);
