@@ -634,8 +634,12 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		return NULL;
 	}
 
+	int output_blk = 32 * 32;
+	int output_par = 1;
+	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T>, output_blk, dim * sizeof(float)));
+
 	// classifier into logits
-	kernel_output<<<coopsms, 32 * 32, dim * sizeof(float), stream>>>(
+	kernel_output<<<coopsms * output_par, output_blk, dim * sizeof(float), stream>>>(
 	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_ln);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
