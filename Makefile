@@ -27,12 +27,19 @@ else
 endif
 
 ifneq ($(UNAME),Darwin)
-  CUFLAGS+=-g -O2 -arch compute_80 -lineinfo
   LDFLAGS+=-lcudart
 endif
 
 ifneq (,$(wildcard /usr/local/cuda))
   LDFLAGS+=-L/usr/local/cuda/lib64
+endif
+
+CUFLAGS+=-g -O2 -lineinfo
+
+ifeq ($(CUARCH),)
+  CUFLAGS+=-gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90 --threads 2
+else
+  CUFLAGS+=-arch=$(CUARCH)
 endif
 
 all: $(BINARY)
