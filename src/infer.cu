@@ -9,6 +9,8 @@
 
 #include "helpers.cuh"
 
+#define COOP_PERF 1
+
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -43,9 +45,11 @@ static int coopsms;
 
 static __constant__ CoopLayer<void> cooplayers[MAX_LAYERS];
 
+#if COOP_PERF
 static __device__ uint64_t coopperf[16];
 static uint64_t coopperfbw[16];
 static int coopruns;
+#endif
 
 static void* cuda_devicecopy(void* host, size_t size) {
 	void* device = NULL;
@@ -366,17 +370,19 @@ struct CoopArgs {
 };
 
 __device__ static void coopstage(int stage) {
+#if COOP_PERF
 	__shared__ uint64_t lastt;
 
 	if (blockIdx.x == 0 && threadIdx.x == 0) {
 		uint64_t t;
-        asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
+		asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
 
 		if (stage >= 0) {
 			coopperf[stage] += t - lastt;
 		}
 		lastt = t;
 	}
+#endif
 }
 
 template <typename T, typename KVT>
@@ -634,6 +640,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	bw += 3 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1); // MLP
 	bw *= p->n_layers;
 
+ #if COOP_PERF
 	coopruns++;
 	coopperfbw[0] += (size_t)p->n_layers * ((dim + kv_dim * 2) * dim * dbits / 8); // QKV
 	coopperfbw[1] += (size_t)p->n_layers * kvbw; // attn scoring
@@ -642,6 +649,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	coopperfbw[4] += (size_t)p->n_layers * (dim * dim * dbits / 8); // attn output
 	coopperfbw[5] += (size_t)p->n_layers * (2 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
 	coopperfbw[6] += (size_t)p->n_layers * (1 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
+#endif
 
 	CoopArgs<T, KVT> args = {
 		PROF_TOKEN(bw),
@@ -703,17 +711,21 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 }
 
 extern "C" void perf_cuda() {
+#if COOP_PERF
+	if (coopruns == 0)
+		return;
+
 	uint64_t hostperf[16];
 	cudaMemcpyFromSymbol(hostperf, coopperf, sizeof(coopperf));
 
 	const char* stagenames[16] = {
-		"qkv",
-		"attn_score",
-		"attn_softmax",
-		"attn_mix",
-		"attn_output",
-		"mlp_up",
-		"mlp_down",
+	    "qkv",
+	    "attn_score",
+	    "attn_softmax",
+	    "attn_mix",
+	    "attn_output",
+	    "mlp_up",
+	    "mlp_down",
 	};
 
 	double freq = 1e9;
@@ -724,18 +736,20 @@ extern "C" void perf_cuda() {
 	}
 
 	printf("\nProfile (over %d runs, avg %.1f usec/run):\n",
-		coopruns, (double)total / (double)coopruns / freq * 1e6);
+	       coopruns, (double)total / (double)coopruns / freq * 1e6);
 
 	for (int stage = 0; stage < 16; ++stage) {
-		if (hostperf[stage] == 0) continue;
+		if (hostperf[stage] == 0)
+			continue;
 
 		uint64_t t = hostperf[stage];
 		uint64_t tbw = coopperfbw[stage];
 
 		printf("\t[%d] %16s: %4.1f%%; %8.1f usec/run, %6.1f GB/s\n",
-			stage, stagenames[stage],
-			(double)t / (double)total * 100,
-			(double)(t / coopruns) / freq * 1e6,
-			((double)tbw / 1e9) / ((double)t / freq));
+		       stage, stagenames[stage],
+		       (double)t / (double)total * 100,
+		       (double)(t / coopruns) / freq * 1e6,
+		       ((double)tbw / 1e9) / ((double)t / freq));
 	}
+#endif
 }
