@@ -39,7 +39,6 @@ struct CoopLayer {
 
 static cudaStream_t stream;
 
-static unsigned int* coopbarrier;
 static int coopsms;
 
 static __constant__ CoopLayer<void> cooplayers[MAX_LAYERS];
@@ -86,9 +85,6 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	       (double)devprop.memoryClockRate * (devprop.memoryBusWidth / 8) * 2 / 1e6, devprop.ECCEnabled);
 
 	coopsms = devprop.multiProcessorCount;
-
-	coopbarrier = (unsigned int*)cuda_devicealloc(sizeof(unsigned int));
-	CUDA_CHECK(cudaMemset(coopbarrier, 0, sizeof(unsigned int)));
 
 	if (getenv("CUDA_INJECTION64_PATH")) {
 		coopperf = (uint64_t*)cuda_devicealloc(sizeof(uint64_t) * 16);
@@ -335,30 +331,30 @@ __device__ static float rmsnorm(float* o, float* x, float* weight, int size, flo
 	return rsqrtf(ss / size + eps);
 }
 
- __device__ static void syncgrids(unsigned int expected, volatile unsigned int* barrier) {
-    if (threadIdx.x == 0) {
-        unsigned int nb = 1;
-        if (blockIdx.x == 0) {
-            nb = 0x80000000 - (expected - 1);
-        }
+__device__ static void syncgrid() {
+	volatile unsigned int* barrier = &cooperative_groups::details::get_grid_workspace()->barrier;
 
-        unsigned int old_arrive;
-        asm volatile("atom.add.release.gpu.u32 %0,[%1],%2;" : "=r"(old_arrive) : _CG_ASM_PTR_CONSTRAINT(barrier), "r"(nb) : "memory");
+	if (threadIdx.x == 0) {
+		unsigned int nb = 1;
+		if (blockIdx.x == 0) {
+			nb = 0x80000000 - (gridDim.x - 1);
+		}
 
-        unsigned int current_arrive;
-        do {
-            asm volatile("ld.acquire.gpu.u32 %0,[%1];" : "=r"(current_arrive) : _CG_ASM_PTR_CONSTRAINT(barrier) : "memory");
+		unsigned int old_arrive;
+		asm volatile("atom.add.release.gpu.u32 %0,[%1],%2;" : "=r"(old_arrive) : _CG_ASM_PTR_CONSTRAINT(barrier), "r"(nb) : "memory");
+
+		unsigned int current_arrive;
+		do {
+			asm volatile("ld.acquire.gpu.u32 %0,[%1];" : "=r"(current_arrive) : _CG_ASM_PTR_CONSTRAINT(barrier) : "memory");
 		} while (((old_arrive ^ current_arrive) & 0x80000000) == 0);
-    }
+	}
 
-	__barrier_sync(0);
+	__syncthreads();
 }
 
 template <typename T, typename KVT>
 struct CoopArgs {
 	uint64_t bw;
-
-	unsigned int* barrier;
 	uint64_t* perfstats;
 
 	float* x;
@@ -476,7 +472,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 0);
 
 		// attention score
@@ -499,7 +495,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 1);
 
 		// attention softmax
@@ -510,7 +506,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			softmax(atth, args.kv_len);
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 2);
 
 		// attention mix
@@ -530,7 +526,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 3);
 
 		// attention output
@@ -542,7 +538,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
@@ -581,7 +577,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 5);
 
 		// self.w2(...) + pre-rmsnorm residual
@@ -594,7 +590,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
-		syncgrids(gridDim.x, args.barrier);
+		syncgrid();
 		coopstage(args.perfstats, 6);
 	}
 }
@@ -672,7 +668,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	CoopArgs<T, KVT> args = {
 		PROF_TOKEN(bw),
-		coopbarrier,
 		coopperf,
 		// token state
 		x, p->n_experts ? s->he : s->hb, s->q, s->att,
