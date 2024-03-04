@@ -9,8 +9,6 @@
 
 #include "helpers.cuh"
 
-#define COOP_PERF 1
-
 #define CUDA_CHECK(x)                                                                                    \
 	do {                                                                                                 \
 		cudaError_t err = x;                                                                             \
@@ -46,11 +44,9 @@ static int coopsms;
 
 static __constant__ CoopLayer<void> cooplayers[MAX_LAYERS];
 
-#if COOP_PERF
-static __device__ uint64_t coopperf[16];
+static uint64_t* coopperf;
 static uint64_t coopperfbw[16];
 static int coopruns;
-#endif
 
 static void* cuda_devicecopy(void* host, size_t size) {
 	void* device = NULL;
@@ -93,6 +89,11 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	coopbarrier = (unsigned int*)cuda_devicealloc(sizeof(unsigned int));
 	CUDA_CHECK(cudaMemset(coopbarrier, 0, sizeof(unsigned int)));
+
+	if (getenv("CUDA_INJECTION64_PATH")) {
+		coopperf = (uint64_t*)cuda_devicealloc(sizeof(uint64_t) * 16);
+		CUDA_CHECK(cudaMemset(coopperf, 0, sizeof(uint64_t) * 16));
+	}
 
 	CUDA_CHECK(cudaStreamCreate(&stream));
 
@@ -358,6 +359,7 @@ struct CoopArgs {
 	uint64_t bw;
 
 	unsigned int* barrier;
+	uint64_t* perfstats;
 
 	float* x;
 	float* hb;
@@ -390,20 +392,18 @@ struct CoopArgs {
 	float theta_log2;
 };
 
-__device__ static void coopstage(int stage) {
-#if COOP_PERF
+__device__ static void coopstage(uint64_t* stats, int stage) {
 	__shared__ uint64_t lastt;
 
-	if (blockIdx.x == 0 && threadIdx.x == 0) {
+	if (stats && blockIdx.x == 0 && threadIdx.x == 0) {
 		uint64_t t;
 		asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(t));
 
 		if (stage >= 0) {
-			coopperf[stage] += t - lastt;
+			stats[stage] += t - lastt;
 		}
 		lastt = t;
 	}
-#endif
 }
 
 template <typename T, typename KVT>
@@ -430,7 +430,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	moe_weights[0] = 1.f;
 	moe_experts[0] = 0;
 
-	coopstage(-1); // init timing
+	coopstage(args.perfstats, -1); // init timing
 
 	for (int l = 0; l < args.n_layers; ++l) {
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
@@ -477,7 +477,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(0);
+		coopstage(args.perfstats, 0);
 
 		// attention score
 		int kv_len32 = (args.kv_len + 31) / 32;
@@ -500,7 +500,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(1);
+		coopstage(args.perfstats, 1);
 
 		// attention softmax
 		if (blockIdx.x < args.n_heads) {
@@ -511,7 +511,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(2);
+		coopstage(args.perfstats, 2);
 
 		// attention mix
 		for (int j = io; j < q_dim; j += ib) {
@@ -531,7 +531,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(3);
+		coopstage(args.perfstats, 3);
 
 		// attention output
 		for (int j = io; j < dim; j += ib) {
@@ -543,7 +543,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(4);
+		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
 		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
@@ -582,7 +582,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(5);
+		coopstage(args.perfstats, 5);
 
 		// self.w2(...) + pre-rmsnorm residual
 		for (int j = io; j < dim * args.n_experts_ac; j += ib) {
@@ -595,7 +595,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrids(gridDim.x, args.barrier);
-		coopstage(6);
+		coopstage(args.perfstats, 6);
 	}
 }
 
@@ -661,7 +661,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	bw += 3 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1); // MLP
 	bw *= p->n_layers;
 
- #if COOP_PERF
 	coopruns++;
 	coopperfbw[0] += (size_t)p->n_layers * ((dim + kv_dim * 2) * dim * dbits / 8); // QKV
 	coopperfbw[1] += (size_t)p->n_layers * kvbw; // attn scoring
@@ -670,11 +669,11 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	coopperfbw[4] += (size_t)p->n_layers * (dim * dim * dbits / 8); // attn output
 	coopperfbw[5] += (size_t)p->n_layers * (2 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
 	coopperfbw[6] += (size_t)p->n_layers * (1 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
-#endif
 
 	CoopArgs<T, KVT> args = {
 		PROF_TOKEN(bw),
 		coopbarrier,
+		coopperf,
 		// token state
 		x, p->n_experts ? s->he : s->hb, s->q, s->att,
 		// key/value cache; note that layers are passed via cooplayers[]
@@ -733,12 +732,11 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 }
 
 extern "C" void perf_cuda() {
-#if COOP_PERF
-	if (coopruns == 0)
+	if (coopperf == NULL || coopruns == 0)
 		return;
 
-	uint64_t hostperf[16];
-	cudaMemcpyFromSymbol(hostperf, coopperf, sizeof(coopperf));
+	uint64_t hostperf[16] = {};
+	CUDA_CHECK(cudaMemcpy(hostperf, coopperf, sizeof(hostperf), cudaMemcpyDeviceToHost));
 
 	static const char* stagenames[16] = {
 	    "matmul_qkv",
@@ -773,5 +771,4 @@ extern "C" void perf_cuda() {
 		       (double)(t / coopruns) / freq * 1e6,
 		       ((double)tbw / 1e9) / ((double)t / freq));
 	}
-#endif
 }
