@@ -127,7 +127,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 		layers[l].w3 = weights->w3[l];
 	}
 
-	cudaMemcpyToSymbol(cooplayers, layers, sizeof(layers));
+	CUDA_CHECK(cudaMemcpyToSymbol(cooplayers, layers, sizeof(layers)));
 }
 
 template <typename T>
