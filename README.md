@@ -44,38 +44,15 @@ calm supports a subset of decoder-only transformer architectures:
 
 It has been tested on following models:
 
-- Llama architecture
-  - TinyLlama 1.1B (TinyLlama/TinyLlama-1.1B-Chat-v1.0)
-  - Cosmo 1B (HuggingFaceTB/cosmo-1b)
-  - Llama2 7B (meta-llama/Llama-2-7b-chat-hf)
-  - Llama2 13B (meta-llama/Llama-2-13b-chat-hf)
-  - LLaMA Pro 8B (TencentARC/LLaMA-Pro-8B-Instruct)
-  - Yi 34B (01-ai/Yi-34B-Chat)
-  - H2O Danube 1.8B (h2oai/h2o-danube-1.8b-chat)
-  - DeepSeekMath 7B (deepseek-ai/deepseek-math-7b-instruct)
-  - LargeWorldModel 7B 1M (LargeWorldModel/LWM-Text-Chat-1M)
-- Mistral architecture
-  - Mistral 7B (mistralai/Mistral-7B-Instruct-v0.2)
-  - Mistral Pro 8B (TencentARC/Mistral_Pro_8B_v0.1)
-  - SOLAR 10.7B (upstage/SOLAR-10.7B-Instruct-v1.0)
-  - GritLM 7B (GritLM/GritLM-7B)
-- Qwen2 architecture
-  - Qwen1.5 0.5B (Qwen/Qwen1.5-0.5B)
-  - Qwen1.5 1.8B (Qwen/Qwen1.5-1.8B)
-  - Qwen1.5 4B (Qwen/Qwen1.5-4B)
-  - Qwen1.5 7B (Qwen/Qwen1.5-7B)
-  - Qwen1.5 14B (Qwen/Qwen1.5-14B)
-- Mixtral architecture
-  - Mixtral 8x7B (mistralai/Mixtral-8x7B-Instruct-v0.1)
-  - GritLM 8x7B (GritLM/GritLM-8x7B)
-- OLMo architecture
-  - OLMo 1B (allenai/OLMo-1B)
-  - OLMo 7B (allenai/OLMo-7B)
-- Gemma architecture
-  - Gemma 2B (google/gemma-2b-it)
-  - Gemma 7B (google/gemma-7b-it)
-- MiniCPM architecture
-  - MiniCPM 2B (openbmb/MiniCPM-2B-dpo-bf16)
+| Architecture      | Models |
+|-------------------|--------|
+| Llama | [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0), [Cosmo 1B](https://huggingface.co/HuggingFaceTB/cosmo-1b), [Llama2 7B](https://huggingface.co/meta-llama/Llama-2-7b-chat-hf), [Llama2 13B](https://huggingface.co/meta-llama/Llama-2-13b-chat-hf), [LLaMA Pro 8B](https://huggingface.co/TencentARC/LLaMA-Pro-8B-Instruct), [Yi 34B](https://huggingface.co/01-ai/Yi-34B-Chat), [H2O Danube 1.8B](https://huggingface.co/h2oai/h2o-danube-1.8b-chat), [DeepSeekMath 7B](https://huggingface.co/deepseek-ai/deepseek-math-7b-instruct), [LargeWorldModel 7B 1M](https://huggingface.co/LargeWorldModel/LWM-Text-Chat-1M) |
+| Mistral | [Mistral 7B](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2), [Mistral Pro 8B](https://huggingface.co/TencentARC/Mistral_Pro_8B_v0.1), [SOLAR 10.7B](https://huggingface.co/upstage/SOLAR-10.7B-Instruct-v1.0), [GritLM 7B](https://huggingface.co/GritLM/GritLM-7B) |
+| Qwen2 | [Qwen1.5 0.5B](https://huggingface.co/Qwen/Qwen1.5-0.5B), [Qwen1.5 1.8B](https://huggingface.co/Qwen/Qwen1.5-1.8B), [Qwen1.5 4B](https://huggingface.co/Qwen/Qwen1.5-4B), [Qwen1.5 7B](https://huggingface.co/Qwen/Qwen1.5-7B), [Qwen1.5 14B](https://huggingface.co/Qwen/Qwen1.5-14B) |
+| Mixtral | [Mixtral 8x7B](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1), [GritLM 8x7B](https://huggingface.co/GritLM/GritLM-8x7B) |
+| OLMo    | [OLMo 1B](https://huggingface.co/allenai/OLMo-1B), [OLMo 7B](https://huggingface.co/allenai/OLMo-7B) |
+| Gemma   | [Gemma 2B](https://huggingface.co/google/gemma-2b-it), [Gemma 7B](https://huggingface.co/google/gemma-7b-it) |
+| MiniCPM | [MiniCPM 2B](https://huggingface.co/openbmb/MiniCPM-2B-dpo-bf16) |
 
 ## Supported formats
 
