@@ -262,7 +262,7 @@ elif arch == "gemma":
     embed_scale = config["hidden_size"] ** 0.5
 
     weights["model.norm.weight"] *= 1 / embed_scale
-    weights["model.embed_tokens.weight"] *= embed_scale
+    weights["model.embed_tokens.weight"] = weights["model.embed_tokens.weight"].float() * embed_scale
 
 # convert weights
 progress = 0
