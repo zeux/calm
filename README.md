@@ -90,7 +90,9 @@ Currently prompts are processed serially, one token at a time; in the future, pr
 
 With smaller weights on small models, getting closer to bandwidth limit becomes more difficult. Future optimizations may increase the gap here for small models, although smaller weights are most valuable to be able to infer larger models.
 
-RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3]. The code has not been heavily tuned for datacenter-grade hardware (A100/H100) or earlier NVidia architectures yet.
+RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3].
+
+`calm` can run on A100/H100 accelerators (but is mostly tuned for H100 `fp8` weights). When using Mixtral 8x7B (fp8) on 1xH100 SXM, it runs at ~200 tok/s (2550 GB/s) for 256-token outputs.
 
 ## Model files
 
