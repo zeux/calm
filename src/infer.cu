@@ -102,7 +102,7 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)cuda_devicealloc(q_dim * sizeof(float));
-	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * sizeof(float));
+	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * 2 * sizeof(float));
 
 	assert(state->kvbits == 8 || state->kvbits == 16);
 	state->key_cache = cuda_devicealloc((size_t)config->n_layers * config->seq_len * kv_dim * (state->kvbits / 8));
@@ -279,7 +279,7 @@ __device__ inline float attn_warpdot(KVT* val, float* atth, int kv_len) {
 	return res / sum;
 }
 
-__device__ static void softmax(float* x, int size) {
+__device__ static void softmax(float* xout, float* x, int size) {
 	int i = threadIdx.x;
 
 	// find max value per thread (for numerical stability)
@@ -293,7 +293,7 @@ __device__ static void softmax(float* x, int size) {
 
 	// exp per thread
 	for (int j = i; j < size; j += blockDim.x) {
-		x[j] = expf(x[j] - max_val);
+		xout[j] = expf(x[j] - max_val);
 	}
 }
 
@@ -425,8 +425,14 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 	coopstage(args.perfstats, -1); // init timing
 
+	static __device__ int badsoftmax = 0;
+
 	for (int l = 0; l < args.n_layers; ++l) {
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
+
+		if (blockIdx.x == 0) {
+			badsoftmax = 0;
+		}
 
 		// pre-attention rmsnorm (into shared memory)
 		rmsscale = rmsnorm(xs, args.x, L->rms_att_weight, dim, args.norm_eps, args.norm_ln);
@@ -486,28 +492,36 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			if (t < args.kv_len) {
 				float* qh = args.q + h * head_dim;
 				KVT* kh = keyb + kvh * head_dim * args.seq_len;
-				float* atth = args.att + h * args.seq_len;
+				float* atth = args.att + h * args.seq_len * 2;
 
 				float score = attn_score(kh, qh, head_dim, args.seq_len, t, 4 * (threadIdx.x % 2));
 				score += __shfl_xor_sync(active, score, 1);
+				score /= sqrtf(head_dim);
 
-				atth[t] = score / sqrtf(head_dim);
+				atth[t] = expf(score);
+				atth[t + args.seq_len] = score;
+
+				if (fabsf(score) > 40) {
+					badsoftmax = 1;
+				}
 			}
 		}
 
 		syncgrid();
 		coopstage(args.perfstats, 1);
 
-		// attention softmax
-		if (blockIdx.x < args.n_heads) {
-			int h = blockIdx.x;
-			float* atth = args.att + h * args.seq_len;
+		if (badsoftmax) {
+			// attention softmax
+			if (blockIdx.x < args.n_heads) {
+				int h = blockIdx.x;
+				float* atth = args.att + h * args.seq_len * 2;
 
-			softmax(atth, args.kv_len);
+				softmax(atth, atth + args.seq_len, args.kv_len);
+			}
+
+			syncgrid();
+			coopstage(args.perfstats, 2);
 		}
-
-		syncgrid();
-		coopstage(args.perfstats, 2);
 
 		// attention mix
 		for (int j = io; j < q_dim; j += ib) {
@@ -515,7 +529,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			int kvh = h / kv_mul;
 			int j_head = j % head_dim;
 
-			float* atth = args.att + h * args.seq_len;
+			float* atth = args.att + h * args.seq_len * 2;
 			KVT* vh = valb + kvh * head_dim * args.seq_len;
 			KVT* val = vh + j_head * args.seq_len;
 
