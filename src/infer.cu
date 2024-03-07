@@ -167,7 +167,7 @@ __global__ static void kernel_rotate_sink(uint64_t, int kvd, KVT* key_cache, int
 	// note: k layout is transposed / tiled to improve attn_score performance
 	int t = i / kvd;
 	int k = i % kvd;
-	int o = t * 4 + seq_len * (k / 4) * 4 + (k % 4);
+	int o = t * 8 + seq_len * (k / 8) * 8 + (k % 8);
 
 	float v0 = float(kb[o + 0]);
 	float v1 = float(kb[o + 1]);
@@ -236,18 +236,18 @@ __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
 }
 
 template <typename KVT>
-__device__ inline float attn_score(KVT* kht, float* qh, int head_dim, int seq_len, int t) {
+__device__ inline float attn_score(KVT* kht, float* qh, int head_dim, int seq_len, int t, int off) {
 	float score = 0.0f;
-	for (int j = 0; j < head_dim; j += 4) {
-		float4 kk = attn_load4(&kht[j * seq_len + t * 4]);
-		float4 qq = *(float4*)&qh[j];
+	for (int j = 0; j < head_dim; j += 8) {
+		float4 kk = attn_load4(&kht[j * seq_len + t * 8 + off]);
+		float4 qq = *(float4*)&qh[j + off];
 		score += kk.x * qq.x;
 		score += kk.y * qq.y;
 		score += kk.z * qq.z;
 		score += kk.w * qq.w;
 	}
 
-	return score / sqrtf(head_dim);
+	return score;
 }
 
 template <typename KVT>
@@ -459,7 +459,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 					args.q[k + 1] = v0 * fci + v1 * fcr;
 				} else if (j < q_dim + kv_dim) {
 					// note: k layout is transposed / tiled to improve attn_score performance
-					int off = args.kv_pos * 4 + args.seq_len * (k / 4) * 4 + (k % 4);
+					int off = args.kv_pos * 8 + args.seq_len * (k / 8) * 8 + (k % 8);
 					keyb[off + 0] = KVT(v0 * fcr - v1 * fci);
 					keyb[off + 1] = KVT(v0 * fci + v1 * fcr);
 				} else {
@@ -474,21 +474,24 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		coopstage(args.perfstats, 0);
 
 		// attention score
-		int kv_len32 = (args.kv_len + 31) / 32;
+		int kv_lent = (args.kv_len + 15) / 16;
 
-		for (int j = io; j < kv_len32 * args.n_heads; j += ib) {
+		for (int j = io; j < kv_lent * args.n_heads; j += ib) {
 			int h = j % args.n_heads;
 			int kvh = h / kv_mul;
-			int t = (j / args.n_heads) * warpSize + (threadIdx.x % warpSize);
+			int t = (j / args.n_heads) * 16 + (threadIdx.x % warpSize) / 2;
+
+			unsigned active = __ballot_sync(0xffffffff, t < args.kv_len);
 
 			if (t < args.kv_len) {
 				float* qh = args.q + h * head_dim;
 				KVT* kh = keyb + kvh * head_dim * args.seq_len;
 				float* atth = args.att + h * args.seq_len;
 
-				float score = attn_score(kh, qh, head_dim, args.seq_len, t);
+				float score = attn_score(kh, qh, head_dim, args.seq_len, t, 4 * (threadIdx.x % 2));
+				score += __shfl_xor_sync(active, score, 1);
 
-				atth[t] = score;
+				atth[t] = score / sqrtf(head_dim);
 			}
 		}
 
