@@ -765,7 +765,7 @@ extern "C" void perf_cuda() {
 		total += hostperf[stage];
 	}
 
-	printf("\nProfile (over %d runs, avg %.1f usec/run):\n",
+	printf("\nkernel_forward breakdown (over %d runs, avg %.1f usec/run):\n",
 	       coopruns, (double)total / (double)coopruns / freq * 1e6);
 
 	for (int stage = 0; stage < 16; ++stage) {
