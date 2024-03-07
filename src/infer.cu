@@ -430,7 +430,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	for (int l = 0; l < args.n_layers; ++l) {
 		const CoopLayer<T>* L = (const CoopLayer<T>*)&cooplayers[l];
 
-		if (blockIdx.x == 0) {
+		if (blockIdx.x == 0 && threadIdx.x < warpSize) {
 			badsoftmax = 0;
 		}
 
