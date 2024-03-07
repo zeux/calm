@@ -495,6 +495,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 				float* atth = args.att + h * args.seq_len * 2;
 
 				float score = attn_score(kh, qh, head_dim, args.seq_len, t, 4 * (threadIdx.x % 4));
+
+				// reduce score across threads in warp; every 4 threads are processing the same output score
 				score += __shfl_xor_sync(active, score, 2);
 				score += __shfl_xor_sync(active, score, 1);
 				score /= sqrtf(head_dim);
@@ -502,6 +504,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 				atth[t] = expf(score);
 				atth[t + args.seq_len] = score;
 
+				// to reduce latency we prefer computing softmax without the numeric stabilization, which is safe if all inputs are small
 				if (fabsf(score) > 40) {
 					badsoftmax = 1;
 				}
