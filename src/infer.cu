@@ -164,18 +164,19 @@ __global__ static void kernel_rotate_sink(uint64_t, int kvd, KVT* key_cache, int
 	size_t loff = (size_t)l * seq_len * kvd;
 	KVT* kb = key_cache + loff;
 
-	// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
+	// note: k layout is transposed (we store all positions for 4 heads contiguously) to improve attn_score performance
 	int t = i / kvd;
-	int o = t * 2 + seq_len * (i % kvd);
+	int k = i % kvd;
+	int o = t * 4 + seq_len * (k / 4) * 4 + (k % 4);
 
-	float k0 = float(kb[o + 0]);
-	float k1 = float(kb[o + 1]);
+	float v0 = float(kb[o + 0]);
+	float v1 = float(kb[o + 1]);
 
-	float rk0 = k0 * fcr - k1 * fci;
-	float rk1 = k0 * fci + k1 * fcr;
+	float r0 = v0 * fcr - v1 * fci;
+	float r1 = v0 * fci + v1 * fcr;
 
-	kb[o + 0] = KVT(rk0);
-	kb[o + 1] = KVT(rk1);
+	kb[o + 0] = KVT(r0);
+	kb[o + 1] = KVT(r1);
 }
 
 __device__ inline float gelu(float x) {
@@ -235,22 +236,18 @@ __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
 }
 
 template <typename KVT>
-__device__ inline float2 attn_score2(KVT* kht, float* qh, int head_dim, int seq_len, int t) {
-	float score1 = 0.0f;
-	float score2 = 0.0f;
-	for (int j = 0; j < head_dim; j += 2) {
-		float4 kk = attn_load4(&kht[j * seq_len + t * 2]);
-		float2 qq = *(float2*)&qh[j];
-		score1 += kk.x * qq.x;
-		score1 += kk.y * qq.y;
-		score2 += kk.z * qq.x;
-		score2 += kk.w * qq.y;
+__device__ inline float attn_score(KVT* kht, float* qh, int head_dim, int seq_len, int t) {
+	float score = 0.0f;
+	for (int j = 0; j < head_dim; j += 4) {
+		float4 kk = attn_load4(&kht[j * seq_len + t * 4]);
+		float4 qq = *(float4*)&qh[j];
+		score += kk.x * qq.x;
+		score += kk.y * qq.y;
+		score += kk.z * qq.z;
+		score += kk.w * qq.w;
 	}
 
-	score1 /= sqrtf(head_dim);
-	score2 /= sqrtf(head_dim);
-
-	return {score1, score2};
+	return score / sqrtf(head_dim);
 }
 
 template <typename KVT>
@@ -461,9 +458,10 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 					args.q[k + 0] = v0 * fcr - v1 * fci;
 					args.q[k + 1] = v0 * fci + v1 * fcr;
 				} else if (j < q_dim + kv_dim) {
-					// note: k layout is transposed (we store all positions for a given head *pair* contiguously) to improve attn_score performance
-					keyb[args.kv_pos * 2 + 0 + args.seq_len * k] = KVT(v0 * fcr - v1 * fci);
-					keyb[args.kv_pos * 2 + 1 + args.seq_len * k] = KVT(v0 * fci + v1 * fcr);
+					// note: k layout is transposed (we store all positions for 4 heads contiguously) to improve attn_score performance
+					int off = args.kv_pos * 4 + args.seq_len * (k / 4) * 4 + (k % 4);
+					keyb[off + 0] = KVT(v0 * fcr - v1 * fci);
+					keyb[off + 1] = KVT(v0 * fci + v1 * fcr);
 				} else {
 					// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
 					valb[args.kv_pos + args.seq_len * (k + 0)] = KVT(v0);
@@ -481,17 +479,16 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		for (int j = io; j < kv_len32 * args.n_heads; j += ib) {
 			int h = j % args.n_heads;
 			int kvh = h / kv_mul;
-			int t = ((j / args.n_heads) * warpSize + (threadIdx.x % warpSize)) * 2;
+			int t = (j / args.n_heads) * warpSize + (threadIdx.x % warpSize);
 
 			if (t < args.kv_len) {
 				float* qh = args.q + h * head_dim;
 				KVT* kh = keyb + kvh * head_dim * args.seq_len;
 				float* atth = args.att + h * args.seq_len;
 
-				float2 score = attn_score2(kh, qh, head_dim, args.seq_len, t);
+				float score = attn_score(kh, qh, head_dim, args.seq_len, t);
 
-				atth[t + 0] = score.x;
-				atth[t + 1] = score.y;
+				atth[t] = score;
 			}
 		}
 
