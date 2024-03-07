@@ -415,7 +415,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	int q_dim = args.head_dim * args.n_heads;
 	int kv_dim = args.head_dim * args.n_kv_heads;
 
-	const int IK = 2; // K consecutive warps per block, groups of K are interleaved across SMs for better work distribution
+	const int IK = 4; // K consecutive warps per block, groups of K are interleaved across SMs for better work distribution
 	int io = blockIdx.x * IK + (threadIdx.x / warpSize % IK) + gridDim.x * IK * (threadIdx.x / warpSize / IK);
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
