@@ -164,7 +164,7 @@ __global__ static void kernel_rotate_sink(uint64_t, int kvd, KVT* key_cache, int
 	size_t loff = (size_t)l * seq_len * kvd;
 	KVT* kb = key_cache + loff;
 
-	// note: k layout is transposed (we store all positions for 4 heads contiguously) to improve attn_score performance
+	// note: k layout is transposed / tiled to improve attn_score performance
 	int t = i / kvd;
 	int k = i % kvd;
 	int o = t * 4 + seq_len * (k / 4) * 4 + (k % 4);
@@ -458,7 +458,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 					args.q[k + 0] = v0 * fcr - v1 * fci;
 					args.q[k + 1] = v0 * fci + v1 * fcr;
 				} else if (j < q_dim + kv_dim) {
-					// note: k layout is transposed (we store all positions for 4 heads contiguously) to improve attn_score performance
+					// note: k layout is transposed / tiled to improve attn_score performance
 					int off = args.kv_pos * 4 + args.seq_len * (k / 4) * 4 + (k % 4);
 					keyb[off + 0] = KVT(v0 * fcr - v1 * fci);
 					keyb[off + 1] = KVT(v0 * fci + v1 * fcr);
