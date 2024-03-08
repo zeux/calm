@@ -140,11 +140,11 @@ __device__ inline float embed(uint32_t* weight, int idx) {
 }
 
 template <typename T>
-__global__ static void kernel_embed(float* o, T* weight, int token, int n, float scale) {
+__global__ static void kernel_embed(float* o, T* weight, int token, int n) {
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	assert(i < n);
 
-	o[i] = embed(weight, token * n + i) * scale;
+	o[i] = embed(weight, token * n + i);
 }
 
 template <typename KVT>
@@ -657,7 +657,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim, p->embed_scale);
+	kernel_embed<<<dim / 32, 32, 0, stream>>>(x, (T*)w->token_embedding_table, token, dim);
 
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {

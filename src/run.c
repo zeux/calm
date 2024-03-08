@@ -57,9 +57,6 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* norm_eps = tensors_metadata_find(tensors, "norm_eps");
 	config->norm_eps = norm_eps ? atof(norm_eps) : 1e-5;
 
-	const char* embed_scale = tensors_metadata_find(tensors, "embed_scale");
-	config->embed_scale = embed_scale ? atof(embed_scale) : 1;
-
 	const char* act_type = tensors_metadata_find(tensors, "act_type");
 	config->act_gelu = act_type && strcmp(act_type, "gelu") == 0;
 

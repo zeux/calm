@@ -342,10 +342,6 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 	}
 
-	for (int i = 0; i < dim; ++i) {
-		x[i] *= p->embed_scale;
-	}
-
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
 
