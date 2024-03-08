@@ -120,10 +120,9 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
-	// use 64-bit loads instead of 32-bit loads to increase memory throughput on H100
+	// use 64-bit loads instead of 32-bit loads to increase memory throughput on H100/A100
 	// without this we are seeing lower throughput given the limited number of parallel warps in coop kernel
-	// this is performance-neutral on 4090 but results in issues with x[] load coalescing so we are only using it on SM90 for now
+	// this is performance-neutral on 4090 but results in issues with x[] load coalescing (that are benign)
 	for (int j = lane * 8; j < n; j += warpSize * 8) {
 		ablock<__nv_fp8x4_e5m2, 2> wwp = *(ablock<__nv_fp8x4_e5m2, 2>*)&w[i * n + j];
 #pragma unroll
@@ -136,16 +135,6 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n)
 			val += ww.w * xx.w;
 		}
 	}
-#else
-	for (int j = lane * 4; j < n; j += warpSize * 4) {
-		float4 ww = fp8x4_e5m2_ff(*(__nv_fp8x4_e5m2*)&w[i * n + j]);
-		float4 xx = *(float4*)&x[j];
-		val += ww.x * xx.x;
-		val += ww.y * xx.y;
-		val += ww.z * xx.z;
-		val += ww.w * xx.w;
-	}
-#endif
 	return warpreduce_sum(val);
 }
 
