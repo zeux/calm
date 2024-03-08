@@ -6,6 +6,12 @@
 #include <float.h>
 #include <stdint.h>
 
+// note: we expect loads to be broken into units of up to 16b due to specified alignment
+template <typename T, int N>
+union _ALIGNAS(sizeof(T) * N) ablock {
+	T v[N];
+};
+
 __device__ inline float warpreduce_sum(float v) {
 #pragma unroll
 	for (int mask = warpSize / 2; mask > 0; mask >>= 1) {
@@ -109,11 +115,6 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 	return warpreduce_sum(val);
 }
 
-union float8x8 {
-       float2 g;
-       __nv_fp8x4_e5m2 v[2];
-};
-
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
@@ -124,7 +125,7 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n)
 	// without this we are seeing lower throughput given the limited number of parallel warps in coop kernel
 	// this is performance-neutral on 4090 but results in issues with x[] load coalescing so we are only using it on SM90 for now
 	for (int j = lane * 8; j < n; j += warpSize * 8) {
-		float8x8 wwp = *(float8x8*)&w[i * n + j];
+		ablock<__nv_fp8x4_e5m2, 2> wwp = *(ablock<__nv_fp8x4_e5m2, 2>*)&w[i * n + j];
 #pragma unroll
 		for (int k = 0; k < 2; ++k) {
 			float4 ww = fp8x4_e5m2_ff(wwp.v[k]);
@@ -148,11 +149,6 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n)
 	return warpreduce_sum(val);
 }
 
-union float32x8 {
-	float4 g[2];
-	float v[8];
-};
-
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
@@ -163,13 +159,13 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 			uint32_t wg0 = w[i * n / 8 + j / 8];
 			uint32_t wg1 = w[i * n / 8 + j / 8 + warpSize];
 
-			float32x8 xx0 = *(float32x8*)&x[j];
+			ablock<float, 8> xx0 = *(ablock<float, 8>*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
 				val += gf4_ff(wg0, k) * xx0.v[k];
 			}
 
-			float32x8 xx1 = *(float32x8*)&x[j + warpSize * 8];
+			ablock<float, 8> xx1 = *(ablock<float, 8>*)&x[j + warpSize * 8];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
 				val += gf4_ff(wg1, k) * xx1.v[k];
@@ -181,7 +177,7 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 		for (int j = lane * 8; j < n; j += warpSize * 8) {
 			uint32_t wg = w[i * n / 8 + j / 8];
 
-			float32x8 xx = *(float32x8*)&x[j];
+			ablock<float, 8> xx = *(ablock<float, 8>*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
 				val += gf4_ff(wg, k) * xx.v[k];
