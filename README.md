@@ -74,17 +74,17 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 
 | Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
 | ----------- | ----------- | ----------- |
-| Llama2 7B (4096), fp16 | 68 tok/s (904 GB/s) | 59 tok/s (912 GB/s) |
-| Llama2 7B (4096), fp8 | 131 tok/s (871 GB/s) | 102 tok/s (888 GB/s) |
-| Llama2 7B (4096), gf4 | 235 tok/s (779 GB/s) | 156 tok/s (844 GB/s) |
-| Llama2 13B (4096), fp8 | 69 tok/s (891 GB/s) | 55 tok/s (898 GB/s) |
-| Llama2 13B (4096), gf4 | 128 tok/s (824 GB/s) | 88 tok/s (854 GB/s) |
-| Mistral 7B (4096), fp16 | 64 tok/s (913 GB/s) | 61 tok/s (909 GB/s) |
-| Mistral 7B (4096), fp8 | 123 tok/s (878 GB/s) | 114 tok/s (872 GB/s) |
-| Mistral 7B (4096), gf4 | 230 tok/s (819 GB/s) | 200 tok/s (816 GB/s) |
-| Mixtral 8x7B (4096), gf4 | 134 tok/s (857 GB/s) | 123 tok/s (852 GB/s) |
-| Mixtral 8x7B (16384), gf4 | 134 tok/s (857 GB/s) | 103 tok/s (768 GB/s) |
-| Yi 34B (4096), gf4 | 51 tok/s (870 GB/s) | 47 tok/s (848 GB/s) |
+| Llama2 7B (4096), fp16 | 69 tok/s (919 GB/s) | 60 tok/s (921 GB/s) |
+| Llama2 7B (4096), fp8 | 135 tok/s (893 GB/s) | 103 tok/s (899 GB/s) |
+| Llama2 7B (4096), gf4 | 246 tok/s (815 GB/s) | 158 tok/s (857 GB/s) |
+| Llama2 13B (4096), fp8 | 70 tok/s (910 GB/s) | 56 tok/s (907 GB/s) |
+| Llama2 13B (4096), gf4 | 131 tok/s (848 GB/s) | 88 tok/s (863 GB/s) |
+| Mistral 7B (4096), fp16 | 65 tok/s (925 GB/s) | 62 tok/s (916 GB/s) |
+| Mistral 7B (4096), fp8 | 127 tok/s (902 GB/s) | 116 tok/s (888 GB/s) |
+| Mistral 7B (4096), gf4 | 237 tok/s (843 GB/s) | 203 tok/s (832 GB/s) |
+| Mixtral 8x7B (4096), gf4 | 137 tok/s (875 GB/s) | 125 tok/s (862 GB/s) |
+| Mixtral 8x7B (16384), gf4 | 137 tok/s (879 GB/s) | 105 tok/s (781 GB/s) |
+| Yi 34B (4096), gf4 | 52 tok/s (884 GB/s) | 47 tok/s (851 GB/s) |
 
 Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
 
