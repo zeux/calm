@@ -35,6 +35,7 @@ ifneq (,$(wildcard /usr/local/cuda))
 endif
 
 CUFLAGS+=-g -O2 -lineinfo
+CUFLAGS+=-allow-unsupported-compiler # for recent CUDA versions
 
 ifeq ($(CUARCH),)
   CUFLAGS+=-gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90 --threads 2
