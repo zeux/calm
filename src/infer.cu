@@ -139,7 +139,11 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
-	state->he = (float*)cuda_devicealloc(config->n_experts_ac * hidden_dim * sizeof(float));
+	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
+	CUDA_CHECK(cudaSetDevice(1));
+	state->hb2 = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
+	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
+	CUDA_CHECK(cudaSetDevice(0));
 	state->q = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * 2 * sizeof(float));
 
@@ -448,7 +452,10 @@ struct CoopArgs {
 	void* xscratch;
 
 	float* x;
+	float* xb;
+	float* xb2;
 	__half* hb;
+	__half* hb2;
 	float* q;
 	__half* ab;
 	float* att;
@@ -700,6 +707,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// important!!! careful with distribution/handling
 		int e = args.gpu % args.n_experts_ac;
 
+		half* he = e == 0 ? args.hb : args.hb2;
 		int hdg = hidden_dim / (args.n_gpus / 2);
 		int hdo = (args.gpu / 2) * hdg;
 
@@ -712,7 +720,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
 			if (threadIdx.x % warpSize == 0) {
-				args.hb[j + hdo + e * hidden_dim] = val;
+				he[j + hdo] = val;
 			}
 		}
 
@@ -727,7 +735,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			float val = 0.f;
 			for (int e = 0; e < args.n_experts_ac; ++e) {
 				int je = j + moe_experts[e] * dim;
-				val += matmul_warppar(args.hb + e * hidden_dim, L->w2, je, hidden_dim) * moe_weights[e];
+				half* hehe = e == 0 ? args.hb : args.hb2;
+				val += matmul_warppar(hehe, L->w2, je, hidden_dim) * moe_weights[e];
 			}
 
 			if (threadIdx.x % warpSize == 0) {
@@ -815,11 +824,16 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	    PROF_TOKEN(bw),
 	    coopperf,
 	    // multi-gpu state
-	    xbarrier, 0, max(ngpus, 1),
-		xscratch[0],
+	    xbarrier,
+	    0,
+	    max(ngpus, 1),
+	    xscratch[0],
 	    // token state
 	    x,
-	    (half*)(p->n_experts ? s->he : s->hb),
+	    s->xb,
+	    s->xb2,
+	    (half*)s->hb,
+	    (half*)s->hb2,
 	    s->q,
 	    (half*)s->q,
 	    s->att,
