@@ -51,7 +51,7 @@ It has been tested on following models:
 | Qwen2 | [Qwen1.5 0.5B](https://huggingface.co/Qwen/Qwen1.5-0.5B), [Qwen1.5 1.8B](https://huggingface.co/Qwen/Qwen1.5-1.8B), [Qwen1.5 4B](https://huggingface.co/Qwen/Qwen1.5-4B), [Qwen1.5 7B](https://huggingface.co/Qwen/Qwen1.5-7B), [Qwen1.5 14B](https://huggingface.co/Qwen/Qwen1.5-14B) |
 | Mixtral | [Mixtral 8x7B](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1), [GritLM 8x7B](https://huggingface.co/GritLM/GritLM-8x7B) |
 | OLMo    | [OLMo 1B](https://huggingface.co/allenai/OLMo-1B), [OLMo 7B](https://huggingface.co/allenai/OLMo-7B) |
-| Gemma   | [Gemma 2B](https://huggingface.co/google/gemma-2b-it), [Gemma 7B](https://huggingface.co/google/gemma-7b-it) |
+| Gemma   | [Gemma 2B](https://huggingface.co/google/gemma-2b-it), [Gemma 7B](https://huggingface.co/google/gemma-7b-it) (*note: 7B version has issues with fp8 quantization*)  |
 | MiniCPM | [MiniCPM 2B](https://huggingface.co/openbmb/MiniCPM-2B-dpo-bf16) |
 
 ## Supported formats
