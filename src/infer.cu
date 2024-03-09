@@ -727,6 +727,16 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 		syncgrid();
 		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
+
+		__syncthreads();
+
+		half* hscratch = (half*)xscratch + dim;
+		if (blockIdx.x == 0) {
+			for (int j = threadIdx.x * 8; j < hidden_dim; j += blockDim.x * 8) {
+				*(float4*)&hscratch[j] = *(float4*)&he[j];
+			}
+		}
+
 		syncgrid();
 		coopstage(args.perfstats, 5);
 
@@ -736,7 +746,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// self.w2(...) + pre-rmsnorm residual
 		for (int j = io; j < xdg; j += ib) {
 			int je = j + xdo + moe_experts[e] * dim;
-			float val = matmul_warppar(he, L->w2, je, hidden_dim) * moe_weights[e];
+			float val = matmul_warppar(hscratch, L->w2, je, hidden_dim) * moe_weights[e];
 
 			if (threadIdx.x % warpSize == 0) {
 				xe[j + xdo] = val;
