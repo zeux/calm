@@ -708,6 +708,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		int e = args.gpu % args.n_experts_ac;
 
 		half* he = e == 0 ? args.hb : args.hb2;
+		float* xe = e == 0 ? args.xb : args.xb2;
 		int hdg = hidden_dim / (args.n_gpus / 2);
 		int hdo = (args.gpu / 2) * hdg;
 
@@ -729,18 +730,33 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		syncgrid();
 		coopstage(args.perfstats, 5);
 
+		int xdg = dim / (args.n_gpus / 2);
+		int xdo = (args.gpu / 2) * xdg;
+
 		// self.w2(...) + pre-rmsnorm residual
-		if (args.gpu == 0)
-		for (int j = io; j < dim; j += ib) {
-			float val = 0.f;
-			for (int e = 0; e < args.n_experts_ac; ++e) {
-				int je = j + moe_experts[e] * dim;
-				half* hehe = e == 0 ? args.hb : args.hb2;
-				val += matmul_warppar(hehe, L->w2, je, hidden_dim) * moe_weights[e];
-			}
+		for (int j = io; j < xdg; j += ib) {
+			int je = j + xdo + moe_experts[e] * dim;
+			float val = matmul_warppar(he, L->w2, je, hidden_dim) * moe_weights[e];
 
 			if (threadIdx.x % warpSize == 0) {
-				args.x[j] += val;
+				xe[j + xdo] = val;
+			}
+		}
+
+		syncgrid();
+		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
+
+		__syncthreads();
+		if (args.gpu == 0 && blockIdx.x == 0) {
+			for (int j = threadIdx.x * 4; j < dim; j += blockDim.x * 4) {
+				float4 d = *(float4*)&args.x[j];
+				float4 s1 = *(float4*)&args.xb[j];
+				float4 s2 = *(float4*)&args.xb2[j];
+				d.x += s1.x + s2.x;
+				d.y += s1.y + s2.y;
+				d.z += s1.z + s2.z;
+				d.w += s1.w + s2.w;
+				*(float4*)&args.x[j] = d;
 			}
 		}
 
