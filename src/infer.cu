@@ -686,16 +686,19 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// important!!! careful with distribution/handling
 		int e = args.gpu % args.n_experts_ac;
 
+		int hdg = hidden_dim / (args.n_gpus / 2);
+		int hdo = (args.gpu / 2) * hdg;
+
 		// F.silu(self.w1(x)) * self.w3(x)
-		for (int j = io; j < hidden_dim; j += ib) {
-			int je = j + moe_experts[e] * hidden_dim;
+		for (int j = io; j < hdg; j += ib) {
+			int je = j + hdo + moe_experts[e] * hidden_dim;
 			float v1 = matmul_warppar(xs, L->w1, je, dim) * rmsscale;
 			float v3 = matmul_warppar(xs, L->w3, je, dim) * rmsscale;
 
 			float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
 			if (threadIdx.x % warpSize == 0) {
-				args.hb[j + e * hidden_dim] = val;
+				args.hb[j + hdo + e * hidden_dim] = val;
 			}
 		}
 
