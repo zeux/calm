@@ -683,12 +683,15 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		coopstage(args.perfstats, 5);
 
 		// self.w2(...) + pre-rmsnorm residual
-		for (int j = io; j < dim * args.n_experts_ac; j += ib) {
-			int je = (j % dim) + moe_experts[j / dim] * dim;
-			float val = matmul_warppar(args.hb + (j / dim) * hidden_dim, L->w2, je, hidden_dim);
+		for (int j = io; j < dim; j += ib) {
+			float val = 0.f;
+			for (int e = 0; e < args.n_experts_ac; ++e) {
+				int je = j + moe_experts[e] * dim;
+				val += matmul_warppar(args.hb + e * hidden_dim, L->w2, je, hidden_dim) * moe_weights[e];
+			}
 
 			if (threadIdx.x % warpSize == 0) {
-				atomicAdd(&args.x[j % dim], val * moe_weights[j / dim]);
+				args.x[j] += val;
 			}
 		}
 
