@@ -221,14 +221,10 @@ __device__ static void moe_gate_warp(float* moe_weights, int* moe_experts, float
 	}
 }
 
-union half4 {
-	float2 g;
-	half h[4];
-};
-
 __device__ inline float4 attn_load4(half* p) {
-	half4 h = *(half4*)p;
-	return {__half2float(h.h[0]), __half2float(h.h[1]), __half2float(h.h[2]), __half2float(h.h[3])};
+	ablock<__half2_raw, 2> h = *(ablock<__half2_raw, 2>*)p;
+	float2 h0 = __half22float2(h.v[0]), h1 = __half22float2(h.v[1]);
+	return {h0.x, h0.y, h1.x, h1.y};
 }
 
 __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
