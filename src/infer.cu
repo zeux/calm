@@ -661,11 +661,21 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 		syncgrid();
 		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
+
+		__syncthreads();
+
+		float* xscratch = (float*)args.xscratch;
+		if (blockIdx.x == 0) {
+			for (int j = threadIdx.x * 4; j < dim; j += blockDim.x * 4) {
+				*(float4*)&xscratch[j] = *(float4*)&args.x[j];
+			}
+		}
+
 		syncgrid();
 		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
-		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
+		rmsscale = rmsnorm(xs, xscratch, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
 
 		// moegate
 		if (args.n_experts) {
