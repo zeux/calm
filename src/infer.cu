@@ -652,6 +652,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		syncgrid();
+		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
+		syncgrid();
 		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
@@ -678,7 +680,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		// F.silu(self.w1(x)) * self.w3(x)
-		for (int j = io; j < hidden_dim * args.n_experts_ac; j += ib) {
+		for (int j = go; j < hidden_dim * args.n_experts_ac; j += gb) {
 			int je = (j % hidden_dim) + moe_experts[j / hidden_dim] * hidden_dim;
 			float v1 = matmul_warppar(xs, L->w1, je, dim) * rmsscale;
 			float v3 = matmul_warppar(xs, L->w3, je, dim) * rmsscale;
@@ -690,6 +692,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
+		syncgrid();
+		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
 		syncgrid();
 		coopstage(args.perfstats, 5);
 
