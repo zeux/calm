@@ -508,7 +508,6 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	const int IK = 4; // K consecutive warps per block, groups of K are interleaved across SMs for better work distribution
 	int io = blockIdx.x * IK + (threadIdx.x / warpSize % IK) + gridDim.x * IK * (threadIdx.x / warpSize / IK);
 	int ib = (gridDim.x * blockDim.x) / warpSize;
-	io = args.gpu > 0 ? 0x10000000 : io; // only first GPU will perform work using io..ib split
 
 	// for multigpu-friendly work we can use go..gb split instead which partitions work evenly across GPUs (assuming IK=1)
 	int go = blockIdx.x + gridDim.x * (args.gpu + args.n_gpus * (threadIdx.x / warpSize));
@@ -530,6 +529,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		// pre-attention rmsnorm (into shared memory)
+		if (args.gpu == 0)
 		rmsscale = rmsnorm(xs, args.x, L->rms_att_weight, dim, args.norm_eps, args.norm_ln);
 
 		size_t loff = (size_t)l * args.seq_len * kv_dim; // kv cache layer offset for convenience
@@ -537,6 +537,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		KVT* valb = args.val_cache + loff;
 
 		// qkv matmul + RoPE encoding + update KV cache
+		if (args.gpu == 0)
 		for (int j = io * 2; j < q_dim + kv_dim * 2; j += ib * 2) {
 			T* w = j < q_dim ? L->wq : (j < q_dim + kv_dim ? L->wk : L->wv);
 			int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
@@ -577,6 +578,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// attention score
 		int kv_lent = (args.kv_len + 7) / 8;
 
+		if (args.gpu == 0)
 		for (int j = io; j < kv_lent * args.n_heads; j += ib) {
 			int h = j % args.n_heads;
 			int kvh = h / kv_mul;
@@ -623,6 +625,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		// attention mix
+		if (args.gpu == 0)
 		for (int j = io; j < q_dim; j += ib) {
 			int h = j / head_dim;
 			int kvh = h / kv_mul;
@@ -643,6 +646,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		coopstage(args.perfstats, 3);
 
 		// attention output
+		if (args.gpu == 0)
 		for (int j = io; j < dim; j += ib) {
 			float val = matmul_warppar(args.ab, L->wo, j, q_dim);
 
@@ -679,16 +683,19 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			__syncthreads();
 		}
 
+		// important!!! careful with distribution/handling
+		int e = args.gpu % args.n_experts_ac;
+
 		// F.silu(self.w1(x)) * self.w3(x)
-		for (int j = go; j < hidden_dim * args.n_experts_ac; j += gb) {
-			int je = (j % hidden_dim) + moe_experts[j / hidden_dim] * hidden_dim;
+		for (int j = io; j < hidden_dim; j += ib) {
+			int je = j + moe_experts[e] * hidden_dim;
 			float v1 = matmul_warppar(xs, L->w1, je, dim) * rmsscale;
 			float v3 = matmul_warppar(xs, L->w3, je, dim) * rmsscale;
 
 			float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
 			if (threadIdx.x % warpSize == 0) {
-				args.hb[j] = val;
+				args.hb[j + e * hidden_dim] = val;
 			}
 		}
 
@@ -698,6 +705,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		coopstage(args.perfstats, 5);
 
 		// self.w2(...) + pre-rmsnorm residual
+		if (args.gpu == 0)
 		for (int j = io; j < dim; j += ib) {
 			float val = 0.f;
 			for (int e = 0; e < args.n_experts_ac; ++e) {
