@@ -405,22 +405,29 @@ __device__ void store_arrived(volatile unsigned int* arrived, unsigned int val) 
 	    : "memory");
 }
 
-__device__ static void syncgrids(int gpu, int n_gpus, volatile unsigned int* xbarrier) {
-	if (xbarrier) {
-		syncgrid();
+__device__ static unsigned int syncgpus_arrive(int gpu, int n_gpus, volatile unsigned int* xbarrier) {
+	unsigned int token = 0;
+	if (blockIdx.x == 0 && threadIdx.x == 0) {
+		token = xbarrier[gpu] + 1;
+		store_arrived(&xbarrier[gpu], token);
+	}
+	return token;
+}
 
-		if (blockIdx.x == 0 && threadIdx.x == 0) {
-			unsigned int token = xbarrier[gpu] + 1;
-			store_arrived(&xbarrier[gpu], token);
-
-			for (int j = 0; j < n_gpus; ++j) {
+__device__ static unsigned int syncgpus_wait(unsigned int mask, int n_gpus, volatile unsigned int* xbarrier, unsigned int token) {
+	if (blockIdx.x == 0 && threadIdx.x == 0) {
+		for (int j = 0; j < n_gpus; ++j) {
+			if (mask & (1 << j)) {
 				while (load_arrived(&xbarrier[j]) != token)
 					;
 			}
 		}
 	}
+}
 
-	syncgrid();
+__device__ static unsigned int syncgpus(int gpu, int n_gpus, volatile unsigned int* xbarrier) {
+	unsigned int token = syncgpus_arrive(gpu, n_gpus, xbarrier);
+	syncgpus_wait(0xffffffff, n_gpus, xbarrier, token);
 }
 
 template <typename T, typename KVT>
