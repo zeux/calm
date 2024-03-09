@@ -344,7 +344,6 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 
 	// forward all the layers
 	for (int l = 0; l < p->n_layers; l++) {
-
 		// attention rmsnorm
 		rmsnorm(s->xb, x, w->rms_att_weight[l], dim, p->norm_eps, p->norm_ln);
 

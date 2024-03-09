@@ -658,7 +658,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {
 		kernel_rotate_sink<<<dim3(kv_sink * kv_dim / 64, p->n_layers), 32, 0, stream>>>(
-			PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, p->head_dim, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+		    PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, p->head_dim, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 	}
 
 	// forward all the layers
