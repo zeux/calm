@@ -39,6 +39,7 @@ struct CoopLayer {
 
 static int ngpus;
 static unsigned int* xbarrier;
+static void* xscratch[8];
 
 static cudaStream_t stream;
 
@@ -82,6 +83,7 @@ extern "C" void init_cuda() {
 					CUDA_CHECK(cudaDeviceEnablePeerAccess(j, 0));
 				}
 			}
+			xscratch[i] = cuda_devicealloc(1024 * 1024);
 		}
 
 		CUDA_CHECK(cudaSetDevice(0));
@@ -443,6 +445,8 @@ struct CoopArgs {
 	int gpu;
 	int n_gpus;
 
+	void* xscratch;
+
 	float* x;
 	__half* hb;
 	float* q;
@@ -802,6 +806,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	    coopperf,
 	    // multi-gpu state
 	    xbarrier, 0, max(ngpus, 1),
+		xscratch[0],
 	    // token state
 	    x,
 	    (half*)(p->n_experts ? s->he : s->hb),
@@ -844,6 +849,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		for (int i = 1; i < ngpus; i++) {
 			args.perfstats = NULL;
 			args.gpu = i;
+			args.xscratch = xscratch[i];
 			CUDA_CHECK(cudaSetDevice(i));
 			CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
 			CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, coop_smem));
