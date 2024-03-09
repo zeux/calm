@@ -37,6 +37,9 @@ struct CoopLayer {
 	T* w3;
 };
 
+static int ngpus;
+static unsigned int* xbarrier;
+
 static cudaStream_t stream;
 
 static int coopsms;
@@ -66,8 +69,38 @@ static void* cuda_hostalloc(size_t size) {
 	return ptr;
 }
 
+extern "C" void init_cuda() {
+	const char* ng = getenv("CALM_NG");
+	if (ng && atoi(ng)) {
+		ngpus = atoi(ng);
+		printf("# CUDA: Using %d GPUs (experimental)\n", ngpus);
+
+		for (int i = 1; i < ngpus; ++i) {
+			CUDA_CHECK(cudaSetDevice(i));
+			CUDA_CHECK(cudaDeviceEnablePeerAccess(0, 0));
+		}
+
+		CUDA_CHECK(cudaSetDevice(0));
+
+		xbarrier = (unsigned int*)cuda_devicealloc(sizeof(unsigned int) * ngpus);
+		CUDA_CHECK(cudaMemset(xbarrier, 0, sizeof(unsigned int) * ngpus));
+	}
+}
+
 extern "C" void* upload_cuda(void* host, size_t size) {
-	return cuda_devicecopy(host, size);
+	if (ngpus) {
+		void* res = NULL;
+		CUDA_CHECK(cudaMallocManaged(&res, size));
+		memcpy(res, host, size);
+
+		CUDA_CHECK(cudaMemAdvise(res, size, cudaMemAdviseSetReadMostly, 0));
+		for (int i = 0; i < ngpus; i++) {
+			CUDA_CHECK(cudaMemPrefetchAsync(res, size, i));
+		}
+		return res;
+	} else {
+		return cuda_devicecopy(host, size);
+	}
 }
 
 extern "C" void prepare_cuda(struct Transformer* transformer) {
@@ -128,6 +161,14 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	}
 
 	CUDA_CHECK(cudaMemcpyToSymbol(cooplayers, layers, sizeof(layers)));
+
+	if (ngpus) {
+		for (int i = 1; i < ngpus; ++i) {
+			CUDA_CHECK(cudaSetDevice(i));
+			CUDA_CHECK(cudaMemcpyToSymbol(cooplayers, layers, sizeof(layers)));
+		}
+		CUDA_CHECK(cudaSetDevice(0));
+	}
 }
 
 template <typename T>
@@ -349,10 +390,47 @@ __device__ static void syncgrid() {
 	__syncthreads();
 }
 
+__device__ unsigned int load_arrived(volatile unsigned int* arrived) {
+	unsigned int result;
+	asm volatile("ld.acquire.sys.global.u32 %0, [%1];"
+	             : "=r"(result)
+	             : "l"(arrived)
+	             : "memory");
+	return result;
+}
+
+__device__ void store_arrived(volatile unsigned int* arrived, unsigned int val) {
+	asm volatile(
+	    "st.release.sys.global.u32 [%1], %0;" ::"r"(val) "l"(arrived)
+	    : "memory");
+}
+
+__device__ static void syncgrids(int gpu, int n_gpus, volatile unsigned int* xbarrier) {
+	if (xbarrier) {
+		syncgrid();
+
+		if (blockIdx.x == 0 && threadIdx.x == 0) {
+			unsigned int token = xbarrier[gpu] + 1;
+			store_arrived(&xbarrier[gpu], token);
+
+			for (int j = 0; j < n_gpus; ++j) {
+				while (load_arrived(&xbarrier[j]) != token)
+					;
+			}
+		}
+	}
+
+	syncgrid();
+}
+
 template <typename T, typename KVT>
 struct CoopArgs {
 	uint64_t bw;
 	uint64_t* perfstats;
+
+	unsigned int* xbarrier;
+	int gpu;
+	int n_gpus;
 
 	float* x;
 	float* hb;
@@ -418,6 +496,11 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	const int IK = 4; // K consecutive warps per block, groups of K are interleaved across SMs for better work distribution
 	int io = blockIdx.x * IK + (threadIdx.x / warpSize % IK) + gridDim.x * IK * (threadIdx.x / warpSize / IK);
 	int ib = (gridDim.x * blockDim.x) / warpSize;
+	io = args.gpu > 0 ? 0x10000000 : io; // only first GPU will perform work using io..ib split
+
+	// for multigpu-friendly work we can use go..gb split instead which partitions work evenly across GPUs (assuming IK=1)
+	int go = blockIdx.x + gridDim.x * (args.gpu + args.n_gpus * (threadIdx.x / warpSize));
+	int gb = args.n_gpus * gridDim.x * (blockDim.x / warpSize);
 
 	// dummy moe weights for non-moe models; will be overwritten by moe gate
 	moe_weights[0] = 1.f;
@@ -514,7 +597,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		syncgrid();
 		coopstage(args.perfstats, 1);
 
-		if (badsoftmax) {
+		if (args.gpu == 0 && badsoftmax) {
 			// attention softmax
 			if (blockIdx.x < args.n_heads) {
 				int h = blockIdx.x;
@@ -685,27 +768,57 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	coopperfbw[6] += (size_t)p->n_layers * (1 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
 
 	CoopArgs<T, KVT> args = {
-		PROF_TOKEN(bw),
-		coopperf,
-		// token state
-		x, p->n_experts ? s->he : s->hb, s->q, s->att,
-		// key/value cache; note that layers are passed via cooplayers[]
-		(KVT*)s->key_cache, (KVT*)s->value_cache,
-		// model dimensions
-		p->n_layers,
-		dim, hidden_dim, p->head_dim,
-		p->n_heads, p->n_kv_heads, p->n_experts, max(p->n_experts_ac, 1),
-		p->seq_len, p->rotary_dim,
-		// model configuration
-		p->norm_ln, p->act_gelu,
-		// token position (and derived data)
-		kv_len, kv_pos, pos,
-		// model parameters
-		p->norm_eps, log2(p->rope_theta),
+	    PROF_TOKEN(bw),
+	    coopperf,
+	    // multi-gpu state
+	    xbarrier, 0, max(ngpus, 1),
+	    // token state
+	    x,
+	    p->n_experts ? s->he : s->hb,
+	    s->q,
+	    s->att,
+	    // key/value cache; note that layers are passed via cooplayers[]
+	    (KVT*)s->key_cache,
+	    (KVT*)s->value_cache,
+	    // model dimensions
+	    p->n_layers,
+	    dim,
+	    hidden_dim,
+	    p->head_dim,
+	    p->n_heads,
+	    p->n_kv_heads,
+	    p->n_experts,
+	    max(p->n_experts_ac, 1),
+	    p->seq_len,
+	    p->rotary_dim,
+	    // model configuration
+	    p->norm_ln,
+	    p->act_gelu,
+	    // token position (and derived data)
+	    kv_len,
+	    kv_pos,
+	    pos,
+	    // model parameters
+	    p->norm_eps,
+	    log2(p->rope_theta),
 	};
 	void* argsp = &args;
 
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, dim * sizeof(float), stream));
+	size_t coop_smem = dim * sizeof(float);
+
+	CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
+	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, coop_smem, stream));
+
+	if (ngpus) {
+		for (int i = 1; i < ngpus; i++) {
+			args.perfstats = NULL;
+			args.gpu = i;
+			CUDA_CHECK(cudaSetDevice(i));
+			CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
+			CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, coop_smem));
+		}
+		CUDA_CHECK(cudaSetDevice(0));
+	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits

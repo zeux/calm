@@ -22,6 +22,7 @@
 void prepare(struct Transformer* transformer);
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags);
 
+void init_cuda(void);
 void* upload_cuda(void* host, size_t size);
 void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
@@ -474,6 +475,9 @@ int main(int argc, char* argv[]) {
 #ifdef __linux__
 	char* cpu = getenv("CALM_CPU");
 	bool cuda = !cpu || atoi(cpu) == 0;
+	if (cuda) {
+		init_cuda();
+	}
 #endif
 
 	// read .safetensors model
