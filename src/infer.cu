@@ -75,9 +75,13 @@ extern "C" void init_cuda() {
 		ngpus = atoi(ng);
 		printf("# CUDA: Using %d GPUs (experimental)\n", ngpus);
 
-		for (int i = 1; i < ngpus; ++i) {
+		for (int i = 0; i < ngpus; ++i) {
 			CUDA_CHECK(cudaSetDevice(i));
-			CUDA_CHECK(cudaDeviceEnablePeerAccess(0, 0));
+			for (int j = 0; j < ngpus; ++j) {
+				if (i != j) {
+					CUDA_CHECK(cudaDeviceEnablePeerAccess(j, 0));
+				}
+			}
 		}
 
 		CUDA_CHECK(cudaSetDevice(0));
