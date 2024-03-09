@@ -338,7 +338,7 @@ __device__ static void softmax(float* xout, float* x, int size) {
 	}
 }
 
-__device__ static float rmsnorm(float* o, float* x, float* weight, int size, float eps, bool ln) {
+__device__ static float rmsnorm(half* o, float* x, float* weight, int size, float eps, bool ln) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -433,8 +433,9 @@ struct CoopArgs {
 	int n_gpus;
 
 	float* x;
-	float* hb;
+	__half* hb;
 	float* q;
+	__half* ab;
 	float* att;
 
 	KVT* key_cache;
@@ -479,7 +480,7 @@ __device__ static void coopstage(uint64_t* stats, int stage) {
 
 template <typename T, typename KVT>
 __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_constant__ CoopArgs<T, KVT> args) {
-	extern __shared__ float xs[];
+	extern __shared__ half xs[];
 	__shared__ float rmsscale;
 
 	__shared__ float moe_weights[32];
@@ -623,7 +624,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			float res = attn_warpdot(val, atth, args.kv_len);
 
 			if (threadIdx.x % warpSize == 0) {
-				args.q[j] = res;
+				args.ab[j] = res;
 			}
 		}
 
@@ -632,7 +633,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 		// attention output
 		for (int j = io; j < dim; j += ib) {
-			float val = matmul_warppar(args.q, L->wo, j, q_dim);
+			float val = matmul_warppar(args.ab, L->wo, j, q_dim);
 
 			if (threadIdx.x % warpSize == 0) {
 				args.x[j] += val;
@@ -698,7 +699,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 template <typename T>
 __global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, float* rms_weight, int n, int d, float norm_eps, bool norm_ln) {
-	extern __shared__ float xs[];
+	extern __shared__ half xs[];
 
 	float rmsscale = rmsnorm(xs, x, rms_weight, n, norm_eps, norm_ln);
 
@@ -774,8 +775,9 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	    xbarrier, 0, max(ngpus, 1),
 	    // token state
 	    x,
-	    p->n_experts ? s->he : s->hb,
+	    (half*)(p->n_experts ? s->he : s->hb),
 	    s->q,
+	    (half*)s->q,
 	    s->att,
 	    // key/value cache; note that layers are passed via cooplayers[]
 	    (KVT*)s->key_cache,
@@ -804,7 +806,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	};
 	void* argsp = &args;
 
-	size_t coop_smem = dim * sizeof(float);
+	size_t coop_smem = dim * sizeof(half);
 
 	CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
 	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, coop_smem, stream));

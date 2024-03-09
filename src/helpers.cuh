@@ -103,21 +103,21 @@ __device__ inline float matmul(float* x, T* w, int i, int n) {
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for half weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
+__device__ inline float matmul_warppar(half* x, half* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	for (int j = lane * 2; j < n; j += warpSize * 2) {
 		float2 ww = __half22float2(*(half2*)&w[i * n + j]);
-		float2 xx = *(float2*)&x[j];
-		val += ww.x * xx.x;
-		val += ww.y * xx.y;
+		half2 xx = *(half2*)&x[j];
+		val += ww.x * float(xx.x);
+		val += ww.y * float(xx.y);
 	}
 	return warpreduce_sum(val);
 }
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
+__device__ inline float matmul_warppar(half* x, __nv_fp8_e5m2* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	float val = 0.0f;
 	// use 64-bit loads instead of 32-bit loads to increase memory throughput on H100/A100
@@ -125,14 +125,14 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n)
 	// this is performance-neutral on 4090 but results in issues with x[] load coalescing (that are benign)
 	for (int j = lane * 8; j < n; j += warpSize * 8) {
 		ablock<__nv_fp8x4_e5m2, 2> wwp = *(ablock<__nv_fp8x4_e5m2, 2>*)&w[i * n + j];
+		ablock<half, 8> xx = *(ablock<half, 8>*)&x[j];
 #pragma unroll
 		for (int k = 0; k < 2; ++k) {
 			float4 ww = fp8x4_e5m2_ff(wwp.v[k]);
-			float4 xx = *(float4*)&x[j + k * 4];
-			val += ww.x * xx.x;
-			val += ww.y * xx.y;
-			val += ww.z * xx.z;
-			val += ww.w * xx.w;
+			val += ww.x * float(xx.v[k * 4 + 0]);
+			val += ww.y * float(xx.v[k * 4 + 1]);
+			val += ww.z * float(xx.v[k * 4 + 2]);
+			val += ww.w * float(xx.v[k * 4 + 3]);
 		}
 	}
 	return warpreduce_sum(val);
@@ -140,7 +140,7 @@ __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n)
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
-__device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
+__device__ inline float matmul_warppar(half* x, uint32_t* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	if (n % (warpSize * 16) == 0) {
 		float val = 0.0f;
@@ -148,16 +148,16 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 			uint32_t wg0 = w[i * n / 8 + j / 8];
 			uint32_t wg1 = w[i * n / 8 + j / 8 + warpSize];
 
-			ablock<float, 8> xx0 = *(ablock<float, 8>*)&x[j];
+			ablock<half, 8> xx0 = *(ablock<half, 8>*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wg0, k) * xx0.v[k];
+				val += gf4_ff(wg0, k) * float(xx0.v[k]);
 			}
 
-			ablock<float, 8> xx1 = *(ablock<float, 8>*)&x[j + warpSize * 8];
+			ablock<half, 8> xx1 = *(ablock<half, 8>*)&x[j + warpSize * 8];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wg1, k) * xx1.v[k];
+				val += gf4_ff(wg1, k) * float(xx1.v[k]);
 			}
 		}
 		return warpreduce_sum(val);
@@ -166,10 +166,10 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 		for (int j = lane * 8; j < n; j += warpSize * 8) {
 			uint32_t wg = w[i * n / 8 + j / 8];
 
-			ablock<float, 8> xx = *(ablock<float, 8>*)&x[j];
+			ablock<half, 8> xx = *(ablock<half, 8>*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wg, k) * xx.v[k];
+				val += gf4_ff(wg, k) * float(xx.v[k]);
 			}
 		}
 		return warpreduce_sum(val);
