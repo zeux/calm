@@ -862,7 +862,7 @@ extern "C" float* forward_cuda(struct Transformer* transformer, int token, int p
 
 	assert(ngpus > 0);
 	assert(ngpus >= transformer->config.n_experts_ac);
-	assert(transformer->config.n_experts_ac % ngpus == 0);
+	assert(ngpus % transformer->config.n_experts_ac == 0);
 
 	// CASE(4, uint32_t, 8, __nv_fp8_e5m2);
 	// CASE(4, uint32_t, 16, __half);
