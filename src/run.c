@@ -61,7 +61,8 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->act_gelu = act_type && strcmp(act_type, "gelu") == 0;
 
 	const char* norm_type = tensors_metadata_find(tensors, "norm_type");
-	config->norm_ln = norm_type && strcmp(norm_type, "layernorm") == 0; // note: we currently don't support layernorm bias
+	config->norm_ln = norm_type && strncmp(norm_type, "layernorm", 9) == 0;  // note: we currently don't support layernorm bias
+	config->norm_par = norm_type && strcmp(norm_type, "layernorm_par") == 0; // note: we currently don't support layernorm bias
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {
@@ -76,7 +77,10 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 
 	for (int l = 0; l < config->n_layers; ++l) {
 		weights->rms_att_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
-		weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+
+		if (!config->norm_par) {
+			weights->rms_ffn_weight[l] = (float*)tensors_get(tensors, "model.layers.%d.mlp.norm.weight", l, dt_f32, (int[]){config->dim, 0, 0, 0});
+		}
 
 		weights->wq[l] = tensors_get(tensors, "model.layers.%d.attn.wq.weight", l, wtype, (int[]){config->n_heads * config->head_dim, config->dim / gsize, 0, 0});
 		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});

@@ -401,8 +401,10 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			x[i] += s->hb[i];
 		}
 
-		// ffn rmsnorm
-		rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps, p->norm_ln);
+		if (!p->norm_par) {
+			// ffn rmsnorm
+			rmsnorm(s->xb, x, w->rms_ffn_weight[l], dim, p->norm_eps, p->norm_ln);
+		}
 
 		float* moe_weights = s->exp + p->n_experts;
 		int* moe_experts = (int*)moe_weights + p->n_experts_ac;

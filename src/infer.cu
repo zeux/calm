@@ -556,7 +556,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
-		rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
+		if (L->rms_ffn_weight) {
+			rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
+		}
 
 		// moegate
 		if (args.n_experts) {
