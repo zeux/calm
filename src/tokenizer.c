@@ -208,7 +208,7 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 
 		if (codepoint[0] == '<' && *c == '|') {
 			// special token, skip until '|>'
-			char* e = c;
+			char* e = c + 1;
 			while (*e && !(e[0] == '|' && e[1] == '>')) {
 				e++;
 			}
