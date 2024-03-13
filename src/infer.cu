@@ -312,10 +312,14 @@ __device__ static float rmsnorm(T* o, float* x, float* weight, int size, float e
 
 	// calculate sum of squares (per thread)
 	float ss = 0.0f;
-	for (int j = i; j < size; j += blockSize) {
-		float v = x[j] - mean;
-		ss += v * v;
-		o[j] = v * weight[j];
+	for (int j = i * 2; j < size; j += blockSize * 2) {
+		float2 xx = *(float2*)&x[j];
+		float2 ww = *(float2*)&weight[j];
+		float v0 = xx.x - mean;
+		float v1 = xx.y - mean;
+		ss += v0 * v0;
+		ss += v1 * v1;
+		*(ablock<T, 2>*)&o[j] = { v0 * ww.x, v1 * ww.y };
 	}
 
 	// sum across threads in block
