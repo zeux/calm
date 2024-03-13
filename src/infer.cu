@@ -712,7 +712,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	};
 	void* argsp = &args;
 
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT, AT>, coopsms, 1024, &argsp, dim * sizeof(float), stream));
+	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT, AT>, coopsms, 1024, &argsp, dim * sizeof(AT), stream));
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
@@ -721,10 +721,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	int output_blk = 32 * 32;
 	int output_par = 1;
-	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T, AT>, output_blk, dim * sizeof(float)));
+	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T, AT>, output_blk, dim * sizeof(AT)));
 
 	// classifier into logits
-	kernel_output<T, AT><<<coopsms * output_par, output_blk, dim * sizeof(float), stream>>>(
+	kernel_output<T, AT><<<coopsms * output_par, output_blk, dim * sizeof(AT), stream>>>(
 	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_ln);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
