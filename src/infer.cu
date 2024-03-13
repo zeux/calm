@@ -293,7 +293,8 @@ __device__ static void softmax(float* xout, float* x, int size) {
 	}
 }
 
-__device__ static float rmsnorm(float* o, float* x, float* weight, int size, float eps, bool ln) {
+template <typename T>
+__device__ static float rmsnorm(T* o, float* x, float* weight, int size, float eps, bool ln) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -395,13 +396,15 @@ __device__ static void coopstage(uint64_t* stats, int stage) {
 	}
 }
 
-template <typename T, typename KVT>
+template <typename T, typename KVT, typename AT>
 __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_constant__ CoopArgs<T, KVT> args) {
-	extern __shared__ float xs[];
+	extern __shared__ char smem[];
 	__shared__ float rmsscale;
 
 	__shared__ float moe_weights[32];
 	__shared__ int moe_experts[32];
+
+	AT* xs = (AT*)smem;
 
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
@@ -611,9 +614,11 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	}
 }
 
-template <typename T>
+template <typename T, typename AT>
 __global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, float* rms_weight, int n, int d, float norm_eps, bool norm_ln) {
-	extern __shared__ float xs[];
+	extern __shared__ char smem[];
+
+	AT* xs = (AT*)smem;
 
 	float rmsscale = rmsnorm(xs, x, rms_weight, n, norm_eps, norm_ln);
 
@@ -632,7 +637,7 @@ __global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, floa
 	}
 }
 
-template <typename T, typename KVT>
+template <typename T, typename KVT, typename AT = float>
 static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	struct Config* p = &transformer->config;
 	struct Weights* w = &transformer->weights;
@@ -703,7 +708,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	};
 	void* argsp = &args;
 
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, dim * sizeof(float), stream));
+	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT, AT>, coopsms, 1024, &argsp, dim * sizeof(float), stream));
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
@@ -712,10 +717,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	int output_blk = 32 * 32;
 	int output_par = 1;
-	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T>, output_blk, dim * sizeof(float)));
+	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T, AT>, output_blk, dim * sizeof(float)));
 
 	// classifier into logits
-	kernel_output<<<coopsms * output_par, output_blk, dim * sizeof(float), stream>>>(
+	kernel_output<T, AT><<<coopsms * output_par, output_blk, dim * sizeof(float), stream>>>(
 	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_ln);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -725,16 +730,16 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
-#define CASE(dbits_, dtype, kvbits_, kvtype)                                          \
+#define CASE(dbits_, dtype, kvbits_, kvtype, atype)                                   \
 	if (transformer->weights.dbits == dbits_ && transformer->state.kvbits == kvbits_) \
-	return forward<dtype, kvtype>(transformer, token, pos, flags)
+	return forward<dtype, kvtype, atype>(transformer, token, pos, flags)
 
-	CASE(4, uint32_t, 8, __nv_fp8_e5m2);
-	CASE(4, uint32_t, 16, __half);
-	CASE(8, __nv_fp8_e5m2, 8, __nv_fp8_e5m2);
-	CASE(8, __nv_fp8_e5m2, 16, __half);
-	CASE(16, __half, 8, __nv_fp8_e5m2);
-	CASE(16, __half, 16, __half);
+	CASE(4, uint32_t, 8, __nv_fp8_e5m2, float);
+	CASE(4, uint32_t, 16, __half, float);
+	CASE(8, __nv_fp8_e5m2, 8, __nv_fp8_e5m2, float);
+	CASE(8, __nv_fp8_e5m2, 16, __half, float);
+	CASE(16, __half, 8, __nv_fp8_e5m2, float);
+	CASE(16, __half, 16, __half, float);
 
 	assert(!"Unsupported dbits/kvbits combination for CUDA: dbits must be 4, 8 or 16, kvbits must be 8 or 16");
 	return NULL;
