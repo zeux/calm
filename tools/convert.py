@@ -287,8 +287,13 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
         n_heads = config["num_attention_heads"]
         n_kv_heads = config.get("num_key_value_heads", n_heads)
 
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, rotary_dim))
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, rotary_dim))
+        if arch == "cohere":
+            tensors[f"model.layers.{l}.attn.wq.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"])
+            tensors[f"model.layers.{l}.attn.wk.weight"] = conv(weights[f"model.layers.{l}.self_attn.k_proj.weight"])
+        else:
+            tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, rotary_dim))
+            tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, rotary_dim))
+
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
 
