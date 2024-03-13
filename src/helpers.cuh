@@ -116,6 +116,19 @@ __device__ inline float matmul_warppar(float* x, half* w, int i, int n) {
 }
 
 // warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
+// specialized for half weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
+__device__ inline float matmul_warppar(half* x, half* w, int i, int n) {
+	int lane = threadIdx.x % warpSize;
+	half2 val = {0, 0};
+	for (int j = lane * 2; j < n; j += warpSize * 2) {
+		half2 ww = *(half2*)&w[i * n + j];
+		half2 xx = *(half2*)&x[j];
+		val = __hfma2(ww, xx, val);
+	}
+	return warpreduce_sum(float(val.x + val.y));
+}
+
+// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
 // specialized for fp8 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(float* x, __nv_fp8_e5m2* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
