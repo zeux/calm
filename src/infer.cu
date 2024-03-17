@@ -133,17 +133,12 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	CUDA_CHECK(cudaStreamCreate(&stream));
 
 	int dim = config->dim;
-	int hidden_dim = config->hidden_dim;
 	int q_dim = config->head_dim * config->n_heads;
 	int kv_dim = config->head_dim * config->n_kv_heads;
 
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
-	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
-	CUDA_CHECK(cudaSetDevice(1));
-	state->hb2 = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
-	CUDA_CHECK(cudaSetDevice(0));
 	state->q = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * 2 * sizeof(float));
 
@@ -455,8 +450,6 @@ struct CoopArgs {
 	float* x;
 	float* xb;
 	float* xb2;
-	__half* hb;
-	__half* hb2;
 	float* q;
 	__half* ab;
 	float* att;
@@ -713,7 +706,6 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// important!!! careful with distribution/handling
 		int e = args.gpu % 2;
 
-		half* he = e == 0 ? args.hb : args.hb2;
 		float* xe = e == 0 ? args.xb : args.xb2;
 		int hdg = hidden_dim / (args.n_gpus / 2);
 		int hdo = (args.gpu / 2) * hdg;
@@ -726,26 +718,18 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 			float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
-			if (threadIdx.x % warpSize == 0) {
-				he[j + hdo] = val;
-			}
+			if (threadIdx.x % warpSize < args.n_gpus && (threadIdx.x % warpSize) % 2 == e) {
+				half* hscratch = (half*)args.xscratch[threadIdx.x % warpSize] + dim;
+				hscratch[j + hdo] = val;
+ 			}
 		}
 
 		syncgrid();
 		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
-
-		__syncthreads();
-
-		half* hscratch = (half*)xscratch + dim;
-		if (blockIdx.x == 0) {
-			for (int j = threadIdx.x * 8; j < hidden_dim; j += blockDim.x * 8) {
-				*(float4*)&hscratch[j] = *(float4*)&he[j];
-			}
-		}
-
 		syncgrid();
 		coopstage(args.perfstats, 5);
 
+		half* hscratch = (half*)xscratch + dim;
 		int xdg = dim / (args.n_gpus / 2);
 		int xdo = (args.gpu / 2) * xdg;
 
@@ -866,8 +850,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	    x,
 	    s->xb,
 	    s->xb2,
-	    (half*)s->hb,
-	    (half*)s->hb2,
 	    s->q,
 	    (half*)s->q,
 	    s->att,
