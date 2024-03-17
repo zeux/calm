@@ -659,29 +659,25 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			float val = matmul_warppar(args.ab, L->wo, j, q_dim);
 
 			if (threadIdx.x % warpSize == 0) {
-				args.x[j] += val;
+				val += args.x[j];
+				args.x[j] = val;
+			}
+			val = __shfl_sync(0xffffffff, val, 0);
+
+			if (threadIdx.x % warpSize < args.n_gpus) {
+				float* xscratch = (float*)args.xscratch[threadIdx.x % warpSize];
+				xscratch[j] = val;
 			}
 		}
 
 		syncgrid();
 		syncgpus(args.gpu, args.n_gpus, args.xbarrier);
-
-		__syncthreads();
-
-		float* xscratch = (float*)args.xscratch[args.gpu];
-		if (blockIdx.x == 0) {
-			for (int j = threadIdx.x * 4; j < dim; j += blockDim.x * 4) {
-				*(float4*)&xscratch[j] = *(float4*)&args.x[j];
-			}
-		}
-
 		syncgrid();
 		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
-		if (L->rms_ffn_weight) {
-			rmsscale = rmsnorm(xs, xscratch, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
-		}
+		float* xscratch = (float*)args.xscratch[args.gpu];
+		rmsscale = rmsnorm(xs, xscratch, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
 
 		// moegate
 		if (args.n_experts) {
