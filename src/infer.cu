@@ -140,9 +140,9 @@ extern "C" void prepare_cuda(struct Transformer* transformer) {
 	state->x = (float*)cuda_devicealloc(dim * sizeof(float));
 	state->hb = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
 	state->xb = (float*)cuda_devicealloc(dim * sizeof(float));
+	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
 	CUDA_CHECK(cudaSetDevice(1));
 	state->hb2 = (float*)cuda_devicealloc(hidden_dim * sizeof(float));
-	state->xb2 = (float*)cuda_devicealloc(dim * sizeof(float));
 	CUDA_CHECK(cudaSetDevice(0));
 	state->q = (float*)cuda_devicealloc(q_dim * sizeof(float));
 	state->att = (float*)cuda_devicealloc(config->n_heads * config->seq_len * 2 * sizeof(float));
@@ -711,7 +711,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		}
 
 		// important!!! careful with distribution/handling
-		int e = args.gpu % args.n_experts_ac;
+		int e = args.gpu % 2;
 
 		half* he = e == 0 ? args.hb : args.hb2;
 		float* xe = e == 0 ? args.xb : args.xb2;
