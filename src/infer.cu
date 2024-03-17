@@ -687,7 +687,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 		// post-attention rmsnorm (into shared memory)
 		if (L->rms_ffn_weight) {
-			rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
+			rmsscale = rmsnorm(xs, xscratch, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
 		}
 
 		// moegate
