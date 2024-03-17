@@ -24,7 +24,8 @@ struct Config {
 	int n_experts_ac;  // number of active experts for MoE models
 	float norm_eps;    // epsilon for layer normalization
 	bool act_gelu;     // use GELU activation function
-	bool norm_ln;     /// use full LN normalization
+	bool norm_ln;      // use full LN normalization
+	bool norm_par;     // use parallel MLP/attention by omitting intermediate normalization
 };
 
 struct Weights {

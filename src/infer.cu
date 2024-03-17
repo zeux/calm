@@ -272,14 +272,10 @@ __device__ static void moe_gate_warp(float* moe_weights, int* moe_experts, float
 	}
 }
 
-union half4 {
-	float2 g;
-	half h[4];
-};
-
 __device__ inline float4 attn_load4(half* p) {
-	half4 h = *(half4*)p;
-	return {__half2float(h.h[0]), __half2float(h.h[1]), __half2float(h.h[2]), __half2float(h.h[3])};
+	ablock<__half2_raw, 2> h = *(ablock<__half2_raw, 2>*)p;
+	float2 h0 = __half22float2(h.v[0]), h1 = __half22float2(h.v[1]);
+	return {h0.x, h0.y, h1.x, h1.y};
 }
 
 __device__ inline float4 attn_load4(__nv_fp8_e5m2* p) {
@@ -348,7 +344,8 @@ __device__ static void softmax(float* xout, float* x, int size) {
 	}
 }
 
-__device__ static float rmsnorm(half* o, float* x, float* weight, int size, float eps, bool ln) {
+template <typename T>
+__device__ static float rmsnorm(T* o, float* x, float* weight, int size, float eps, bool ln) {
 	int i = threadIdx.x;
 	int blockSize = blockDim.x;
 
@@ -366,10 +363,14 @@ __device__ static float rmsnorm(half* o, float* x, float* weight, int size, floa
 
 	// calculate sum of squares (per thread)
 	float ss = 0.0f;
-	for (int j = i; j < size; j += blockSize) {
-		float v = x[j] - mean;
-		ss += v * v;
-		o[j] = v * weight[j];
+	for (int j = i * 2; j < size; j += blockSize * 2) {
+		float2 xx = *(float2*)&x[j];
+		float2 ww = *(float2*)&weight[j];
+		float v0 = xx.x - mean;
+		float v1 = xx.y - mean;
+		ss += v0 * v0;
+		ss += v1 * v1;
+		*(ablock<T, 2>*)&o[j] = { v0 * ww.x, v1 * ww.y };
 	}
 
 	// sum across threads in block
@@ -500,13 +501,16 @@ __device__ static void coopstage(uint64_t* stats, int stage) {
 	}
 }
 
-template <typename T, typename KVT>
+template <typename T, typename KVT, typename AT>
 __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_constant__ CoopArgs<T, KVT> args) {
-	extern __shared__ half xs[];
+	extern __shared__ char smem[];
+
 	__shared__ float rmsscale;
 
 	__shared__ float moe_weights[32];
 	__shared__ int moe_experts[32];
+
+	AT* xs = (AT*)smem;
 
 	int dim = args.dim;
 	int hidden_dim = args.hidden_dim;
@@ -682,7 +686,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		coopstage(args.perfstats, 4);
 
 		// post-attention rmsnorm (into shared memory)
-		rmsscale = rmsnorm(xs, xscratch, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
+		if (L->rms_ffn_weight) {
+			rmsscale = rmsnorm(xs, args.x, L->rms_ffn_weight, dim, args.norm_eps, args.norm_ln);
+		}
 
 		// moegate
 		if (args.n_experts) {
@@ -775,9 +781,11 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 	}
 }
 
-template <typename T>
+template <typename T, typename AT>
 __global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, float* rms_weight, int n, int d, float norm_eps, bool norm_ln) {
-	extern __shared__ half xs[];
+	extern __shared__ char smem[];
+
+	AT* xs = (AT*)smem;
 
 	float rmsscale = rmsnorm(xs, x, rms_weight, n, norm_eps, norm_ln);
 
@@ -796,7 +804,7 @@ __global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, floa
 	}
 }
 
-template <typename T, typename KVT>
+template <typename T, typename KVT, typename AT = float>
 static float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	struct Config* p = &transformer->config;
 	struct Weights* w = &transformer->weights;
@@ -824,7 +832,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	// rotate sink tokens forward to keep pace with non-sink tokens
 	if (kv_sink > 0) {
 		kernel_rotate_sink<<<dim3(kv_sink * kv_dim / 64, p->n_layers), 32, 0, stream>>>(
-			PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, p->head_dim, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
+		    PROF_TOKEN(kv_sink * kv_dim * sizeof(KVT)), kv_dim, (KVT*)s->key_cache, p->head_dim, kv_sink, log2(p->rope_theta), p->seq_len, p->rotary_dim);
 	}
 
 	// forward all the layers
@@ -890,10 +898,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	};
 	void* argsp = &args;
 
-	size_t coop_smem = dim * sizeof(half);
+	size_t coop_smem = dim * sizeof(AT);
 
-	CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
-	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, coop_smem, stream));
+	CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT, AT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
+	CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT, AT>, coopsms, 1024, &argsp, coop_smem, stream));
 
 	if (ngpus) {
 		for (int i = 1; i < ngpus; i++) {
@@ -901,8 +909,8 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 			args.gpu = i;
 			args.xscratch = xscratch[i];
 			CUDA_CHECK(cudaSetDevice(i));
-			CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
-			CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT>, coopsms, 1024, &argsp, coop_smem));
+			CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT, AT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
+			CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT, AT>, coopsms, 1024, &argsp, coop_smem));
 		}
 		CUDA_CHECK(cudaSetDevice(0));
 	}
@@ -914,10 +922,10 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 
 	int output_blk = 32 * 32;
 	int output_par = 1;
-	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T>, output_blk, dim * sizeof(float)));
+	CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&output_par, kernel_output<T, AT>, output_blk, dim * sizeof(AT)));
 
 	// classifier into logits
-	kernel_output<<<coopsms * output_par, output_blk, dim * sizeof(float), stream>>>(
+	kernel_output<T, AT><<<coopsms * output_par, output_blk, dim * sizeof(AT), stream>>>(
 	    PROF_TOKEN(p->vocab_size * dim * dbits / 8), s->logits, x, (T*)w->wcls, w->rms_final_weight, dim, p->vocab_size, p->norm_eps, p->norm_ln);
 
 	CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -927,18 +935,18 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 }
 
 extern "C" float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags) {
-#define CASE(dbits_, dtype, kvbits_, kvtype)                                          \
+#define CASE(dbits_, dtype, kvbits_, kvtype, atype)                                   \
 	if (transformer->weights.dbits == dbits_ && transformer->state.kvbits == kvbits_) \
-	return forward<dtype, kvtype>(transformer, token, pos, flags)
+	return forward<dtype, kvtype, atype>(transformer, token, pos, flags)
 
 	assert(ngpus > 0);
 	assert(ngpus >= transformer->config.n_experts_ac);
 	assert(ngpus % transformer->config.n_experts_ac == 0);
 
-	// CASE(4, uint32_t, 8, __nv_fp8_e5m2);
-	// CASE(4, uint32_t, 16, __half);
-	CASE(8, __nv_fp8_e5m2, 8, __nv_fp8_e5m2);
-	CASE(8, __nv_fp8_e5m2, 16, __half);
+	// CASE(4, uint32_t, 8, __nv_fp8_e5m2, float);
+	// CASE(4, uint32_t, 16, __half, float);
+	CASE(8, __nv_fp8_e5m2, 8, __nv_fp8_e5m2, __half);
+	CASE(8, __nv_fp8_e5m2, 16, __half, __half);
 	// CASE(16, __half, 8, __nv_fp8_e5m2);
 	// CASE(16, __half, 16, __half);
 

@@ -38,8 +38,7 @@ calm supports a subset of decoder-only transformer architectures:
 - RoPE enhancements (partial rotary dimension, independent head dimension)
 - SiLU or GELU FFN gate activation
 - RMSNorm or LayerNorm* normalization (no bias support)
-- Optional QKV bias
-- Optional weight tying with scalar embedding scaling
+- Optional minor variations (QKV bias, tied embeddings)
 - Optional mixture of experts (with top-k expert selection)
 
 It has been tested on following models:
@@ -51,8 +50,9 @@ It has been tested on following models:
 | Qwen2 | [Qwen1.5 0.5B](https://huggingface.co/Qwen/Qwen1.5-0.5B), [Qwen1.5 1.8B](https://huggingface.co/Qwen/Qwen1.5-1.8B), [Qwen1.5 4B](https://huggingface.co/Qwen/Qwen1.5-4B), [Qwen1.5 7B](https://huggingface.co/Qwen/Qwen1.5-7B), [Qwen1.5 14B](https://huggingface.co/Qwen/Qwen1.5-14B) |
 | Mixtral | [Mixtral 8x7B](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1), [GritLM 8x7B](https://huggingface.co/GritLM/GritLM-8x7B) |
 | OLMo    | [OLMo 1B](https://huggingface.co/allenai/OLMo-1B), [OLMo 7B](https://huggingface.co/allenai/OLMo-7B) |
-| Gemma   | [Gemma 2B](https://huggingface.co/google/gemma-2b-it), [Gemma 7B](https://huggingface.co/google/gemma-7b-it) |
+| Gemma   | [Gemma 2B](https://huggingface.co/google/gemma-2b-it), [Gemma 7B](https://huggingface.co/google/gemma-7b-it) (*note: 7B version has issues with fp8 quantization*)  |
 | MiniCPM | [MiniCPM 2B](https://huggingface.co/openbmb/MiniCPM-2B-dpo-bf16) |
+| Cohere | [Command-R](https://huggingface.co/CohereForAI/c4ai-command-r-v01) |
 
 ## Supported formats
 
@@ -62,7 +62,7 @@ Model weights support `fp16`, `fp8` and `gf4` formats; the weight type is specif
 
 `fp8` corresponds to 8-bit floating point (e5m2). Using `fp8` carries a ~0.5% perplexity penalty at almost double the inference speed and half the model size. e4m3 variant of `fp8` would result in a much smaller perplexity penalty (~0.1%) with basic tensor scaling, but it's currently not used because of performance issues wrt floating-point conversion.
 
-`gf4` corresponds to 4-bit grouped floating point (8 values are stored in 32 bits using 3 bit quantized scale per value and one fp8 group scale). Using `gf4` currently carries a ~5% perplexity penalty but increases inference speed by ~75% and halves the model size compared to `fp8`. Quantization code is currently naive and further improvements are planned. Unlike llama.cpp's K-quants, `gf4` quantization is pure and uniform - all layers are quantized to exactly 4 bits per weight.
+`gf4` corresponds to 4-bit grouped floating point (8 values are stored in 32 bits using 3 bit quantized scale per value and one fp8 group scale). Using `gf4` currently carries a perplexity penalty but increases inference speed by ~75% and halves the model size compared to `fp8`. Unlike llama.cpp's K-quants, `gf4` quantization is pure and uniform - all layers are quantized to exactly 4 bits per weight.
 
 KV cache is using `fp16` by default; when using longer contexts (> 4096), CUDA implementation automatically switches to `fp8` to improve memory/performance. This comes at a small perplexity cost.
 

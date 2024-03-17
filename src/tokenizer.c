@@ -206,6 +206,28 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 
 		codepoint[0] = *c++;
 
+		if (codepoint[0] == '<' && *c == '|') {
+			// special token, skip until '|>'
+			char* e = c + 1;
+			while (*e && !(e[0] == '|' && e[1] == '>')) {
+				e++;
+			}
+			if (e[0] == '|' && e[1] == '>' && e - c + 3 <= MAX_TOKEN_LENGTH) {
+				// we found the end of the special token, try to encode it as is
+				char special[MAX_TOKEN_LENGTH + 1];
+				memcpy(special, c - 1, e - c + 3);
+				special[e - c + 3] = '\0';
+
+				int sid = str_lookup(special, tokenizer->sorted_vocab, tokenizer->vocab_size);
+				if (sid != -1) {
+					// we found special codepoint in vocab, add it as a token
+					tokens[n_tokens++] = sid;
+					c = e + 2;
+					continue;
+				}
+			}
+		}
+
 		// this byte is a leading byte (11...), so it's a multi-byte UTF8 codepoint
 		if ((codepoint[0] & 0xC0) == 0xC0) {
 			for (int i = 1; i < 4 && (*c & 0xC0) == 0x80; ++i) {

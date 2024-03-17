@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"]:
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -68,8 +68,8 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = int(metadata["head_dim"] * config.get("partial_rotary_factor", 1))
-    metadata["norm_eps"] = config["rms_norm_eps"]
-    metadata["norm_type"] = "rmsnorm"
+    metadata["norm_eps"] = config["layer_norm_eps"] if arch == "cohere" else config["rms_norm_eps"]
+    metadata["norm_type"] = "layernorm_par" if arch == "cohere" else "rmsnorm"
 
     assert config["hidden_act"] in ["gelu", "silu"]
     metadata["act_type"] = config["hidden_act"]
@@ -128,6 +128,9 @@ if ext == ".json":
 
     for t, i in vocab.items():
         tokens[i] = t
+
+    for added in tokenizer["added_tokens"]:
+        tokens[added["id"]] = added["content"]
 
     # compute score as negative merge index so that earlier merges get selected first
     for i, m in enumerate(tokenizer["model"]["merges"]):
@@ -263,6 +266,8 @@ elif arch == "gemma":
 
     weights["model.norm.weight"] *= 1 / embed_scale
     weights["model.embed_tokens.weight"] = weights["model.embed_tokens.weight"].float() * embed_scale
+elif arch == "cohere":
+    weights["model.norm.weight"] *= config["logit_scale"]
 
 # convert weights
 progress = 0
@@ -272,7 +277,7 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
@@ -282,8 +287,13 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
         n_heads = config["num_attention_heads"]
         n_kv_heads = config.get("num_key_value_heads", n_heads)
 
-        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, rotary_dim))
-        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, rotary_dim))
+        if arch == "cohere":
+            tensors[f"model.layers.{l}.attn.wq.weight"] = conv(weights[f"model.layers.{l}.self_attn.q_proj.weight"])
+            tensors[f"model.layers.{l}.attn.wk.weight"] = conv(weights[f"model.layers.{l}.self_attn.k_proj.weight"])
+        else:
+            tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.q_proj.weight"], n_heads, rotary_dim))
+            tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.weight"], n_kv_heads, rotary_dim))
+
         tensors[f"model.layers.{l}.attn.wv.weight"] = conv(weights[f"model.layers.{l}.self_attn.v_proj.weight"])
         tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
 
@@ -294,7 +304,8 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
                 weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
             ])
 
-        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
+        if arch != "cohere":
+            tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
 
         if arch in ["mixtral"]:
             tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.block_sparse_moe.gate.weight"])
@@ -308,7 +319,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm"]:
             tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
     tensors["model.norm.weight"] = weights["model.norm.weight"].float()
-    if arch not in ["gemma", "minicpm"]:
+    if arch not in ["gemma", "minicpm", "cohere"]:
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "olmo":
     tensors["model.embed.weight"] = conv(weights["model.transformer.wte.weight"])
