@@ -450,7 +450,7 @@ struct CoopArgs {
 	int gpu;
 	int n_gpus;
 
-	void* xscratch;
+	void* xscratch[8];
 
 	float* x;
 	float* xb;
@@ -675,7 +675,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 
 		__syncthreads();
 
-		float* xscratch = (float*)args.xscratch;
+		float* xscratch = (float*)args.xscratch[args.gpu];
 		if (blockIdx.x == 0) {
 			for (int j = threadIdx.x * 4; j < dim; j += blockDim.x * 4) {
 				*(float4*)&xscratch[j] = *(float4*)&args.x[j];
@@ -861,7 +861,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	    xbarrier,
 	    0,
 	    max(ngpus, 1),
-	    xscratch[0],
+	    { xscratch[0], xscratch[1], xscratch[2], xscratch[3], xscratch[4], xscratch[5], xscratch[6], xscratch[7] },
 	    // token state
 	    x,
 	    s->xb,
@@ -907,7 +907,6 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		for (int i = 1; i < ngpus; i++) {
 			args.perfstats = NULL;
 			args.gpu = i;
-			args.xscratch = xscratch[i];
 			CUDA_CHECK(cudaSetDevice(i));
 			CUDA_CHECK(cudaFuncSetAttribute((void*)kernel_forward<T, KVT, AT>, cudaFuncAttributeMaxDynamicSharedMemorySize, coop_smem));
 			CUDA_CHECK(cudaLaunchCooperativeKernel((void*)kernel_forward<T, KVT, AT>, coopsms, 1024, &argsp, coop_smem));
