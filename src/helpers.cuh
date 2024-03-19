@@ -222,3 +222,10 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 	}
 }
 
+__device__ inline unsigned int warpacc(volatile unsigned int* mask, float* cell, int index, float value) {
+	while (*mask & (1u << index))
+		;
+	*cell = value;
+	unsigned int res = atomicOr_block((unsigned int*)mask, 1u << index);
+	return res | (1u << index);
+}
