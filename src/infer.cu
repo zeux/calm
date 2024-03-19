@@ -550,8 +550,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			T* w = j < q_dim ? L->wq : (j < q_dim + kv_dim ? L->wk : L->wv);
 			int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
-			float v0 = matmul_warppar(xs, w, k + 0, dim) * rmsscale;
-			float v1 = matmul_warppar(xs, w, k + 1, dim) * rmsscale;
+			float v0 = matmul_warppar(xs, w, k + 0, dim, dim) * rmsscale;
+			float v1 = matmul_warppar(xs, w, k + 1, dim, dim) * rmsscale;
 
 			if (L->bqkv) {
 				v0 += L->bqkv[j + 0];
@@ -656,7 +656,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// attention output
 		if (args.gpu == 0)
 		for (int j = io; j < dim; j += ib) {
-			float val = matmul_warppar(args.ab, L->wo, j, q_dim);
+			float val = matmul_warppar(args.ab, L->wo, j, q_dim, q_dim);
 
 			if (threadIdx.x % warpSize == 0) {
 				val += args.x[j];
@@ -685,7 +685,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			int j = threadIdx.x / warpSize;
 
 			if (j < args.n_experts) {
-				float val = matmul_warppar(xs, L->moegate, j, dim) * rmsscale;
+				float val = matmul_warppar(xs, L->moegate, j, dim, dim) * rmsscale;
 
 				exp[j] = val;
 			}
@@ -709,8 +709,8 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// F.silu(self.w1(x)) * self.w3(x)
 		for (int j = io; j < hdg; j += ib) {
 			int je = j + hdo + moe_experts[e] * hidden_dim;
-			float v1 = matmul_warppar(xs, L->w1, je, dim) * rmsscale;
-			float v3 = matmul_warppar(xs, L->w3, je, dim) * rmsscale;
+			float v1 = matmul_warppar(xs, L->w1, je, dim, dim) * rmsscale;
+			float v3 = matmul_warppar(xs, L->w3, je, dim, dim) * rmsscale;
 
 			float val = (args.act_gelu ? gelu(v1) : silu(v1)) * v3;
 
@@ -732,7 +732,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 		// self.w2(...) + pre-rmsnorm residual
 		for (int j = io; j < xdg; j += ib) {
 			int je = j + xdo + moe_experts[e] * dim;
-			float val = matmul_warppar(hscratch, L->w2, je, hidden_dim) * moe_weights[e];
+			float val = matmul_warppar(hscratch, L->w2, je, hidden_dim, hidden_dim) * moe_weights[e];
 
 			if (threadIdx.x % warpSize == 0) {
 				xe[j + xdo] = val;
@@ -773,7 +773,7 @@ __global__ static void kernel_output(uint64_t, float* xout, float* x, T* w, floa
 	int ib = (gridDim.x * blockDim.x) / warpSize;
 
 	for (int j = io; j < d; j += ib) {
-		float val = matmul_warppar(xs, w, j, n) * rmsscale;
+		float val = matmul_warppar(xs, w, j, n, n) * rmsscale;
 
 		// instead of writing one value per block, we transpose the values and write all results from first warp
 		val = blocktranspose(val, 0.f);
