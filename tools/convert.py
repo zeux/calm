@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2"]:
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -167,11 +167,11 @@ gpt2_decode = {v: k for k, v in gpt2_bytes_to_unicode().items()}
 for i, t in enumerate(tokens):
     if tokens_gpt2:
         b = bytes([gpt2_decode.get(c, 0) for c in t])
-        b = b.replace(b"\0", b"\7") # replace null bytes with bell characters
     else:
         t = t.replace('\u2581', ' ') # sentencepiece uses this character as whitespace
         b = t.encode('utf-8')
 
+    b = b.replace(b"\0", b"\7") # replace null bytes with bell characters
     assert b.count(0) == 0 # no null bytes allowed
 
     tokens[i] = b
@@ -321,6 +321,34 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
     tensors["model.norm.weight"] = weights["model.norm.weight"].float()
     if arch not in ["gemma", "minicpm", "cohere"]:
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+elif arch == "internlm2":
+    tensors["model.embed.weight"] = conv(weights["model.tok_embeddings.weight"])
+
+    for l in range(config["num_hidden_layers"]):
+        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.attention_norm.weight"].float()
+
+        head_dim = metadata["head_dim"]
+        n_heads = config["num_attention_heads"]
+        n_kv_heads = config.get("num_key_value_heads", n_heads)
+        kv_mul = n_heads // n_kv_heads
+
+        wqkv = weights[f"model.layers.{l}.attention.wqkv.weight"]
+        wqkv = wqkv.unflatten(0, (n_kv_heads, kv_mul + 2, head_dim))
+
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wqkv[:, :kv_mul].flatten(0, 2), n_heads, head_dim))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wqkv[:, kv_mul].flatten(0, 1), n_kv_heads, head_dim))
+
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wqkv[:, kv_mul+1].flatten(0, 1))
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.attention.wo.weight"])
+
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.ffn_norm.weight"].float()
+
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.feed_forward.w1.weight"])
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.feed_forward.w2.weight"])
+        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.feed_forward.w3.weight"])
+
+    tensors["model.norm.weight"] = weights["model.norm.weight"].float()
+    tensors["model.output.weight"] = conv(weights["output.weight"])
 elif arch == "olmo":
     tensors["model.embed.weight"] = conv(weights["model.transformer.wte.weight"])
 
