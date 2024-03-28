@@ -48,7 +48,7 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
@@ -95,6 +95,25 @@ elif arch == "olmo":
 
     assert config["activation_type"] == "swiglu"
     metadata["act_type"] = "silu"
+elif arch == "dbrx":
+    metadata["dim"] = config["d_model"]
+    metadata["hidden_dim"] = config["ffn_config"]["ffn_hidden_size"]
+    metadata["head_dim"] = config["d_model"] // config["n_heads"]
+    metadata["n_layers"] = config["n_layers"]
+    metadata["n_heads"] = config["n_heads"]
+    metadata["n_kv_heads"] = config["attn_config"]["kv_n_heads"]
+    metadata["vocab_size"] = config["vocab_size"]
+    metadata["max_seq_len"] = config["max_seq_len"]
+    metadata["bos_token_id"] = -1
+    metadata["eos_token_id"] = 100257
+    metadata["rope_theta"] = config["attn_config"]["rope_theta"]
+    metadata["rotary_dim"] = config["d_model"] // config["n_heads"]
+    metadata["norm_eps"] = 1e-5
+    metadata["norm_type"] = "layernorm"
+    metadata["act_type"] = "silu"
+    metadata["n_experts"] = config["ffn_config"]["moe_num_experts"]
+    metadata["n_experts_active"] = config["ffn_config"]["moe_top_k"]
+    metadata["qkv_clip"] = config["attn_config"]["clip_qkv"]
 
 # this is a horrible gpt-2 unicode byte encoder hack from https://github.com/openai/gpt-2/blob/master/src/encoder.py#L9
 # this has poisoned all HF tokenizer configs that use ByteLevel decoder/preprocessor
@@ -379,6 +398,37 @@ elif arch == "olmo":
     tensors["model.norm.weight"] = torch.ones(config["d_model"], dtype=torch.float32)
     if not config["weight_tying"]:
         tensors["model.output.weight"] = conv(weights["model.transformer.ff_out.weight"])
+elif arch == "dbrx":
+    tensors["model.embed.weight"] = conv(weights["transformer.wte.weight"])
+
+    for l in range(config["n_layers"]):
+        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"transformer.blocks.{l}.norm_attn_norm.norm_1.weight"].float()
+
+        head_dim = config["d_model"] // config["n_heads"]
+        n_heads = config["n_heads"]
+        n_kv_heads = config["attn_config"]["kv_n_heads"]
+
+        dim = config["d_model"]
+        hidden_dim = config["ffn_config"]["ffn_hidden_size"]
+        n_experts = config["ffn_config"]["moe_num_experts"]
+
+        wqkv = weights[f"transformer.blocks.{l}.norm_attn_norm.attn.Wqkv.weight"]
+
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wqkv[:n_heads*head_dim], n_heads, head_dim))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wqkv[n_heads*head_dim:(n_heads+n_kv_heads)*head_dim], n_kv_heads, head_dim))
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wqkv[(n_heads+n_kv_heads)*head_dim:])
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"transformer.blocks.{l}.norm_attn_norm.attn.out_proj.weight"])
+
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"transformer.blocks.{l}.norm_attn_norm.norm_2.weight"].float()
+
+        tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"transformer.blocks.{l}.ffn.router.layer.weight"])
+
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"transformer.blocks.{l}.ffn.experts.mlp.w1"].view(n_experts, hidden_dim, dim))
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"transformer.blocks.{l}.ffn.experts.mlp.w2"].view(n_experts, hidden_dim, dim).transpose(1, 2).contiguous())
+        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"transformer.blocks.{l}.ffn.experts.mlp.v1"].view(n_experts, hidden_dim, dim))
+
+    tensors["model.norm.weight"] = weights["transformer.norm_f.weight"].float()
+    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 
 # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
 # note: we concatenate all bytes of all tokens into a single tensor
