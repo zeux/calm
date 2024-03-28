@@ -304,6 +304,10 @@ static void moe_gate(float* moe_weights, int* moe_experts, float* x, int d, int 
 	}
 }
 
+inline float clip(float x, float v) {
+	return (x < -v) ? -v : (x > v) ? v : x;
+}
+
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	if (transformer->weights.dbits != 4 && transformer->weights.dbits != 8 && transformer->weights.dbits != 16) {
 		assert(!"Unsupported dbits: must be 8 or 16 for CPU");
@@ -356,6 +360,15 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		matmul(s->q, s->xb, w->wq[l], w->bqkv[l], dim, q_dim, dotprod);
 		matmul(s->k, s->xb, w->wk[l], w->bqkv[l] ? w->bqkv[l] + q_dim : NULL, dim, kv_dim, dotprod);
 		matmul(s->v, s->xb, w->wv[l], w->bqkv[l] ? w->bqkv[l] + q_dim + kv_dim : NULL, dim, kv_dim, dotprod);
+
+		// some models require clipping qkv values
+		for (int i = 0; i < q_dim; i++) {
+			s->q[i] = clip(s->q[i], p->qkv_clip);
+		}
+		for (int i = 0; i < kv_dim; i++) {
+			s->k[i] = clip(s->k[i], p->qkv_clip);
+			s->v[i] = clip(s->v[i], p->qkv_clip);
+		}
 
 		// RoPE relative positional encoding: complex-valued rotate q and k in each head
 		rope(s->q, q_dim, p->head_dim, pos, p->rope_theta, p->rotary_dim);

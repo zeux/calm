@@ -384,6 +384,7 @@ struct CoopArgs {
 
 	float norm_eps;
 	float theta_log2;
+	float qkv_clip;
 };
 
 __device__ static void coopstage(uint64_t* stats, int stage) {
@@ -456,6 +457,9 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 				v0 += L->bqkv[j + 0];
 				v1 += L->bqkv[j + 1];
 			}
+
+			v0 = min(max(v0, -args.qkv_clip), args.qkv_clip);
+			v1 = min(max(v1, -args.qkv_clip), args.qkv_clip);
 
 			if (threadIdx.x % warpSize == 0) {
 				int j_head = j % head_dim;
@@ -708,7 +712,7 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 		// token position (and derived data)
 		kv_len, kv_pos, pos,
 		// model parameters
-		p->norm_eps, log2(p->rope_theta),
+		p->norm_eps, log2(p->rope_theta), p->qkv_clip,
 	};
 	void* argsp = &args;
 

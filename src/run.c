@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -63,6 +64,9 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	const char* norm_type = tensors_metadata_find(tensors, "norm_type");
 	config->norm_ln = norm_type && strncmp(norm_type, "layernorm", 9) == 0;  // note: we currently don't support layernorm bias
 	config->norm_par = norm_type && strcmp(norm_type, "layernorm_par") == 0; // note: we currently don't support layernorm bias
+
+	const char* qkv_clip = tensors_metadata_find(tensors, "qkv_clip");
+	config->qkv_clip = qkv_clip ? atof(qkv_clip) : FLT_MAX;
 }
 
 void get_weights(struct Config* config, struct Weights* weights, struct Tensors* tensors) {

@@ -26,6 +26,7 @@ struct Config {
 	bool act_gelu;     // use GELU activation function
 	bool norm_ln;      // use full LN normalization
 	bool norm_par;     // use parallel MLP/attention by omitting intermediate normalization
+	float qkv_clip;    // clip qkv values to [-clip, clip]
 };
 
 struct Weights {
