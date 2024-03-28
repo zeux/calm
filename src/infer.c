@@ -420,7 +420,7 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		}
 
 		float* moe_weights = s->exp + p->n_experts;
-		int* moe_experts = (int*)moe_weights + p->n_experts_ac;
+		int* moe_experts = (int*)moe_weights + (p->n_experts_ac ? p->n_experts_ac : 1);
 
 		if (p->n_experts) {
 			// moe gate
@@ -454,14 +454,6 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 			for (int i = 0; i < dim; i++) {
 				x[i] += s->xb2[i] * moe_weights[e];
 			}
-		}
-
-		// final matmul to get the output of the ffn
-		matmul(s->xb, s->hb, w->w2[l], NULL, hidden_dim, dim, dotprod);
-
-		// residual connection
-		for (int i = 0; i < dim; i++) {
-			x[i] += s->xb[i];
 		}
 	}
 
