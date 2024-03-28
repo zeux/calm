@@ -54,6 +54,7 @@ It has been tested on following models:
 | MiniCPM | [MiniCPM 2B](https://huggingface.co/openbmb/MiniCPM-2B-dpo-bf16) |
 | Cohere | [Command-R](https://huggingface.co/CohereForAI/c4ai-command-r-v01) |
 | InternLM | [InternLM2-1.8B](https://huggingface.co/internlm/internlm2-1_8b), [InternLM2-7B](https://huggingface.co/internlm/internlm2-7b), [InternLM2-20B](https://huggingface.co/internlm/internlm2-20b) |
+| DBRX | [DBRX 132B](https://huggingface.co/databricks/dbrx-instruct) |
 
 ## Supported formats
 
