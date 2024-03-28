@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse"]:
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -296,7 +296,7 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "xverse"]:
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
