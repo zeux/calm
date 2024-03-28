@@ -38,7 +38,7 @@ calm supports a subset of decoder-only transformer architectures:
 - RoPE enhancements (partial rotary dimension, independent head dimension)
 - SiLU or GELU FFN gate activation
 - RMSNorm or LayerNorm* normalization (no bias support)
-- Optional minor variations (QKV bias, tied embeddings)
+- Optional minor variations (QKV bias, QKV clipping, tied embeddings)
 - Optional mixture of experts (with top-k expert selection)
 
 It has been tested on following models:
