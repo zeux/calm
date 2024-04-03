@@ -88,19 +88,19 @@ __device__ inline half2 fp8x2_e5m2_ff(unsigned int v) {
 #endif
 }
 
-__device__ inline float fp8_e5m2_ff(uint8_t v) {
+__device__ inline half fp8_e5m2_ff(uint8_t v) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
 	__half_raw h = __nv_cvt_fp8_to_halfraw(v, __NV_E5M2);
 #else
 	__half_raw h = {(unsigned short)(v << 8)};
 #endif
-	return __internal_halfraw_to_float(h);
+	return h;
 }
 
 // gf4 decoding: 8 3-bit values + 1 fp8 scale are packed in a 32-bit word
-__device__ inline float gf4_ff(uint32_t v, int k) {
-	float s = fp8_e5m2_ff(v & 0xff) / -4.f; // we expect compiler to reuse this across multiple calls
-	return (int((v >> (8 + k * 3)) & 7) - 4) * s;
+__device__ inline half gf4_ff(uint32_t v, int k) {
+	half s = fp8_e5m2_ff(v & 0xff) * half(-0.25f); // we expect compiler to reuse this across multiple calls
+	return half(int((v >> (8 + k * 3)) & 7) - 4) * s;
 }
 
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
@@ -197,13 +197,13 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 			ablock<float, 8> xx0 = *(ablock<float, 8>*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wg0, k) * xx0.v[k];
+				val += float(gf4_ff(wg0, k)) * xx0.v[k];
 			}
 
 			ablock<float, 8> xx1 = *(ablock<float, 8>*)&x[j + warpSize * 8];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wg1, k) * xx1.v[k];
+				val += float(gf4_ff(wg1, k)) * xx1.v[k];
 			}
 		}
 		return warpreduce_sum(val);
@@ -215,9 +215,30 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 			ablock<float, 8> xx = *(ablock<float, 8>*)&x[j];
 #pragma unroll
 			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wg, k) * xx.v[k];
+				val += float(gf4_ff(wg, k)) * xx.v[k];
 			}
 		}
 		return warpreduce_sum(val);
 	}
+}
+
+// warp-parallel mat*vec; each warp collaboratively computes mat*vec for a single row
+// specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
+__device__ inline float matmul_warppar(half* x, uint32_t* w, int i, int n) {
+	int lane = threadIdx.x % warpSize;
+	half val = 0.0f;
+	for (int j = lane * 16; j < n; j += warpSize * 16) {
+		ablock<uint32_t, 2> wgp = *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8];
+
+		ablock<half, 16> xx = *(ablock<half, 16>*)&x[j];
+#pragma unroll
+		for (int k = 0; k < 8; ++k) {
+			val += gf4_ff(wgp.v[0], k) * xx.v[k];
+		}
+#pragma unroll
+		for (int k = 0; k < 8; ++k) {
+			val += gf4_ff(wgp.v[1], k) * xx.v[k + 8];
+		}
+	}
+	return warpreduce_sum(val);
 }
