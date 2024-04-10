@@ -226,19 +226,44 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 // specialized for gf4 weights and ensures that we maximize transaction sizes by reading 4 bytes per thread
 __device__ inline float matmul_warppar(half* x, uint32_t* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
-	half val = 0.0f;
-	for (int j = lane * 16; j < n; j += warpSize * 16) {
-		ablock<uint32_t, 2> wgp = *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8];
+	if (n % (warpSize * 64) == 0) {
+		half val = 0.0f;
+		for (int j = lane * 16; j < n; j += warpSize * 64) {
+			ablock<uint32_t, 2> wgp[4] = {
+			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8],
+			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8 + (warpSize * 16) / 8],
+			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8 + (warpSize * 32) / 8],
+			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8 + (warpSize * 48) / 8],
+			};
 
-		ablock<half, 16> xx = *(ablock<half, 16>*)&x[j];
+			for (int u = 0; u < 4; ++u) {
+				ablock<half, 16> xx = *(ablock<half, 16>*)&x[j + warpSize * 16 * u];
 #pragma unroll
-		for (int k = 0; k < 8; ++k) {
-			val += gf4_ff(wgp.v[0], k) * xx.v[k];
-		}
+				for (int k = 0; k < 8; ++k) {
+					val += gf4_ff(wgp[u].v[0], k) * xx.v[k];
+				}
 #pragma unroll
-		for (int k = 0; k < 8; ++k) {
-			val += gf4_ff(wgp.v[1], k) * xx.v[k + 8];
+				for (int k = 0; k < 8; ++k) {
+					val += gf4_ff(wgp[u].v[1], k) * xx.v[k + 8];
+				}
+			}
 		}
+		return warpreduce_sum(val);
+	} else {
+		half val = 0.0f;
+		for (int j = lane * 16; j < n; j += warpSize * 16) {
+			ablock<uint32_t, 2> wgp = *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8];
+
+			ablock<half, 16> xx = *(ablock<half, 16>*)&x[j];
+#pragma unroll
+			for (int k = 0; k < 8; ++k) {
+				val += gf4_ff(wgp.v[0], k) * xx.v[k];
+			}
+#pragma unroll
+			for (int k = 0; k < 8; ++k) {
+				val += gf4_ff(wgp.v[1], k) * xx.v[k + 8];
+			}
+		}
+		return warpreduce_sum(val);
 	}
-	return warpreduce_sum(val);
 }
