@@ -103,6 +103,14 @@ __device__ inline half gf4_ff(uint32_t v, int k) {
 	return half(int((v >> (8 + k * 3)) & 7) - 4) * s;
 }
 
+// gf4 decoding (2 values): 8 3-bit values + 1 fp8 scale are packed in a 32-bit word
+__device__ inline half2 gf4x2_ff(uint32_t v, int k) {
+	half s = fp8_e5m2_ff(v & 0xff) * half(-0.25f); // we expect compiler to reuse this across multiple calls
+	uint32_t p = v >> (8 + k * 3);
+	half2 q = half2(int(p & 7), int((p >> 3) & 7));
+	return __hmul2(__hsub2(q, half2(4, 4)), half2(s, s));
+}
+
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
 template <typename T>
 __device__ inline float matmul(float* x, T* w, int i, int n) {
@@ -227,7 +235,7 @@ __device__ inline float matmul_warppar(float* x, uint32_t* w, int i, int n) {
 __device__ inline float matmul_warppar(half* x, uint32_t* w, int i, int n) {
 	int lane = threadIdx.x % warpSize;
 	if (n % (warpSize * 64) == 0) {
-		half val = 0.0f;
+		half2 val = {0, 0};
 		for (int j = lane * 16; j < n; j += warpSize * 64) {
 			ablock<uint32_t, 2> wgp[4] = {
 			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8],
@@ -237,33 +245,33 @@ __device__ inline float matmul_warppar(half* x, uint32_t* w, int i, int n) {
 			};
 
 			for (int u = 0; u < 4; ++u) {
-				ablock<half, 16> xx = *(ablock<half, 16>*)&x[j + warpSize * 16 * u];
+				ablock<__half2_raw, 8> xx = *(ablock<__half2_raw, 8>*)&x[j + warpSize * 16 * u];
 #pragma unroll
-				for (int k = 0; k < 8; ++k) {
-					val += gf4_ff(wgp[u].v[0], k) * xx.v[k];
+				for (int k = 0; k < 8; k += 2) {
+					val = __hfma2(gf4x2_ff(wgp[u].v[0], k), xx.v[k / 2], val);
 				}
 #pragma unroll
-				for (int k = 0; k < 8; ++k) {
-					val += gf4_ff(wgp[u].v[1], k) * xx.v[k + 8];
+				for (int k = 0; k < 8; k += 2) {
+					val = __hfma2(gf4x2_ff(wgp[u].v[1], k), xx.v[k / 2 + 4], val);
 				}
 			}
 		}
-		return warpreduce_sum(val);
+		return warpreduce_sum(float(val.x + val.y));
 	} else {
-		half val = 0.0f;
+		half2 val = {0, 0};
 		for (int j = lane * 16; j < n; j += warpSize * 16) {
 			ablock<uint32_t, 2> wgp = *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8];
 
-			ablock<half, 16> xx = *(ablock<half, 16>*)&x[j];
+			ablock<__half2_raw, 8> xx = *(ablock<__half2_raw, 8>*)&x[j];
 #pragma unroll
-			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wgp.v[0], k) * xx.v[k];
+			for (int k = 0; k < 8; k += 2) {
+				val = __hfma2(gf4x2_ff(wgp.v[0], k), xx.v[k / 2], val);
 			}
 #pragma unroll
-			for (int k = 0; k < 8; ++k) {
-				val += gf4_ff(wgp.v[1], k) * xx.v[k + 8];
+			for (int k = 0; k < 8; k += 2) {
+				val = __hfma2(gf4x2_ff(wgp.v[1], k), xx.v[k / 2 + 4], val);
 			}
 		}
-		return warpreduce_sum(val);
+		return warpreduce_sum(float(val.x + val.y));
 	}
 }
