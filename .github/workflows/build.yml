@@ -1,0 +1,20 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: cuda install
+      run: |
+        # sudo apt install -y nvidia-cuda-toolkit
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+        sudo dpkg -i cuda-keyring_1.1-1_all.deb
+        sudo apt-get update
+        sudo apt-get install -y cuda-compiler-12-4 # cuda-libraries-dev-12-4
+    - name: make
+      run: |
+        export NVCC=/usr/local/cuda/bin/nvcc
+        make -j2
