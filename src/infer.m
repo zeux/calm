@@ -171,7 +171,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		// qkv
 		assert(w->bqkv[l] == NULL); // TODO
 
-		dispatch(encoder, "qkv", "half_half", q_dim + kv_dim * 2, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
+		dispatch(encoder, "qkv", "half_half", (q_dim + kv_dim * 2) / 2, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
 
 		// attn score
 		int kv_lent = (kv_len + 7) / 8;

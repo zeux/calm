@@ -115,7 +115,7 @@ kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[b
 	int q_dim = args.q_dim;
 	int kv_dim = args.kv_dim;
 
-	int j = id / warpSize;
+	int j = (id / warpSize) * 2;
 	device T* w = j < q_dim ? wq : (j < q_dim + kv_dim ? wk : wv);
 	int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
 
