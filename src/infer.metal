@@ -35,6 +35,21 @@ inline float matmul_warppar(device float* x, device half* w, int i, int n, uint 
 	return simd_sum(val);
 }
 
+inline float matmul_warppar(device float* x, device uint8_t* w, int i, int n, uint id) {
+	int lane = id % warpSize;
+	float val = 0.0f;
+	for (int j = lane * 4; j < n; j += warpSize * 4) {
+		uint32_t ww = *(device uint32_t*)&w[i * n + j];
+		uint32_t wwh = ww >> 16;
+		float4 xx = *(device float4*)&x[j];
+		val += as_type<half>(uint16_t(ww << 8)) * xx.x;
+		val += as_type<half>(uint16_t(ww & 0xff00)) * xx.y;
+		val += as_type<half>(uint16_t(wwh << 8)) * xx.z;
+		val += as_type<half>(uint16_t(wwh & 0xff00)) * xx.w;
+	}
+	return simd_sum(val);
+}
+
 inline float gelu(float x) {
 	return 0.5f * x * (1.0f + tanh(0.797885f * (x + 0.044715f * x * x * x)));
 }
@@ -43,12 +58,21 @@ inline float silu(float x) {
 	return x / (1.0f + exp(-x));
 }
 
+inline float embed(device half* w, int i) {
+	return w[i];
+}
+
+inline float embed(device uint8_t* w, int i) {
+	return as_type<half>(uint16_t(w[i] << 8));
+}
+
 template <typename T>
 kernel void kernel_embed(constant int& token_offset [[buffer(0)]], device float* o [[buffer(1)]], device T* weight [[buffer(2)]], uint id [[thread_position_in_grid]]) {
-	o[id] = weight[id + token_offset];
+	o[id] = embed(weight, id + token_offset);
 }
 
 template [[host_name("embed_half")]] kernel void kernel_embed<half>(constant int&, device float*, device half*, uint);
+template [[host_name("embed_fp8")]] kernel void kernel_embed<uint8_t>(constant int&, device float*, device uint8_t*, uint);
 
 struct NormArgs {
 	int size;
@@ -148,6 +172,7 @@ kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[b
 }
 
 template [[host_name("qkv_half_half")]] kernel void kernel_qkv<half, half>(constant QkvArgs&, device float*, device float*, device half*, device half*, device half*, device half*, device half*, uint);
+template [[host_name("qkv_fp8_half")]] kernel void kernel_qkv<uint8_t, half>(constant QkvArgs&, device float*, device float*, device half*, device half*, device uint8_t*, device uint8_t*, device uint8_t*, uint);
 
 inline float4 attn_load4(device half* p) {
 	return float4(*(device half4*)p);
@@ -291,6 +316,7 @@ kernel void kernel_attn_out(constant int& n [[buffer(0)]], device float* xout [[
 }
 
 template [[host_name("attn_out_half")]] kernel void kernel_attn_out<half>(constant int&, device float*, device float*, device half*, uint);
+template [[host_name("attn_out_fp8")]] kernel void kernel_attn_out<uint8_t>(constant int&, device float*, device float*, device uint8_t*, uint);
 
 template <typename T, bool act_gelu>
 kernel void kernel_ffn13(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w1 [[buffer(3)]], device T* w3 [[buffer(4)]], uint id [[thread_position_in_grid]]) {
@@ -304,7 +330,9 @@ kernel void kernel_ffn13(constant int& n [[buffer(0)]], device float* xout [[buf
 }
 
 template [[host_name("ffn13_silu_half")]] kernel void kernel_ffn13<half, false>(constant int&, device float*, device float*, device half*, device half*, uint);
+template [[host_name("ffn13_silu_fp8")]] kernel void kernel_ffn13<uint8_t, false>(constant int&, device float*, device float*, device uint8_t*, device uint8_t*, uint);
 template [[host_name("ffn13_gelu_half")]] kernel void kernel_ffn13<half, true>(constant int&, device float*, device float*, device half*, device half*, uint);
+template [[host_name("ffn13_gelu_fp8")]] kernel void kernel_ffn13<uint8_t, true>(constant int&, device float*, device float*, device uint8_t*, device uint8_t*, uint);
 
 template <typename T>
 kernel void kernel_ffn2(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w2 [[buffer(3)]], uint id [[thread_position_in_grid]]) {
@@ -317,6 +345,7 @@ kernel void kernel_ffn2(constant int& n [[buffer(0)]], device float* xout [[buff
 }
 
 template [[host_name("ffn2_half")]] kernel void kernel_ffn2<half>(constant int&, device float*, device float*, device half*, uint);
+template [[host_name("ffn2_fp8")]] kernel void kernel_ffn2<uint8_t>(constant int&, device float*, device float*, device uint8_t*, uint);
 
 template <typename T>
 kernel void kernel_output(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {
@@ -329,3 +358,4 @@ kernel void kernel_output(constant int& n [[buffer(0)]], device float* xout [[bu
 }
 
 template [[host_name("output_half")]] kernel void kernel_output<half>(constant int&, device float*, device float*, device half*, uint);
+template [[host_name("output_fp8")]] kernel void kernel_output<uint8_t>(constant int&, device float*, device float*, device uint8_t*, uint);

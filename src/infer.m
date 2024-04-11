@@ -142,8 +142,14 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	int kv_dim = p->head_dim * p->n_kv_heads;
 	int q_dim = p->head_dim * p->n_heads;
 	int kv_mul = p->n_heads / p->n_kv_heads;
-	assert(w->dbits == 16); // TODO
+	assert(w->dbits == 16 || w->dbits == 8); // TODO
 	assert(s->kvbits == 16); // TODO
+
+	const char* dvar = w->dbits == 16 ? "half" : (w->dbits == 8 ? "fp8" : "?");
+	const char* kvar = "half";
+
+	char dkvar[32];
+	snprintf(dkvar, sizeof(dkvar), "%s_%s", dvar, kvar);
 
 	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
@@ -160,7 +166,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
-	dispatch(encoder, "embed", "half", dim / 32, 32, (int[]){ token * dim }, sizeof(int), (void*[]){ x, w->token_embedding_table }, 2);
+	dispatch(encoder, "embed", dvar, dim / 32, 32, (int[]){ token * dim }, sizeof(int), (void*[]){ x, w->token_embedding_table }, 2);
 
 	for (int l = 0; l < p->n_layers; ++l) {
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
@@ -171,21 +177,21 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		// qkv
 		assert(w->bqkv[l] == NULL); // TODO
 
-		dispatch(encoder, "qkv", "half_half", (q_dim + kv_dim * 2) / 2, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
+		dispatch(encoder, "qkv", dkvar, (q_dim + kv_dim * 2) / 2, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
 
 		// attn score
 		int kv_lent = (kv_len + 7) / 8;
 
-		dispatch(encoder, "attn_score", "half", kv_lent * p->n_heads, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->att, s->q, s->key_cache }, 3);
+		dispatch(encoder, "attn_score", kvar, kv_lent * p->n_heads, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->att, s->q, s->key_cache }, 3);
 
 		// attn softmax
 		dispatch(encoder, "attn_softmax", NULL, p->n_heads, 1024, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->att }, 1);
 
 		// attn mix
-		dispatch(encoder, "attn_mix", "half", q_dim, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->q, s->att, s->value_cache }, 3);
+		dispatch(encoder, "attn_mix", kvar, q_dim, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->q, s->att, s->value_cache }, 3);
 
 		// attn out
-		dispatch(encoder, "attn_out", "half", dim, 32, (int[]) { q_dim }, sizeof(int), (void*[]) { x, s->q, w->wo[l] }, 3);
+		dispatch(encoder, "attn_out", dvar, dim, 32, (int[]) { q_dim }, sizeof(int), (void*[]) { x, s->q, w->wo[l] }, 3);
 
 		if (!p->norm_par) {
 			// post-attention rmsnorm
@@ -195,14 +201,14 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		assert(p->n_experts == 0); // TODO
 
 		// ffn
-		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", "half", hidden_dim, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->hb, s->xb, w->w1[l], w->w3[l] }, 4);
-		dispatch(encoder, "ffn2", "half", dim, 32, (int[]) { hidden_dim }, sizeof(int), (void*[]) { x, s->hb, w->w2[l] }, 3);
+		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, hidden_dim, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->hb, s->xb, w->w1[l], w->w3[l] }, 4);
+		dispatch(encoder, "ffn2", dvar, dim, 32, (int[]) { hidden_dim }, sizeof(int), (void*[]) { x, s->hb, w->w2[l] }, 3);
 	}
 
 	// classifier into logits
 	if ((flags & FF_UPDATE_KV_ONLY) == 0) {
 		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_final_weight }, 3);
-		dispatch(encoder, "output", "half", p->vocab_size, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->logits, s->xb, w->wcls }, 3);
+		dispatch(encoder, "output", dvar, p->vocab_size, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->logits, s->xb, w->wcls }, 3);
 	}
 
 	// submit commands and wait
