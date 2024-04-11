@@ -72,7 +72,7 @@ struct NormArgs {
 		}
 
 		// sum across threads in block
-		mean = blockreduce_sum(vs, sum, id) / size;
+		mean = blockreduce_sum(vs, sum, i) / size;
 	}
 
 	// calculate sum of squares (per thread)
@@ -83,7 +83,7 @@ struct NormArgs {
 	}
 
 	// sum across threads in block
-	ss = blockreduce_sum(vs, ss, id);
+	ss = blockreduce_sum(vs, ss, i);
 
 	float scale = rsqrt(ss / size + args.eps);
 
@@ -251,7 +251,7 @@ template [[host_name("attn_score_half")]] kernel void kernel_attn_score<half>(co
 	}
 
 	// max across threads in block
-	max_val = blockreduce_max(vs, max_val, id);
+	max_val = blockreduce_max(vs, max_val, i);
 
 	// exp per thread
 	for (int j = i; j < size; j += blockSize) {
