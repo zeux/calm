@@ -1,10 +1,9 @@
 #include <metal_stdlib>
 using namespace metal;
 
-kernel void kernel_basic(
-    constant float& scale [[buffer(0)]],
-    device float* input [[buffer(1)]],
-    device float* output [[buffer(2)]],
-    uint id [[thread_position_in_grid]]) {
-    output[id] = input[id] * scale;
+template <typename T>
+kernel void kernel_embed(constant int& token_offset [[buffer(0)]], device float* o [[buffer(1)]], device T* weight [[buffer(2)]], uint id [[thread_position_in_grid]]) {
+	o[id] = weight[id + token_offset];
 }
+
+template [[host_name("embed_half")]] kernel void kernel_embed<half>(constant int&, device float*, device half*, uint);
