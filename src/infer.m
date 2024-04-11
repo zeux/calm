@@ -97,6 +97,17 @@ void prepare_metal(struct Transformer* transformer) {
 	state->logits = (float*)newbuffer(config->vocab_size * sizeof(float));
 }
 
+struct SinkArgs {
+	int kv_dim;
+	int head_dim;
+	int rotary_dim;
+
+	int kv_sink;
+	int seq_len;
+
+	float theta_log2;
+};
+
 struct NormArgs {
 	int size;
 	float eps;
@@ -154,7 +165,6 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
 	int kv_pos = kv_sink + (pos - kv_sink) % (p->seq_len - kv_sink);
 	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
-	(void)kv_len; // TODO
 
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
@@ -167,6 +177,12 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	assert(token < p->vocab_size);
 	dispatch(encoder, "embed", dvar, dim / 32, 32, (int[]){ token * dim }, sizeof(int), (void*[]){ x, w->token_embedding_table }, 2);
 
+	// rotate sink tokens forward to keep pace with non-sink tokens
+	if (kv_sink > 0) {
+		dispatch(encoder, "rotate_sink", kvar, (kv_sink * kv_dim / 64) * p->n_layers, 32, &(struct SinkArgs) { kv_dim, p->head_dim, p->rotary_dim, kv_sink, p->seq_len, log2(p->rope_theta) }, sizeof(struct SinkArgs), (void*[]) { s->key_cache }, 1);
+	}
+
+	// forward all the layers
 	for (int l = 0; l < p->n_layers; ++l) {
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 

@@ -107,6 +107,49 @@ template [[host_name("embed_half")]] kernel void kernel_embed<half>(constant int
 template [[host_name("embed_fp8")]] kernel void kernel_embed<uint8_t>(constant int&, device float*, device uint8_t*, uint);
 template [[host_name("embed_gf4")]] kernel void kernel_embed<uint32_t>(constant int&, device float*, device uint32_t*, uint);
 
+struct SinkArgs {
+	int kv_dim;
+	int head_dim;
+	int rotary_dim;
+
+	int kv_sink;
+	int seq_len;
+
+	float theta_log2;
+};
+
+template <typename KVT>
+kernel void kernel_rotate_sink(constant SinkArgs& args [[buffer(0)]], device KVT* keyc [[buffer(1)]], uint id [[thread_position_in_grid]]) {
+	int i = (id * 2) % (args.kv_sink * args.kv_dim);
+	int l = id / (args.kv_sink * args.kv_dim / 2);
+
+	int j_head = i % args.head_dim;
+	float freq = j_head >= args.rotary_dim ? 0.f : exp2(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
+
+	// rotate sink tokens forward to keep pace with non-sink tokens
+	float fcr;
+	float fci = sincos(freq, fcr);
+
+	size_t loff = (size_t)l * args.seq_len * args.kv_dim;
+	device KVT* kb = keyc + loff;
+
+	// note: k layout is transposed / tiled to improve attn_score performance
+	int t = i / args.kv_dim;
+	int k = i % args.kv_dim;
+	int o = t * 16 + args.seq_len * (k / 16) * 16 + (k % 16);
+
+	float v0 = float(kb[o + 0]);
+	float v1 = float(kb[o + 1]);
+
+	float r0 = v0 * fcr - v1 * fci;
+	float r1 = v0 * fci + v1 * fcr;
+
+	kb[o + 0] = KVT(r0);
+	kb[o + 1] = KVT(r1);
+}
+
+template [[host_name("rotate_sink_half")]] kernel void kernel_rotate_sink<half>(constant SinkArgs&, device half*, uint);
+
 struct NormArgs {
 	int size;
 	float eps;
