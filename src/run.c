@@ -28,6 +28,8 @@ void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 void perf_cuda(void);
 
+void testmetal(void);
+
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
 	config->hidden_dim = atoi(tensors_metadata(tensors, "hidden_dim"));
@@ -484,6 +486,11 @@ int main(int argc, char* argv[]) {
 	bool cuda = !cpu || atoi(cpu) == 0;
 #endif
 
+#ifdef __APPLE__
+	char* cpu = getenv("CALM_CPU");
+	bool metal = !cpu || atoi(cpu) == 0;
+#endif
+
 	// read .safetensors model
 	struct Tensors tensors = {};
 	if (tensors_open(&tensors, checkpoint_path) != 0) {
@@ -540,6 +547,12 @@ int main(int argc, char* argv[]) {
 	if (cuda) {
 		prepare_cuda(&transformer);
 		transformer.forward = forward_cuda;
+	}
+#endif
+
+#ifdef __APPLE__
+	if (metal) {
+		testmetal();
 	}
 #endif
 
