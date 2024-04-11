@@ -8,6 +8,11 @@ BUILD=build
 
 SOURCES=$(wildcard src/*.c)
 
+ifeq ($(UNAME),Darwin)
+  SOURCES+=$(wildcard src/*.m)
+  SOURCES+=$(wildcard src/*.metal)
+endif
+
 ifneq ($(UNAME),Darwin)
 SOURCES+=$(wildcard src/*.cu)
 endif
@@ -21,6 +26,7 @@ LDFLAGS=-lm
 ifeq ($(UNAME),Darwin)
   CFLAGS+=-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include
   LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
+  LDFLAGS+=-framework Metal -framework Foundation
 else
   CFLAGS+=-fopenmp -mf16c -mavx2 -mfma
   LDFLAGS+=-fopenmp
@@ -63,6 +69,17 @@ $(BINARY): $(OBJECTS)
 $(BUILD)/%.c.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $< $(CFLAGS) -c -MMD -MP -o $@
+
+$(BUILD)/%.m.o: %.m
+	@mkdir -p $(dir $@)
+	$(CC) $< $(CFLAGS) -c -MMD -MP -o $@
+
+$(BUILD)/%.metal.o: %.metal
+	@mkdir -p $(dir $@)
+	xcrun metal $< -O2 -c -MMD -MP -o $@.ir
+	xcrun metallib -o $@.metallib $@.ir
+	xxd -i -n $(basename $(notdir $<))_metallib $@.metallib > $@.c
+	$(CC) $@.c -c -o $@
 
 $(BUILD)/%.cu.o: %.cu
 	@mkdir -p $(dir $@)
