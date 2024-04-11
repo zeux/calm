@@ -156,12 +156,13 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		// pre-attention rmsnorm
 		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
 
-		assert(w->bqkv == NULL); // TODO
-
 		// qkv
 		int q_dim = p->head_dim * p->n_heads;
 		int kv_dim = p->head_dim * p->n_kv_heads;
-		dispatch(encoder, "qkv", "half_half", dim, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
+		dispatch(encoder, "qkv", "half_half", dim, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l] }, 8);
+
+		// attn out
+		dispatch(encoder, "attn_out", "half", dim, 32, (int[]) { q_dim }, sizeof(int), (void*[]) { x, s->q, w->wo[l] }, 3);
 
 		if (!p->norm_par) {
 			// post-attention rmsnorm
@@ -172,7 +173,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 		// ffn
 		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", "half", hidden_dim, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->hb, s->xb, w->w1[l], w->w3[l] }, 4);
-		dispatch(encoder, "ffn2", "half", dim, 32, (int[]) { hidden_dim }, sizeof(int), (void*[]) { x, s->hb, w->w2[l] }, 4);
+		dispatch(encoder, "ffn2", "half", dim, 32, (int[]) { hidden_dim }, sizeof(int), (void*[]) { x, s->hb, w->w2[l] }, 3);
 	}
 
 	// classifier into logits
