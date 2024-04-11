@@ -24,8 +24,10 @@ CFLAGS=-g -Wall -Wpointer-arith -Werror -O3 -ffast-math
 LDFLAGS=-lm
 
 ifeq ($(UNAME),Darwin)
-  CFLAGS+=-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include
-  LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
+  ifneq (,$(wildcard /opt/homebrew/opt/libomp))
+    CFLAGS+=-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include
+    LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
+  endif
   LDFLAGS+=-framework Metal -framework Foundation
   METALFLAGS=-std=metal3.0 -O2
 else
