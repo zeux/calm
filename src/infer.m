@@ -50,7 +50,7 @@ void init_metal(void) {
 
 	NSArray<NSString*>* functions = library.functionNames;
 	for (size_t i = 0; i < functions.count; i++) {
-		MTLComputePipelineDescriptor* descriptor = [MTLComputePipelineDescriptor alloc];
+		MTLComputePipelineDescriptor* descriptor = [[MTLComputePipelineDescriptor alloc] init];
 		descriptor.computeFunction = [library newFunctionWithName:functions[i]];
 		descriptor.label = functions[i];
 
@@ -67,7 +67,7 @@ void* upload_metal(void* host, size_t size) {
 }
 
 static void* newbuffer(size_t size) {
-	return [device newBufferWithLength:size options:MTLResourceStorageModeShared];
+	return size == 0 ? nil : [device newBufferWithLength:size options:MTLResourceStorageModeShared];
 }
 
 void prepare_metal(struct Transformer* transformer) {
@@ -117,6 +117,11 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	// copy the token embedding into x
 	assert(token < p->vocab_size);
 	dispatch(encoder, "embed", "half", dim / 32, 32, (int[]){ token * dim }, sizeof(int), (void*[]){ x, w->token_embedding_table }, 2);
+
+	// classifier into logits
+	if ((flags & FF_UPDATE_KV_ONLY) == 0) {
+		dispatch(encoder, "output", "half", p->vocab_size, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->logits, x, w->wcls }, 3);
+	}
 
 	// submit commands and wait
 	[encoder endEncoding];
