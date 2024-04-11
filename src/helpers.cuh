@@ -105,10 +105,11 @@ __device__ inline half gf4_ff(uint32_t v, int k) {
 
 // gf4 decoding (2 values): 8 3-bit values + 1 fp8 scale are packed in a 32-bit word
 __device__ inline half2 gf4x2_ff(uint32_t v, int k) {
-	half s = fp8_e5m2_ff(v & 0xff) * half(-0.25f); // we expect compiler to reuse this across multiple calls
+	half us = fp8_e5m2_ff(v & 0xff); // we expect compiler to reuse this across multiple calls
+	half s = us * half(-0.25f); // we expect compiler to reuse this across multiple calls
 	uint32_t p = v >> (8 + k * 3);
 	half2 q = half2(int(p & 7), int((p >> 3) & 7));
-	return __hmul2(__hsub2(q, half2(4, 4)), half2(s, s));
+	return __hfma2(q, half2(s, s), half2(us, us));
 }
 
 // regular mat*vec; naive and unoptimized (won't reach peak bw or flops)
@@ -243,7 +244,7 @@ __device__ inline float matmul_warppar(half* x, uint32_t* w, int i, int n) {
 			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8 + (warpSize * 32) / 8],
 			    *(ablock<uint32_t, 2>*)&w[i * n / 8 + j / 8 + (warpSize * 48) / 8],
 			};
-
+#pragma unroll
 			for (int u = 0; u < 4; ++u) {
 				ablock<__half2_raw, 8> xx = *(ablock<__half2_raw, 8>*)&x[j + warpSize * 16 * u];
 #pragma unroll
