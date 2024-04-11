@@ -142,10 +142,9 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	int kv_dim = p->head_dim * p->n_kv_heads;
 	int q_dim = p->head_dim * p->n_heads;
 	int kv_mul = p->n_heads / p->n_kv_heads;
-	assert(w->dbits == 16 || w->dbits == 8); // TODO
 	assert(s->kvbits == 16); // TODO
 
-	const char* dvar = w->dbits == 16 ? "half" : (w->dbits == 8 ? "fp8" : "?");
+	const char* dvar = w->dbits == 16 ? "half" : (w->dbits == 8 ? "fp8" : (w->dbits == 4 ? "gf4" : "?"));
 	const char* kvar = "half";
 
 	char dkvar[32];
