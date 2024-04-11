@@ -63,14 +63,17 @@ inline float matmul_warppar(device float* x, device uint32_t* w, int i, int n, u
 		float4 xx0 = *(device float4*)&x[j];
 		float4 xx1 = *(device float4*)&x[j + 4];
 
-		val += gf4_ff(wg, 0) * xx0.x;
-		val += gf4_ff(wg, 1) * xx0.y;
-		val += gf4_ff(wg, 2) * xx0.z;
-		val += gf4_ff(wg, 3) * xx0.w;
-		val += gf4_ff(wg, 4) * xx1.x;
-		val += gf4_ff(wg, 5) * xx1.y;
-		val += gf4_ff(wg, 6) * xx1.z;
-		val += gf4_ff(wg, 7) * xx1.w;
+		float us = as_type<half>(uint16_t(wg << 8));
+		float s = us * -0.25f;
+
+		val += (float(int(wg >>  8) & 7) * s + us) * xx0.x;
+		val += (float(int(wg >> 11) & 7) * s + us) * xx0.y;
+		val += (float(int(wg >> 14) & 7) * s + us) * xx0.z;
+		val += (float(int(wg >> 17) & 7) * s + us) * xx0.w;
+		val += (float(int(wg >> 20) & 7) * s + us) * xx1.x;
+		val += (float(int(wg >> 23) & 7) * s + us) * xx1.y;
+		val += (float(int(wg >> 26) & 7) * s + us) * xx1.z;
+		val += (float(int(wg >> 29) & 7) * s + us) * xx1.w;
 	}
 	return simd_sum(val);
 }
