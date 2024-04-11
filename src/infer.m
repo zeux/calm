@@ -72,6 +72,7 @@ static void* newbuffer(size_t size) {
 
 void prepare_metal(struct Transformer* transformer) {
 	struct Config* config = &transformer->config;
+	struct Weights* weights = &transformer->weights;
 	struct RunState* state = &transformer->state;
 
 	assert(device);
@@ -95,6 +96,14 @@ void prepare_metal(struct Transformer* transformer) {
 
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)newbuffer(config->vocab_size * sizeof(float));
+
+	float* bqkv = (float*)newbuffer((q_dim + kv_dim * 2) * sizeof(float));
+
+	for (int l = 0; l < config->n_layers; ++l) {
+		if (weights->bqkv[l] == NULL) {
+			weights->bqkv[l] = bqkv;
+		}
+	}
 }
 
 struct SinkArgs {
@@ -190,9 +199,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
 
 		// qkv
-		assert(w->bqkv[l] == NULL); // TODO
-
-		dispatch(encoder, "qkv", dkvar, (q_dim + kv_dim * 2) / 2, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
+		dispatch(encoder, "qkv", dkvar, (q_dim + kv_dim * 2) / 2, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l] }, 8);
 
 		// attn score
 		int kv_lent = (kv_len + 7) / 8;
