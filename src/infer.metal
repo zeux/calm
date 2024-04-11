@@ -110,7 +110,7 @@ struct QkvArgs {
 };
 
 template <typename T, typename KVT>
-kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[buffer(1)]], device float* qout [[buffer(2)]], device KVT* keyc [[buffer(3)]], device KVT* valc [[buffer(4)]], device T* wq [[buffer(5)]], device T* wk [[buffer(6)]], device T* wv [[buffer(7)]], device float* bqkv [[buffer(8)]], uint id [[thread_position_in_grid]]) {
+kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[buffer(1)]], device float* qout [[buffer(2)]], device KVT* keyc [[buffer(3)]], device KVT* valc [[buffer(4)]], device T* wq [[buffer(5)]], device T* wk [[buffer(6)]], device T* wv [[buffer(7)]], uint id [[thread_position_in_grid]]) {
 	int dim = args.dim;
 	int q_dim = args.q_dim;
 	int kv_dim = args.kv_dim;
@@ -121,11 +121,6 @@ kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[b
 
 	float v0 = matmul_warppar(x, w, k + 0, dim, id);
 	float v1 = matmul_warppar(x, w, k + 1, dim, id);
-
-	if (bqkv) {
-		v0 += bqkv[j + 0];
-		v1 += bqkv[j + 1];
-	}
 
 	v0 = min(max(v0, -args.qkv_clip), args.qkv_clip);
 	v1 = min(max(v1, -args.qkv_clip), args.qkv_clip);
@@ -152,7 +147,7 @@ kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[b
 	}
 }
 
-template [[host_name("qkv_half_half")]] kernel void kernel_qkv<half, half>(constant QkvArgs&, device float*, device float*, device half*, device half*, device half*, device half*, device half*, device float*, uint);
+template [[host_name("qkv_half_half")]] kernel void kernel_qkv<half, half>(constant QkvArgs&, device float*, device float*, device half*, device half*, device half*, device half*, device half*, uint);
 
 inline float4 attn_load4(device half* p) {
 	return float4(*(device half4*)p);
