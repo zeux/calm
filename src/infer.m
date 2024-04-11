@@ -6,12 +6,41 @@ extern unsigned char infer_metallib[];
 extern unsigned int infer_metallib_len;
 
 static id<MTLDevice> device;
+static id<MTLCommandQueue> queue;
+static id<MTLComputePipelineState> kernels[256];
+
+static id<MTLComputePipelineState> kernel(const char* name) {
+    for (size_t i = 0; kernels[i]; ++i) {
+        if (strcmp(kernels[i].label.UTF8String, name) == 0) {
+            return kernels[i];
+        }
+    }
+    return nil;
+}
 
 void init_metal(void) {
     NSArray<id<MTLDevice>>* devices = MTLCopyAllDevices();
     assert(devices.count > 0);
 
     device = devices[0];
+    queue = [device newCommandQueue];
+
+    dispatch_data_t lib_data = dispatch_data_create(infer_metallib, infer_metallib_len, dispatch_get_main_queue(), ^{});
+
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithData:lib_data error:&error];
+    assert(library);
+
+    NSArray<NSString*>* functions = library.functionNames;
+    for (size_t i = 0; i < functions.count; i++) {
+        MTLComputePipelineDescriptor* descriptor = [MTLComputePipelineDescriptor alloc];
+        descriptor.computeFunction = [library newFunctionWithName:functions[i]];
+        descriptor.label = functions[i];
+
+        id<MTLComputePipelineState> computePipelineState = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
+        assert(computePipelineState);
+        kernels[i] = computePipelineState;
+    }
 }
 
 void* upload_metal(void* host, size_t size) {
@@ -24,22 +53,7 @@ void prepare_metal(struct Transformer* transformer) {
     assert(device);
     printf("# Metal: %s\n", device.name.UTF8String);
 
-    dispatch_data_t lib_data = dispatch_data_create(infer_metallib, infer_metallib_len, dispatch_get_main_queue(), ^{});
-    
-    // Load the kernel function from default library
-    NSError *error = nil;
-    id<MTLLibrary> defaultLibrary = [device newLibraryWithData:lib_data error:&error];
-    id<MTLFunction> kernelFunction = [defaultLibrary newFunctionWithName:@"kernel_basic"];
-    
-    // Create a compute pipeline state
-    id<MTLComputePipelineState> computePipelineState = [device newComputePipelineStateWithFunction:kernelFunction error:&error];
-    if (!computePipelineState) {
-        NSLog(@"Failed to create compute pipeline state: %@", error);
-        return;
-    }
-    
-    // Create a command queue
-    id<MTLCommandQueue> commandQueue = [device newCommandQueue];
+    id<MTLComputePipelineState> computePipelineState = kernel("kernel_basic");
     
     // Create buffers for input and output data
     float inputData[] = {1.0, 2.0, 3.0, 4.0};
@@ -50,7 +64,7 @@ void prepare_metal(struct Transformer* transformer) {
     id<MTLBuffer> scaleBuffer = [device newBufferWithBytes:&scale length:sizeof(scale) options:MTLResourceStorageModeShared];
     
     // Create a command buffer
-    id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+    id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
     
     // Create a compute command encoder
     id<MTLComputeCommandEncoder> computeEncoder = [commandBuffer computeCommandEncoder];
