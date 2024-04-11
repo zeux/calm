@@ -14,6 +14,15 @@ inline float blockreduce_sum(threadgroup float* vs, float val, uint id) {
 	return simd_sum(vs[id % warpSize]);
 }
 
+inline float blockreduce_max(threadgroup float* vs, float val, uint id) {
+	val = simd_max(val);
+
+	vs[id / warpSize] = val;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+
+	return simd_max(vs[id % warpSize]);
+}
+
 inline float matmul_warppar(device float* x, device half* w, int i, int n, uint id) {
 	int lane = id % warpSize;
 	float val = 0.0f;
@@ -198,9 +207,62 @@ struct AttnArgs {
 	int kv_len;
 	int head_dim;
 	int kv_mul;
+	int n_heads;
 
 	size_t loff;
 };
+
+template <typename KVT>
+kernel void kernel_attn_score(constant AttnArgs& args [[buffer(0)]], device float* att [[buffer(1)]], device float* q [[buffer(2)]], device KVT* keyc [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+	int j = id / warpSize;
+
+	int h = j % args.n_heads;
+	int kvh = h / args.kv_mul;
+	int t = (j / args.n_heads) * 8 + (id % warpSize) / 4;
+
+	if (t < args.kv_len) {
+		device float* qh = q + h * args.head_dim;
+		device KVT* kh = keyc + args.loff + kvh * args.head_dim * args.seq_len;
+		device float* atth = att + h * args.seq_len;
+
+		float score = attn_score(kh, qh, args.head_dim, args.seq_len, t, 4 * (id % 4));
+
+		// reduce score across threads in warp; every 4 threads are processing the same output score
+		score += simd_shuffle_xor(score, 2);
+		score += simd_shuffle_xor(score, 1);
+		score /= sqrt(float(args.head_dim));
+
+		atth[t] = score;
+	}
+}
+
+template [[host_name("attn_score_half")]] kernel void kernel_attn_score<half>(constant AttnArgs&, device float*, device float*, device half*, uint);
+
+[[host_name("attn_softmax")]] kernel void kernel_attn_softmax(constant AttnArgs& args [[buffer(0)]], device float* att [[buffer(1)]], uint id [[thread_position_in_grid]]) {
+	const int blockSize = 1024;
+	int h = id / blockSize;
+	device float* atth = att + h * args.seq_len;
+
+	int i = id % blockSize;
+	int size = args.kv_len;
+	device float* x = atth;
+
+	threadgroup float vs[32];
+
+	// find max value per thread (for numerical stability)
+	float max_val = -FLT_MAX;
+	for (int j = i; j < size; j += blockSize) {
+		max_val = max(max_val, x[j]);
+	}
+
+	// max across threads in block
+	max_val = blockreduce_max(vs, max_val, id);
+
+	// exp per thread
+	for (int j = i; j < size; j += blockSize) {
+		x[j] = exp(x[j] - max_val);
+	}
+}
 
 template <typename KVT>
 kernel void kernel_attn_mix(constant AttnArgs& args [[buffer(0)]], device float* qout [[buffer(1)]], device float* att [[buffer(2)]], device KVT* valc [[buffer(3)]], uint id [[thread_position_in_grid]]) {

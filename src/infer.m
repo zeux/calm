@@ -125,6 +125,7 @@ struct AttnArgs {
 	int kv_len;
 	int head_dim;
 	int kv_mul;
+	int n_heads;
 
 	size_t loff;
 };
@@ -170,8 +171,16 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		// qkv
 		dispatch(encoder, "qkv", "half_half", dim, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l] }, 8);
 
+		// attn score
+		int kv_lent = (kv_len + 7) / 8;
+
+		dispatch(encoder, "attn_score", "half", kv_lent * p->n_heads, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->att, s->q, s->key_cache }, 3);
+
+		// attn softmax
+		dispatch(encoder, "attn_softmax", NULL, p->n_heads, 1024, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->att }, 1);
+
 		// attn mix
-		dispatch(encoder, "attn_mix", "half", q_dim, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, loff }, sizeof(struct AttnArgs), (void*[]) { s->q, s->att, s->value_cache }, 3);
+		dispatch(encoder, "attn_mix", "half", q_dim, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff }, sizeof(struct AttnArgs), (void*[]) { s->q, s->att, s->value_cache }, 3);
 
 		// attn out
 		dispatch(encoder, "attn_out", "half", dim, 32, (int[]) { q_dim }, sizeof(int), (void*[]) { x, s->q, w->wo[l] }, 3);
