@@ -87,7 +87,7 @@ void prepare_metal(struct Transformer* transformer) {
 	state->hb = (float*)newbuffer(hidden_dim * sizeof(float));
 	state->he = (float*)newbuffer(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)newbuffer(q_dim * sizeof(float));
-	state->att = (float*)newbuffer(config->n_heads * config->seq_len * 2 * sizeof(float));
+	state->att = (float*)newbuffer(config->n_heads * config->seq_len * sizeof(float));
 
 	assert(state->kvbits == 8 || state->kvbits == 16);
 	state->key_cache = newbuffer((size_t)config->n_layers * config->seq_len * kv_dim * (state->kvbits / 8));
@@ -120,6 +120,15 @@ struct QkvArgs {
 	float theta_log2;
 };
 
+struct AttnArgs {
+	int seq_len;
+	int kv_len;
+	int head_dim;
+	int kv_mul;
+
+	size_t loff;
+};
+
 float* forward_metal(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	struct Config* p = &transformer->config;
 	struct Weights* w = &transformer->weights;
@@ -130,6 +139,8 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	int dim = p->dim;
 	int hidden_dim = p->hidden_dim;
 	int kv_dim = p->head_dim * p->n_kv_heads;
+	int q_dim = p->head_dim * p->n_heads;
+	int kv_mul = p->n_heads / p->n_kv_heads;
 	assert(w->dbits == 16); // TODO
 	assert(s->kvbits == 16); // TODO
 
@@ -157,9 +168,10 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
 
 		// qkv
-		int q_dim = p->head_dim * p->n_heads;
-		int kv_dim = p->head_dim * p->n_kv_heads;
 		dispatch(encoder, "qkv", "half_half", dim, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l] }, 8);
+
+		// attn mix
+		dispatch(encoder, "attn_mix", "half", q_dim, 32, &(struct AttnArgs) { p->seq_len, kv_len, p->head_dim, kv_mul, loff }, sizeof(struct AttnArgs), (void*[]) { s->q, s->att, s->value_cache }, 3);
 
 		// attn out
 		dispatch(encoder, "attn_out", "half", dim, 32, (int[]) { q_dim }, sizeof(int), (void*[]) { x, s->q, w->wo[l] }, 3);

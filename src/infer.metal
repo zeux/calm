@@ -145,6 +145,84 @@ kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[b
 
 template [[host_name("qkv_half_half")]] kernel void kernel_qkv<half, half>(constant QkvArgs&, device float*, device float*, device half*, device half*, device half*, device half*, device half*, device float*, uint);
 
+inline float4 attn_load4(device half* p) {
+	return float4(*(device half4*)p);
+}
+
+template <typename KVT>
+inline float attn_score(device KVT* kht, device float* qh, int head_dim, int seq_len, int t, int off) {
+	float score = 0.0f;
+	for (int j = 0; j < head_dim; j += 16) {
+		float4 kk = attn_load4(&kht[j * seq_len + t * 16 + off]);
+		float4 qq = *(device float4*)&qh[j + off];
+		score += kk.x * qq.x;
+		score += kk.y * qq.y;
+		score += kk.z * qq.z;
+		score += kk.w * qq.w;
+	}
+
+	return score;
+}
+
+template <typename KVT>
+inline float attn_warpdot(device KVT* val, device float* atth, int kv_len, uint id) {
+	int kv_len4 = kv_len & ~3;
+	int lane = id % warpSize;
+
+	float res = 0.0f;
+	float sum = 0.0f;
+	for (int t = lane * 4; t < kv_len4; t += warpSize * 4) {
+		float4 vv = attn_load4(&val[t]);
+		float4 aa = *(device float4*)&atth[t];
+		res += vv.x * aa.x;
+		res += vv.y * aa.y;
+		res += vv.z * aa.z;
+		res += vv.w * aa.w;
+		sum += aa.x + aa.y + aa.z + aa.w;
+	}
+
+	if (kv_len4 + lane < kv_len) {
+		float a = atth[kv_len4 + lane];
+		res += a * float(val[kv_len4 + lane]);
+		sum += a;
+	}
+
+	res = simd_sum(res);
+	sum = simd_sum(sum);
+
+	return res / sum;
+}
+
+struct AttnArgs {
+	int seq_len;
+	int kv_len;
+	int head_dim;
+	int kv_mul;
+
+	size_t loff;
+};
+
+template <typename KVT>
+kernel void kernel_attn_mix(constant AttnArgs& args [[buffer(0)]], device float* qout [[buffer(1)]], device float* att [[buffer(2)]], device KVT* valc [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+	int j = id / warpSize;
+
+	int h = j / args.head_dim;
+	int kvh = h / args.kv_mul;
+	int j_head = j % args.head_dim;
+
+	device float* atth = att + h * args.seq_len;
+	device KVT* vh = valc + args.loff + kvh * args.head_dim * args.seq_len;
+	device KVT* val = vh + j_head * args.seq_len;
+
+	float res = attn_warpdot(val, atth, args.kv_len, id);
+
+	if (id % warpSize == 0) {
+		qout[j] = res;
+	}
+}
+
+template [[host_name("attn_mix_half")]] kernel void kernel_attn_mix<half>(constant AttnArgs&, device float*, device float*, device half*, uint);
+
 template <typename T>
 kernel void kernel_attn_out(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {
 	int j = id / warpSize;
