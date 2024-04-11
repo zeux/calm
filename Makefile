@@ -27,6 +27,7 @@ ifeq ($(UNAME),Darwin)
   CFLAGS+=-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include
   LDFLAGS+=-L/opt/homebrew/opt/libomp/lib -lomp
   LDFLAGS+=-framework Metal -framework Foundation
+  METALFLAGS=-std=metal3.0 -O2
 else
   CFLAGS+=-fopenmp -mf16c -mavx2 -mfma
   LDFLAGS+=-fopenmp
@@ -76,7 +77,7 @@ $(BUILD)/%.m.o: %.m
 
 $(BUILD)/%.metal.o: %.metal
 	@mkdir -p $(dir $@)
-	xcrun metal $< -O2 -c -MMD -MP -o $@.ir
+	xcrun metal $< $(METALFLAGS) -c -MMD -MP -o $@.ir
 	xcrun metallib -o $@.metallib $@.ir
 	xxd -i -n $(basename $(notdir $<))_metallib $@.metallib > $@.c
 	$(CC) $@.c -c -o $@
