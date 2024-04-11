@@ -18,3 +18,10 @@ jobs:
       run: |
         export NVCC=/usr/local/cuda/bin/nvcc
         make -j2
+
+  macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: make
+      run: make -j2
