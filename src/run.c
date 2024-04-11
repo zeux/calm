@@ -28,7 +28,10 @@ void prepare_cuda(struct Transformer* transformer);
 float* forward_cuda(struct Transformer* transformer, int token, int pos, unsigned flags);
 void perf_cuda(void);
 
-void testmetal(void);
+void init_metal(void);
+void* upload_metal(void* host, size_t size);
+void prepare_metal(struct Transformer* transformer);
+float* forward_metal(struct Transformer* transformer, int token, int pos, unsigned flags);
 
 void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->dim = atoi(tensors_metadata(tensors, "dim"));
@@ -541,6 +544,19 @@ int main(int argc, char* argv[]) {
 	}
 #endif
 
+#ifdef __APPLE__
+	// upload tensors to the GPU
+	if (metal) {
+		init_metal();
+		for (int i = 0; i < tensors.n_tensors; ++i) {
+			struct Tensor* tensor = &tensors.tensors[i];
+			if (strncmp(tensor->name, "model.", 6) == 0) {
+				tensor->data = upload_metal(tensor->data, tensor->size);
+			}
+		}
+	}
+#endif
+
 	get_weights(&transformer.config, &transformer.weights, &tensors);
 
 #ifdef __linux__
@@ -552,7 +568,8 @@ int main(int argc, char* argv[]) {
 
 #ifdef __APPLE__
 	if (metal) {
-		testmetal();
+		prepare_metal(&transformer);
+		transformer.forward = forward_metal;
 	}
 #endif
 

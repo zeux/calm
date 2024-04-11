@@ -1,14 +1,28 @@
+#include "model.h"
+
 #include <Metal/Metal.h>
 
 extern unsigned char infer_metallib[];
 extern unsigned int infer_metallib_len;
 
-// Main function to setup and run the Metal compute kernel
-void testmetal() {
-    // Create a device
-    NSArray <id<MTLDevice>>* mtl_devices = MTLCopyAllDevices();
-    assert(mtl_devices.count > 0);
-    id<MTLDevice> device = mtl_devices[0];
+static id<MTLDevice> device;
+
+void init_metal(void) {
+    NSArray<id<MTLDevice>>* devices = MTLCopyAllDevices();
+    assert(devices.count > 0);
+
+    device = devices[0];
+}
+
+void* upload_metal(void* host, size_t size) {
+    assert(device);
+    id<MTLBuffer> buffer = [device newBufferWithBytes:host length:size options:MTLResourceStorageModeShared];
+    return buffer;
+}
+
+void prepare_metal(struct Transformer* transformer) {
+    assert(device);
+    printf("# Metal: %s\n", device.name.UTF8String);
 
     dispatch_data_t lib_data = dispatch_data_create(infer_metallib, infer_metallib_len, dispatch_get_main_queue(), ^{});
     
@@ -66,3 +80,6 @@ void testmetal() {
     }
 }
 
+float* forward_metal(struct Transformer* transformer, int token, int pos, unsigned flags) {
+    return NULL;
+}
