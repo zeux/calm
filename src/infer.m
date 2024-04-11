@@ -9,13 +9,23 @@ static id<MTLDevice> device;
 static id<MTLCommandQueue> queue;
 static id<MTLComputePipelineState> kernels[256];
 
-static id<MTLComputePipelineState> kernel(const char* name) {
+static void dispatch(id<MTLComputeCommandEncoder> encoder, unsigned int thread_groups, unsigned int thread_group_size, const char* name, void* params, size_t params_size, void** buffers, size_t buffer_count) {
+    id<MTLComputePipelineState> state = nil;
     for (size_t i = 0; kernels[i]; ++i) {
         if (strcmp(kernels[i].label.UTF8String, name) == 0) {
-            return kernels[i];
+            state = kernels[i];
+            break;
         }
     }
-    return nil;
+    assert(state);
+
+    [encoder setComputePipelineState:state];
+    [encoder setBytes:params length:params_size atIndex:0];
+    for (size_t i = 0; i < buffer_count; ++i) {
+        [encoder setBuffer:buffers[i] offset:0 atIndex:i+1];
+    }
+
+    [encoder dispatchThreadgroups:MTLSizeMake(thread_groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(thread_group_size, 1, 1)];
 }
 
 void init_metal(void) {
@@ -53,34 +63,20 @@ void prepare_metal(struct Transformer* transformer) {
     assert(device);
     printf("# Metal: %s\n", device.name.UTF8String);
 
-    id<MTLComputePipelineState> computePipelineState = kernel("kernel_basic");
-    
     // Create buffers for input and output data
     float inputData[] = {1.0, 2.0, 3.0, 4.0};
     float outputData[4] = {0};
     float scale = 0.5;
     id<MTLBuffer> inputBuffer = [device newBufferWithBytes:inputData length:sizeof(inputData) options:MTLResourceStorageModeShared];
     id<MTLBuffer> outputBuffer = [device newBufferWithBytes:outputData length:sizeof(outputData) options:MTLResourceStorageModeShared];
-    id<MTLBuffer> scaleBuffer = [device newBufferWithBytes:&scale length:sizeof(scale) options:MTLResourceStorageModeShared];
     
     // Create a command buffer
     id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
     
     // Create a compute command encoder
     id<MTLComputeCommandEncoder> computeEncoder = [commandBuffer computeCommandEncoder];
-    [computeEncoder setComputePipelineState:computePipelineState];
-    [computeEncoder setBuffer:inputBuffer offset:0 atIndex:0];
-    [computeEncoder setBuffer:outputBuffer offset:0 atIndex:1];
-    [computeEncoder setBuffer:scaleBuffer offset:0 atIndex:2];
-    
-    // Dispatch the compute kernel
-    MTLSize gridSize = MTLSizeMake(4, 1, 1); // Process the 4 elements
-    NSUInteger threadGroupSize = computePipelineState.maxTotalThreadsPerThreadgroup;
-    if (threadGroupSize > gridSize.width) {
-        threadGroupSize = gridSize.width;
-    }
-    MTLSize threadgroupSize = MTLSizeMake(threadGroupSize, 1, 1);
-    [computeEncoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
+
+    dispatch(computeEncoder, 1, 4, "kernel_basic", &scale, sizeof(scale), (void*[]){ inputBuffer, outputBuffer }, 2);
     
     // End encoding and commit the command buffer
     [computeEncoder endEncoding];
