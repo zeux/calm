@@ -103,6 +103,23 @@ struct NormArgs {
 	bool ln;
 };
 
+struct QkvArgs {
+	int dim;
+	int q_dim;
+	int kv_dim;
+	int head_dim;
+	int rotary_dim;
+
+	int pos;
+	int kv_pos;
+	int seq_len;
+
+	size_t loff;
+
+	float qkv_clip;
+	float theta_log2;
+};
+
 float* forward_metal(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	struct Config* p = &transformer->config;
 	struct Weights* w = &transformer->weights;
@@ -116,6 +133,12 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	assert(w->dbits == 16); // TODO
 	assert(s->kvbits == 16); // TODO
 
+	// following "attention sinks" from StreamingLLM we keep the first few tokens in the KV cache as is
+	int kv_sink = pos >= p->seq_len ? KV_SINKS : 0;
+	int kv_pos = kv_sink + (pos - kv_sink) % (p->seq_len - kv_sink);
+	int kv_len = pos >= p->seq_len ? p->seq_len : pos + 1;
+	(void)kv_len; // TODO
+
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 
@@ -128,8 +151,17 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	dispatch(encoder, "embed", "half", dim / 32, 32, (int[]){ token * dim }, sizeof(int), (void*[]){ x, w->token_embedding_table }, 2);
 
 	for (int l = 0; l < p->n_layers; ++l) {
+		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
+
 		// pre-attention rmsnorm
 		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
+
+		assert(w->bqkv == NULL); // TODO
+
+		// qkv
+		int q_dim = p->head_dim * p->n_heads;
+		int kv_dim = p->head_dim * p->n_kv_heads;
+		dispatch(encoder, "qkv", "half_half", dim, 32, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l] }, 7);
 
 		if (!p->norm_par) {
 			// post-attention rmsnorm

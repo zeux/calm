@@ -83,6 +83,63 @@ struct NormArgs {
 	}
 }
 
+struct QkvArgs {
+	int dim;
+	int q_dim;
+	int kv_dim;
+	int head_dim;
+	int rotary_dim;
+
+	int pos;
+	int kv_pos;
+	int seq_len;
+
+	size_t loff;
+
+	float qkv_clip;
+	float theta_log2;
+};
+
+template <typename T, typename KVT>
+kernel void kernel_qkv(constant QkvArgs& args [[buffer(0)]], device float* x [[buffer(1)]], device float* qout [[buffer(2)]], device KVT* keyc [[buffer(3)]], device KVT* valc [[buffer(4)]], device T* wq [[buffer(5)]], device T* wk [[buffer(6)]], device T* wv [[buffer(7)]], uint id [[thread_position_in_grid]]) {
+	int dim = args.dim;
+	int q_dim = args.q_dim;
+	int kv_dim = args.kv_dim;
+
+	int j = id / warpSize;
+	device T* w = j < q_dim ? wq : (j < q_dim + kv_dim ? wk : wv);
+	int k = j < q_dim ? j : (j < q_dim + kv_dim ? j - q_dim : j - q_dim - kv_dim);
+
+	float v0 = matmul_warppar(x, w, k + 0, dim, id);
+	float v1 = matmul_warppar(x, w, k + 1, dim, id);
+
+	v0 = min(max(v0, -args.qkv_clip), args.qkv_clip);
+	v1 = min(max(v1, -args.qkv_clip), args.qkv_clip);
+
+	if (id % warpSize == 0) {
+		int j_head = j % args.head_dim;
+		float freq = j_head >= args.rotary_dim ? 0.f : exp2(-args.theta_log2 * (float)j_head / (float)args.rotary_dim);
+		float fcr;
+		float fci = sincos(args.pos * freq, fcr);
+
+		if (j < q_dim) {
+			qout[k + 0] = v0 * fcr - v1 * fci;
+			qout[k + 1] = v0 * fci + v1 * fcr;
+		} else if (j < q_dim + kv_dim) {
+			// note: k layout is transposed / tiled to improve attn_score performance
+			int off = args.kv_pos * 16 + args.seq_len * (k / 16) * 16 + (k % 16);
+			keyc[args.loff + off + 0] = KVT(v0 * fcr - v1 * fci);
+			keyc[args.loff + off + 1] = KVT(v0 * fci + v1 * fcr);
+		} else {
+			// note: v layout is transposed (we store all positions for a given head contiguously) to improve attn_mix performance
+			valc[args.loff + args.kv_pos + args.seq_len * (k + 0)] = KVT(v0);
+			valc[args.loff + args.kv_pos + args.seq_len * (k + 1)] = KVT(v1);
+		}
+	}
+}
+
+template [[host_name("qkv_half_half")]] kernel void kernel_qkv<half, half>(constant QkvArgs&, device float*, device float*, device half*, device half*, device half*, device half*, device half*, uint);
+
 template <typename T, bool act_gelu>
 kernel void kernel_ffn13(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w1 [[buffer(3)]], device T* w3 [[buffer(4)]], uint id [[thread_position_in_grid]]) {
 	int j = id / warpSize;
