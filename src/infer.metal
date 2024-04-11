@@ -26,6 +26,14 @@ inline float matmul_warppar(device float* x, device half* w, int i, int n, uint 
 	return simd_sum(val);
 }
 
+inline float gelu(float x) {
+	return 0.5f * x * (1.0f + tanh(0.797885f * (x + 0.044715f * x * x * x)));
+}
+
+inline float silu(float x) {
+	return x / (1.0f + exp(-x));
+}
+
 template <typename T>
 kernel void kernel_embed(constant int& token_offset [[buffer(0)]], device float* o [[buffer(1)]], device T* weight [[buffer(2)]], uint id [[thread_position_in_grid]]) {
 	o[id] = weight[id + token_offset];
@@ -74,6 +82,32 @@ struct NormArgs {
 		o[j] = (x[j] - mean) * weight[j] * scale;
 	}
 }
+
+template <typename T, bool act_gelu>
+kernel void kernel_ffn13(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w1 [[buffer(3)]], device T* w3 [[buffer(4)]], uint id [[thread_position_in_grid]]) {
+	int j = id / warpSize;
+	float v1 = matmul_warppar(x, w1, j, n, id);
+	float v3 = matmul_warppar(x, w3, j, n, id);
+
+	if (id % warpSize == 0) {
+		xout[j] = (act_gelu ? gelu(v1) : silu(v1)) * v3;
+	}
+}
+
+template [[host_name("ffn13_silu_half")]] kernel void kernel_ffn13<half, false>(constant int&, device float*, device float*, device half*, device half*, uint);
+template [[host_name("ffn13_gelu_half")]] kernel void kernel_ffn13<half, true>(constant int&, device float*, device float*, device half*, device half*, uint);
+
+template <typename T>
+kernel void kernel_ffn2(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w2 [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+	int j = id / warpSize;
+	float val = matmul_warppar(x, w2, j, n, id);
+
+	if (id % warpSize == 0) {
+		xout[j] += val;
+	}
+}
+
+template [[host_name("ffn2_half")]] kernel void kernel_ffn2<half>(constant int&, device float*, device float*, device half*, uint);
 
 template <typename T>
 kernel void kernel_output(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {

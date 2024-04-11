@@ -113,6 +113,8 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	int dim = p->dim;
 	int hidden_dim = p->hidden_dim;
 	int kv_dim = p->head_dim * p->n_kv_heads;
+	assert(w->dbits == 16); // TODO
+	assert(s->kvbits == 16); // TODO
 
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
@@ -129,8 +131,16 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		// pre-attention rmsnorm
 		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
 
-		// post-attention rmsnorm
-		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_ffn_weight[l] }, 3);
+		if (!p->norm_par) {
+			// post-attention rmsnorm
+			dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_ffn_weight[l] }, 3);
+		}
+
+		assert(p->n_experts == 0); // TODO
+
+		// ffn
+		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", "half", hidden_dim, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->hb, s->xb, w->w1[l], w->w3[l] }, 4);
+		dispatch(encoder, "ffn2", "half", dim, 32, (int[]) { hidden_dim }, sizeof(int), (void*[]) { x, s->hb, w->w2[l] }, 4);
 	}
 
 	// classifier into logits
