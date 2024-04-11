@@ -83,6 +83,7 @@ void prepare_metal(struct Transformer* transformer) {
 	int kv_dim = config->head_dim * config->n_kv_heads;
 
 	state->x = (float*)newbuffer(dim * sizeof(float));
+	state->xb = (float*)newbuffer(dim * sizeof(float));
 	state->hb = (float*)newbuffer(hidden_dim * sizeof(float));
 	state->he = (float*)newbuffer(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)newbuffer(q_dim * sizeof(float));
@@ -95,6 +96,12 @@ void prepare_metal(struct Transformer* transformer) {
 	// logits are going to be read by the host so we just allocate them in host and write to host directly
 	state->logits = (float*)newbuffer(config->vocab_size * sizeof(float));
 }
+
+struct NormArgs {
+	int size;
+	float eps;
+	bool ln;
+};
 
 float* forward_metal(struct Transformer* transformer, int token, int pos, unsigned flags) {
 	struct Config* p = &transformer->config;
@@ -118,9 +125,18 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	assert(token < p->vocab_size);
 	dispatch(encoder, "embed", "half", dim / 32, 32, (int[]){ token * dim }, sizeof(int), (void*[]){ x, w->token_embedding_table }, 2);
 
+	for (int l = 0; l < p->n_layers; ++l) {
+		// pre-attention rmsnorm
+		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
+
+		// post-attention rmsnorm
+		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_ffn_weight[l] }, 3);
+	}
+
 	// classifier into logits
 	if ((flags & FF_UPDATE_KV_ONLY) == 0) {
-		dispatch(encoder, "output", "half", p->vocab_size, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->logits, x, w->wcls }, 3);
+		dispatch(encoder, "rmsnorm", NULL, 1, 1024, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_final_weight }, 3);
+		dispatch(encoder, "output", "half", p->vocab_size, 32, (int[]) { dim }, sizeof(int), (void*[]) { s->logits, s->xb, w->wcls }, 3);
 	}
 
 	// submit commands and wait
