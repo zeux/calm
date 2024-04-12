@@ -8,6 +8,7 @@ extern unsigned int infer_metallib_len;
 static id<MTLDevice> device;
 static id<MTLCommandQueue> queue;
 static id<MTLComputePipelineState> kernels[256];
+static const char* kernel_names[256];
 
 static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, const char* variant, unsigned int thread_groups, unsigned int thread_group_size, void* params, size_t params_size, void** buffers, size_t buffer_count) {
 	char expected[256];
@@ -19,7 +20,7 @@ static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, con
 
 	id<MTLComputePipelineState> state = nil;
 	for (size_t i = 0; kernels[i]; ++i) {
-		if (strcmp(kernels[i].label.UTF8String, expected) == 0) {
+		if (strcmp(kernel_names[i], expected) == 0) {
 			state = kernels[i];
 			break;
 		}
@@ -50,13 +51,11 @@ void init_metal(void) {
 
 	NSArray<NSString*>* functions = library.functionNames;
 	for (size_t i = 0; i < functions.count; i++) {
-		MTLComputePipelineDescriptor* descriptor = [[MTLComputePipelineDescriptor alloc] init];
-		descriptor.computeFunction = [library newFunctionWithName:functions[i]];
-		descriptor.label = functions[i];
-
-		id<MTLComputePipelineState> computePipelineState = [device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error];
-		assert(computePipelineState);
-		kernels[i] = computePipelineState;
+		id<MTLFunction> function = [library newFunctionWithName:functions[i]];
+		id<MTLComputePipelineState> state = [device newComputePipelineStateWithFunction:function error:&error];
+		assert(state);
+		kernels[i] = state;
+		kernel_names[i] = [functions[i] UTF8String];
 	}
 }
 
