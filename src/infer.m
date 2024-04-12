@@ -10,6 +10,8 @@ static id<MTLCommandQueue> queue;
 static id<MTLComputePipelineState> kernels[256];
 static const char* kernel_names[256];
 
+static MTLCaptureManager* capture;
+
 static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, const char* variant, unsigned int thread_groups, unsigned int thread_group_size, void* params, size_t params_size, void** buffers, size_t buffer_count) {
 	char expected[256];
 	strcpy(expected, name);
@@ -56,6 +58,22 @@ void init_metal(void) {
 		assert(state);
 		kernels[i] = state;
 		kernel_names[i] = [functions[i] UTF8String];
+	}
+
+	const char* capenv = getenv("MTL_CAPTURE_ENABLED");
+	if (capenv && atoi(capenv)) {
+		capture = [MTLCaptureManager sharedCaptureManager];
+		assert(capture);
+
+		MTLCaptureDescriptor* desc = [[MTLCaptureDescriptor alloc] init];
+		desc.captureObject = queue;
+		desc.destination = MTLCaptureDestinationGPUTraceDocument;
+		desc.outputURL = [NSURL fileURLWithPath:@"calm.gputrace"];
+
+		BOOL started = [capture startCaptureWithDescriptor:desc error:&error];
+		assert(started);
+
+		NSLog(@"Capturing first token to %@", desc.outputURL);
 	}
 }
 
@@ -236,6 +254,11 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	[encoder endEncoding];
 	[commands commit];
 	[commands waitUntilCompleted];
+
+	if (capture) {
+		[capture stopCapture];
+		capture = nil;
+	}
 
 	if (flags & FF_UPDATE_KV_ONLY) {
 		// only update kv cache and don't output logits
