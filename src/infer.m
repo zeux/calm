@@ -29,11 +29,11 @@ static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, con
 	}
 	assert(state);
 
+	static const NSUInteger offsets[16] = {};
+
 	[encoder setComputePipelineState:state];
 	[encoder setBytes:params length:params_size atIndex:0];
-	for (size_t i = 0; i < buffer_count; ++i) {
-		[encoder setBuffer:buffers[i] offset:0 atIndex:i+1];
-	}
+	[encoder setBuffers:(const id<MTLBuffer>*)buffers offsets:offsets withRange:NSMakeRange(1, buffer_count)];
 
 	[encoder dispatchThreadgroups:MTLSizeMake(thread_groups, 1, 1) threadsPerThreadgroup:MTLSizeMake(thread_group_size, 1, 1)];
 }
