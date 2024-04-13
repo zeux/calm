@@ -28,6 +28,7 @@ static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, con
 		}
 	}
 	assert(state);
+	assert(state.maxTotalThreadsPerThreadgroup >= thread_group_size);
 
 	static const NSUInteger offsets[16] = {};
 
