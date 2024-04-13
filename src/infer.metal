@@ -75,7 +75,7 @@ inline float matmul_warppar(device float* x, device uint32_t* w, int i, int n, u
 }
 
 inline float gelu(float x) {
-	return 0.5f * x * (1.0f + tanh(0.797885f * (x + 0.044715f * x * x * x)));
+	return 0.5f * x * (1.0f + precise::tanh(0.797885f * (x + 0.044715f * x * x * x)));
 }
 
 inline float silu(float x) {
