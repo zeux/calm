@@ -66,14 +66,10 @@ inline float matmul_warppar(device float* x, device uint32_t* w, int i, int n, u
 		float us = as_type<half>(uint16_t(wg << 8));
 		float s = us * -0.25f;
 
-		val += (float(int(wg >>  8) & 7) * s + us) * xx0.x;
-		val += (float(int(wg >> 11) & 7) * s + us) * xx0.y;
-		val += (float(int(wg >> 14) & 7) * s + us) * xx0.z;
-		val += (float(int(wg >> 17) & 7) * s + us) * xx0.w;
-		val += (float(int(wg >> 20) & 7) * s + us) * xx1.x;
-		val += (float(int(wg >> 23) & 7) * s + us) * xx1.y;
-		val += (float(int(wg >> 26) & 7) * s + us) * xx1.z;
-		val += (float(int(wg >> 29) & 7) * s + us) * xx1.w;
+		for (int k = 0; k < 4; ++k) {
+			val += (float(int(wg >> ( 8 + k * 3)) & 7) * s + us) * xx0[k];
+			val += (float(int(wg >> (20 + k * 3)) & 7) * s + us) * xx1[k];
+		}
 	}
 	return simd_sum(val);
 }
