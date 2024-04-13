@@ -60,9 +60,6 @@ format:
 $(BUILD)/fuzz-tensors: src/tensors.c
 	clang $(CFLAGS) -DFUZZING -O1 -fsanitize=address,fuzzer -o $@ $^
 
-$(BUILD)/cudabench: tools/cudabench.cu
-	$(NVCC) $< $(CUFLAGS) -MMD -MP -o $@
-
 $(BUILD)/cudaprof: tools/cudaprof.cu
 	$(NVCC) $< $(CUFLAGS) -Xcompiler -fPIC -shared -lcupti -MMD -MP -o $@
 
@@ -89,7 +86,6 @@ $(BUILD)/%.cu.o: %.cu
 	$(NVCC) $< $(CUFLAGS) -c -MMD -MP -o $@
 
 -include $(OBJECTS:.o=.d)
--include $(BUILD)/cudabench.d
 -include $(BUILD)/cudaprof.d
 
 clean:
