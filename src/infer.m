@@ -65,10 +65,14 @@ void init_metal(void) {
 		capture = [MTLCaptureManager sharedCaptureManager];
 		assert(capture);
 
+		NSString* path = @"calm.gputrace";
+
 		MTLCaptureDescriptor* desc = [[MTLCaptureDescriptor alloc] init];
 		desc.captureObject = queue;
 		desc.destination = MTLCaptureDestinationGPUTraceDocument;
-		desc.outputURL = [NSURL fileURLWithPath:@"calm.gputrace"];
+		desc.outputURL = [NSURL fileURLWithPath:path];
+
+		[[NSFileManager defaultManager] removeItemAtPath:path error:&error];
 
 		BOOL started = [capture startCaptureWithDescriptor:desc error:&error];
 		assert(started);
