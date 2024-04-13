@@ -101,5 +101,5 @@ RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak high
 calm uses [🤗 Safetensors](https://huggingface.co/docs/safetensors/index) to store model files. Note that the models require conversion (see below), because calm stores model hyperparameters in .safetensors metadata and may expect a particular set of tensor names or weight order within tensors that is not always compatible with the source. Tokenizer data is stored as tensors inside the model file as well.
 
 [^1]: CUDA runtime and compiler is used for GPU acceleration, but no CUDA or C libraries are used. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
-[^2]: Linux is the main supported OS at the moment; calm also works on macOS (on CPU) but does not support Metal.
+[^2]: Linux is the main supported OS at the moment; calm also works on macOS (on CPU) and has experimental Metal support.
 [^3]: Based on testing a specific Gigabyte GeForce RTX 4090 where both individual kernels from this repository and cuBLAS peak at about ~955 GB/s.
