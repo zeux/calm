@@ -10,3 +10,4 @@ build/
 *.nsys-rep
 *.ncu-rep
 perf.data*
+*.gputrace/
