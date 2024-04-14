@@ -158,7 +158,8 @@ struct NormArgs {
 	bool ln;
 };
 
-[[host_name("rmsnorm")]] kernel void kernel_rmsnorm(constant NormArgs& args [[buffer(0)]], device float* o [[buffer(1)]], device float* x [[buffer(2)]], device float* weight [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+template <typename T>
+kernel void kernel_rmsnorm(constant NormArgs& args [[buffer(0)]], device T* o [[buffer(1)]], device float* x [[buffer(2)]], device float* weight [[buffer(3)]], uint id [[thread_position_in_grid]]) {
 	int i = id;
 	const int blockSize = 1024;
 	int size = args.size;
@@ -193,6 +194,9 @@ struct NormArgs {
 		o[j] = (x[j] - mean) * weight[j] * scale;
 	}
 }
+
+template [[host_name("rmsnorm_float")]] kernel void kernel_rmsnorm<float>(constant NormArgs&, device float*, device float*, device float*, uint);
+template [[host_name("rmsnorm_half")]] kernel void kernel_rmsnorm<half>(constant NormArgs&, device half*, device float*, device float*, uint);
 
 struct QkvArgs {
 	int dim;

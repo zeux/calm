@@ -188,6 +188,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 	const char* dvar = w->dbits == 16 ? "half" : (w->dbits == 8 ? "fp8" : (w->dbits == 4 ? "gf4" : "?"));
 	const char* kvar = "half";
+	const char* nvar = "float";
 
 	char dkvar[32];
 	snprintf(dkvar, sizeof(dkvar), "%s_%s", dvar, kvar);
@@ -218,7 +219,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		size_t loff = (size_t)l * p->seq_len * kv_dim; // kv cache layer offset for convenience
 
 		// pre-attention rmsnorm
-		dispatch(encoder, "rmsnorm", NULL, 1, 1024, 0, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
+		dispatch(encoder, "rmsnorm", nvar, 1, 1024, 0, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_att_weight[l] }, 3);
 
 		// qkv
 		dispatch(encoder, "qkv", dkvar, (q_dim + kv_dim * 2) / 2, 32, 0, &(struct QkvArgs) { dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta) }, sizeof(struct QkvArgs), (void*[]) { s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l] }, 8);
@@ -239,7 +240,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 		if (!p->norm_par) {
 			// post-attention rmsnorm
-			dispatch(encoder, "rmsnorm", NULL, 1, 1024, 0, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_ffn_weight[l] }, 3);
+			dispatch(encoder, "rmsnorm", nvar, 1, 1024, 0, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_ffn_weight[l] }, 3);
 		}
 
 		assert(p->n_experts == 0); // TODO
@@ -251,7 +252,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 	// classifier into logits
 	if ((flags & FF_UPDATE_KV_ONLY) == 0) {
-		dispatch(encoder, "rmsnorm", NULL, 1, 1024, 0, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_final_weight }, 3);
+		dispatch(encoder, "rmsnorm", nvar, 1, 1024, 0, &(struct NormArgs) { dim, p->norm_eps, p->norm_ln }, sizeof(struct NormArgs), (void*[]) { s->xb, x, w->rms_final_weight }, 3);
 		dispatch(encoder, "output", dvar, p->vocab_size, 32, 0, (int[]) { dim }, sizeof(int), (void*[]) { s->logits, s->xb, w->wcls }, 3);
 	}
 
