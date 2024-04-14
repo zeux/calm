@@ -188,7 +188,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 	const char* dvar = w->dbits == 16 ? "half" : (w->dbits == 8 ? "fp8" : (w->dbits == 4 ? "gf4" : "?"));
 	const char* kvar = "half";
-	const char* nvar = "float";
+	const char* nvar = w->dbits == 4 ? "half" : "float";
 
 	char dkvar[32];
 	snprintf(dkvar, sizeof(dkvar), "%s_%s", dvar, kvar);
