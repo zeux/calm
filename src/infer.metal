@@ -29,7 +29,7 @@ inline float blockreduce_max(threadgroup float* vs, float val, uint id) {
 
 inline half gf4_ff(uint32_t v, int k) {
 	half s = as_type<half>(uint16_t(v << 8)) * half(-0.25f); // we expect compiler to reuse this across multiple calls
-	return half(int((v >> (8 + k * 3)) & 7) - 4) * s;
+	return half((int((v >> (8 + k * 3)) & 7) ^ 4) - 4) * s;
 }
 
 inline float matmul_warppar(device float* x, device half* w, int i, int n, uint id) {
@@ -67,17 +67,18 @@ inline float matmul_warppar(device AT* x, device uint32_t* w, int i, int n, uint
 	float val = 0.0f;
 	for (int j = lane * 8; j < n; j += warpSize * 8) {
 		uint32_t wg = w[i * n / 8 + j / 8];
-		float4 xx0 = float4(*(device AT4*)&x[j]);
-		float4 xx1 = float4(*(device AT4*)&x[j + 4]);
+		AT4 xx0 = *(device AT4*)&x[j];
+		AT4 xx1 = *(device AT4*)&x[j + 4];
 
-		int wgi = ((wg & 0xffff0000) | ((wg >> 4) & 0xffff)) ^ 0x92409240;
+		int wgi = ((wg & 0xfff00000) | ((wg >> 4) & 0xfff0));
 
 		float us = as_type<half>(uint16_t(wg << 8));
 		float s = us * -0.25f * exp2(-13.f);
 
 		float acc = 0;
 		for (int k = 0; k < 4; ++k) {
-			int wgk = (wgi << (9 - k * 3)) & 0xe000e000;
+			int wgk = wgi << (9 - k * 3);
+			if (k != 0) wgk &= 0xe000e000;
 			short2 wgkp = as_type<short2>(wgk);
 			acc += float(wgkp.x) * xx0[k];
 			acc += float(wgkp.y) * xx1[k];
@@ -85,6 +86,12 @@ inline float matmul_warppar(device AT* x, device uint32_t* w, int i, int n, uint
 		val += acc * s;
 	}
 	return simd_sum(val);
+}
+
+kernel void prepare_gf4(constant int& n [[buffer(0)]], device uint32_t* data [[buffer(1)]], uint id [[thread_position_in_grid]]) {
+	uint32_t wg = data[id];
+	wg ^= 0x92492400;
+	data[id] = wg;
 }
 
 inline float gelu(float x) {

@@ -126,6 +126,38 @@ void prepare_metal(struct Transformer* transformer) {
 			weights->bqkv[l] = bqkv;
 		}
 	}
+
+	if (weights->dbits == 4) {
+		id<MTLCommandBuffer> commands = [queue commandBufferWithUnretainedReferences];
+		id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
+
+		dispatch(encoder, "prepare_gf4", NULL, dim * config->vocab_size / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->token_embedding_table }, 1);
+
+		for (int l = 0; l < config->n_layers; ++l) {
+			dispatch(encoder, "prepare_gf4", NULL, q_dim * dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->wq[l] }, 1);
+			dispatch(encoder, "prepare_gf4", NULL, kv_dim * dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->wk[l] }, 1);
+			dispatch(encoder, "prepare_gf4", NULL, kv_dim * dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->wv[l] }, 1);
+			dispatch(encoder, "prepare_gf4", NULL, dim * q_dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->wo[l] }, 1);
+
+			int n_experts = config->n_experts ? config->n_experts : 1;
+
+			dispatch(encoder, "prepare_gf4", NULL, n_experts * hidden_dim * dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->w1[l] }, 1);
+			dispatch(encoder, "prepare_gf4", NULL, n_experts * dim * hidden_dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->w2[l] }, 1);
+			dispatch(encoder, "prepare_gf4", NULL, n_experts * hidden_dim * dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->w3[l] }, 1);
+
+			if (weights->moegate[l]) {
+				dispatch(encoder, "prepare_gf4", NULL, config->n_experts * dim / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->moegate[l] }, 1);
+			}
+		}
+
+		if (weights->wcls != weights->token_embedding_table) {
+			dispatch(encoder, "prepare_gf4", NULL, dim * config->vocab_size / 256, 32, 0, (int[]) {0}, sizeof(int), (void*[]) { weights->wcls }, 1);
+		}
+
+		[encoder endEncoding];
+		[commands commit];
+		[commands waitUntilCompleted];
+	}
 }
 
 struct SinkArgs {
