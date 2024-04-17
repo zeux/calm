@@ -384,8 +384,8 @@ template [[host_name("attn_score_half")]] kernel void kernel_attn_score<half>(co
 	}
 }
 
-template <typename KVT>
-kernel void kernel_attn_mix(constant AttnArgs& args [[buffer(0)]], device float* qout [[buffer(1)]], device float* att [[buffer(2)]], device KVT* valc [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+template <typename KVT, typename AT>
+kernel void kernel_attn_mix(constant AttnArgs& args [[buffer(0)]], device AT* qout [[buffer(1)]], device float* att [[buffer(2)]], device KVT* valc [[buffer(3)]], uint id [[thread_position_in_grid]]) {
 	int j = id / warpSize;
 
 	int h = j / args.head_dim;
@@ -403,10 +403,11 @@ kernel void kernel_attn_mix(constant AttnArgs& args [[buffer(0)]], device float*
 	}
 }
 
-template [[host_name("attn_mix_half")]] kernel void kernel_attn_mix<half>(constant AttnArgs&, device float*, device float*, device half*, uint);
+template [[host_name("attn_mix_half_float")]] kernel void kernel_attn_mix<half, float>(constant AttnArgs&, device float*, device float*, device half*, uint);
+template [[host_name("attn_mix_half_half")]] kernel void kernel_attn_mix<half, half>(constant AttnArgs&, device half*, device float*, device half*, uint);
 
 template <typename T>
-kernel void kernel_attn_out(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device float* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+kernel void kernel_attn_out(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {
 	int j = id / warpSize;
 	float val = matmul_warppar(x, w, j, n, id);
 
@@ -417,7 +418,7 @@ kernel void kernel_attn_out(constant int& n [[buffer(0)]], device float* xout [[
 
 template [[host_name("attn_out_half")]] kernel void kernel_attn_out<half>(constant int&, device float*, device float*, device half*, uint);
 template [[host_name("attn_out_fp8")]] kernel void kernel_attn_out<uint8_t>(constant int&, device float*, device float*, device uint8_t*, uint);
-template [[host_name("attn_out_gf4")]] kernel void kernel_attn_out<uint32_t>(constant int&, device float*, device float*, device uint32_t*, uint);
+template [[host_name("attn_out_gf4")]] kernel void kernel_attn_out<uint32_t>(constant int&, device float*, device half*, device uint32_t*, uint);
 
 inline void moe_gate_warp(device float* moebuf, threadgroup float* weights, int experts, int active, uint id) {
 	int i = id;

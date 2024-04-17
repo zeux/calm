@@ -234,6 +234,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 
 	const char* dvar = w->dbits == 16 ? "half" : (w->dbits == 8 ? "fp8" : (w->dbits == 4 ? "gf4" : "?"));
 	const char* kvar = "half";
+	const char* kmvar = w->dbits == 4 ? "half_half" : "half_float";
 	const char* nvar = w->dbits == 4 ? "half" : "float";
 
 	char dkvar[32];
@@ -279,7 +280,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		dispatch(encoder, "attn_softmax", NULL, p->n_heads, 1024, 0, &(struct AttnArgs){p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff}, sizeof(struct AttnArgs), (void*[]){s->att}, 1);
 
 		// attn mix
-		dispatch(encoder, "attn_mix", kvar, q_dim, 32, 0, &(struct AttnArgs){p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff}, sizeof(struct AttnArgs), (void*[]){s->q, s->att, s->value_cache}, 3);
+		dispatch(encoder, "attn_mix", kmvar, q_dim, 32, 0, &(struct AttnArgs){p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff}, sizeof(struct AttnArgs), (void*[]){s->q, s->att, s->value_cache}, 3);
 
 		// attn out
 		dispatch(encoder, "attn_out", dvar, dim, 32, 0, (int[]){q_dim}, sizeof(int), (void*[]){x, s->q, w->wo[l]}, 3);
