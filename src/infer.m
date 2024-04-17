@@ -60,26 +60,6 @@ void init_metal(void) {
 		kernels[i] = state;
 		kernel_names[i] = [functions[i] UTF8String];
 	}
-
-	const char* capenv = getenv("MTL_CAPTURE_ENABLED");
-	if (capenv && atoi(capenv)) {
-		capture = [MTLCaptureManager sharedCaptureManager];
-		assert(capture);
-
-		NSString* path = @"calm.gputrace";
-
-		MTLCaptureDescriptor* desc = [[MTLCaptureDescriptor alloc] init];
-		desc.captureObject = queue;
-		desc.destination = MTLCaptureDestinationGPUTraceDocument;
-		desc.outputURL = [NSURL fileURLWithPath:path];
-
-		[[NSFileManager defaultManager] removeItemAtPath:path error:&error];
-
-		BOOL started = [capture startCaptureWithDescriptor:desc error:&error];
-		assert(started);
-
-		NSLog(@"Capturing first token to %@", desc.outputURL);
-	}
 }
 
 void* upload_metal(void* host, size_t size) {
@@ -157,6 +137,27 @@ void prepare_metal(struct Transformer* transformer) {
 		[encoder endEncoding];
 		[commands commit];
 		[commands waitUntilCompleted];
+	}
+
+	const char* capenv = getenv("MTL_CAPTURE_ENABLED");
+	if (capenv && atoi(capenv)) {
+		capture = [MTLCaptureManager sharedCaptureManager];
+		assert(capture);
+
+		NSString* path = @"calm.gputrace";
+
+		MTLCaptureDescriptor* desc = [[MTLCaptureDescriptor alloc] init];
+		desc.captureObject = queue;
+		desc.destination = MTLCaptureDestinationGPUTraceDocument;
+		desc.outputURL = [NSURL fileURLWithPath:path];
+
+		NSError* error = nil;
+		[[NSFileManager defaultManager] removeItemAtPath:path error:&error];
+
+		BOOL started = [capture startCaptureWithDescriptor:desc error:&error];
+		assert(started);
+
+		NSLog(@"Capturing first token to %@", desc.outputURL);
 	}
 }
 
