@@ -455,15 +455,19 @@ inline void moe_gate_warp(device float* moebuf, threadgroup float* weights, int 
 
 template <typename T>
 kernel void kernel_moe_gate(constant int* args [[buffer(0)]], device float* moebuf [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+	int n = args[0];
+	int experts = args[1];
+	int active = args[2];
+
 	int j = id / warpSize;
-	float v = matmul_warppar(x, w, j, args[0], id);
+	float v = matmul_warppar(x, w, j, n, id);
 
 	threadgroup float ws[32];
 	ws[j] = v;
 	threadgroup_barrier(mem_flags::mem_threadgroup);
 
 	if (id < warpSize) {
-		moe_gate_warp(moebuf, ws, args[1], args[2], id);
+		moe_gate_warp(moebuf, ws, experts, active, id);
 	}
 }
 
@@ -472,37 +476,49 @@ template [[host_name("moe_gate_fp8")]] kernel void kernel_moe_gate<uint8_t>(cons
 template [[host_name("moe_gate_gf4")]] kernel void kernel_moe_gate<uint32_t>(constant int*, device float*, device half*, device uint32_t*, uint);
 
 template <typename T, bool act_gelu>
-kernel void kernel_ffn13(constant int& n [[buffer(0)]], device Act<T>* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w1 [[buffer(3)]], device T* w3 [[buffer(4)]], uint id [[thread_position_in_grid]]) {
+kernel void kernel_ffn13(constant int* args [[buffer(0)]], device Act<T>* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device float* moebuf [[buffer(3)]], device T* w1 [[buffer(4)]], device T* w3 [[buffer(5)]], uint id [[thread_position_in_grid]]) {
+	int n = args[0];
+	int d = args[1];
+
 	int j = id / warpSize;
-	float v1 = matmul_warppar(x, w1, j, n, id);
-	float v3 = matmul_warppar(x, w3, j, n, id);
+	int e = j / d;
+	int je = (j % d) + ((device int*)moebuf)[e * 2 + 1] * d;
+
+	float v1 = matmul_warppar(x, w1, je, n, id);
+	float v3 = matmul_warppar(x, w3, je, n, id);
 
 	if (id % warpSize == 0) {
 		xout[j] = (act_gelu ? gelu(v1) : silu(v1)) * v3;
 	}
 }
 
-template [[host_name("ffn13_silu_half")]] kernel void kernel_ffn13<half, false>(constant int&, device float*, device float*, device half*, device half*, uint);
-template [[host_name("ffn13_silu_fp8")]] kernel void kernel_ffn13<uint8_t, false>(constant int&, device float*, device float*, device uint8_t*, device uint8_t*, uint);
-template [[host_name("ffn13_silu_gf4")]] kernel void kernel_ffn13<uint32_t, false>(constant int&, device half*, device half*, device uint32_t*, device uint32_t*, uint);
+template [[host_name("ffn13_silu_half")]] kernel void kernel_ffn13<half, false>(constant int*, device float*, device float*, device float*, device half*, device half*, uint);
+template [[host_name("ffn13_silu_fp8")]] kernel void kernel_ffn13<uint8_t, false>(constant int*, device float*, device float*, device float*, device uint8_t*, device uint8_t*, uint);
+template [[host_name("ffn13_silu_gf4")]] kernel void kernel_ffn13<uint32_t, false>(constant int*, device half*, device half*, device float*, device uint32_t*, device uint32_t*, uint);
 
-template [[host_name("ffn13_gelu_half")]] kernel void kernel_ffn13<half, true>(constant int&, device float*, device float*, device half*, device half*, uint);
-template [[host_name("ffn13_gelu_fp8")]] kernel void kernel_ffn13<uint8_t, true>(constant int&, device float*, device float*, device uint8_t*, device uint8_t*, uint);
-template [[host_name("ffn13_gelu_gf4")]] kernel void kernel_ffn13<uint32_t, true>(constant int&, device half*, device half*, device uint32_t*, device uint32_t*, uint);
+template [[host_name("ffn13_gelu_half")]] kernel void kernel_ffn13<half, true>(constant int*, device float*, device float*, device float*, device half*, device half*, uint);
+template [[host_name("ffn13_gelu_fp8")]] kernel void kernel_ffn13<uint8_t, true>(constant int*, device float*, device float*, device float*, device uint8_t*, device uint8_t*, uint);
+template [[host_name("ffn13_gelu_gf4")]] kernel void kernel_ffn13<uint32_t, true>(constant int*, device half*, device half*, device float*, device uint32_t*, device uint32_t*, uint);
 
 template <typename T>
-kernel void kernel_ffn2(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w2 [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+kernel void kernel_ffn2(constant int* args [[buffer(0)]], device float* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device float* moebuf [[buffer(3)]], device T* w2 [[buffer(4)]], uint id [[thread_position_in_grid]]) {
+	int n = args[0];
+	int d = args[1];
+
 	int j = id / warpSize;
-	float val = matmul_warppar(x, w2, j, n, id);
+	int e = j / d;
+	int je = (j % d) + ((device int*)moebuf)[e * 2 + 1] * d;
+
+	float val = matmul_warppar(x + (j / d) * n, w2, je, n, id);
 
 	if (id % warpSize == 0) {
-		xout[j] += val;
+		atomic_fetch_add_explicit((volatile device atomic_float*)&xout[j % d], val * moebuf[e * 2 + 0], memory_order_relaxed);
 	}
 }
 
-template [[host_name("ffn2_half")]] kernel void kernel_ffn2<half>(constant int&, device float*, device float*, device half*, uint);
-template [[host_name("ffn2_fp8")]] kernel void kernel_ffn2<uint8_t>(constant int&, device float*, device float*, device uint8_t*, uint);
-template [[host_name("ffn2_gf4")]] kernel void kernel_ffn2<uint32_t>(constant int&, device float*, device half*, device uint32_t*, uint);
+template [[host_name("ffn2_half")]] kernel void kernel_ffn2<half>(constant int*, device float*, device float*, device float*, device half*, uint);
+template [[host_name("ffn2_fp8")]] kernel void kernel_ffn2<uint8_t>(constant int*, device float*, device float*, device float*, device uint8_t*, uint);
+template [[host_name("ffn2_gf4")]] kernel void kernel_ffn2<uint32_t>(constant int*, device float*, device half*, device float*, device uint32_t*, uint);
 
 template <typename T>
 kernel void kernel_output(constant int& n [[buffer(0)]], device float* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {

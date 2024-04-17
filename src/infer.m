@@ -291,8 +291,11 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		}
 
 		// ffn
-		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, hidden_dim, 32, 0, (int[]){dim}, sizeof(int), (void*[]){s->hb, s->xb, w->w1[l], w->w3[l]}, 4);
-		dispatch(encoder, "ffn2", dvar, dim, 32, 0, (int[]){hidden_dim}, sizeof(int), (void*[]){x, s->hb, w->w2[l]}, 3);
+		float* hb = p->n_experts ? s->he : s->hb;
+		int n_experts_ac = p->n_experts_ac ? p->n_experts_ac : 1;
+
+		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, n_experts_ac * hidden_dim, 32, 0, (int[]){dim, hidden_dim}, sizeof(int) * 2, (void*[]){hb, s->xb, s->exp, w->w1[l], w->w3[l]}, 5);
+		dispatch(encoder, "ffn2", dvar, n_experts_ac * dim, 32, 0, (int[]){hidden_dim, dim}, sizeof(int) * 2, (void*[]){x, hb, s->exp, w->w2[l]}, 4);
 	}
 
 	// classifier into logits
