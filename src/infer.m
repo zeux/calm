@@ -12,7 +12,7 @@ static const char* kernel_names[256];
 
 static MTLCaptureManager* capture;
 
-static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, const char* variant, unsigned int threadgroups, unsigned int threadgroup_size, unsigned int threadgroup_smem, void* params, size_t params_size, void** buffers, size_t buffer_count) {
+static void dispatch2(id<MTLComputeCommandEncoder> encoder, const char* name, const char* variant, unsigned int threadgroups_x, unsigned int threadgroups_y, unsigned int threadgroup_size, unsigned int threadgroup_smem, void* params, size_t params_size, void** buffers, size_t buffer_count) {
 	char expected[256];
 	strcpy(expected, name);
 	if (variant) {
@@ -36,7 +36,11 @@ static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, con
 	[encoder setBytes:params length:params_size atIndex:0];
 	[encoder setBuffers:(const id<MTLBuffer>*)buffers offsets:offsets withRange:NSMakeRange(1, buffer_count)];
 	[encoder setThreadgroupMemoryLength:threadgroup_smem atIndex:0];
-	[encoder dispatchThreadgroups:MTLSizeMake(threadgroups, 1, 1) threadsPerThreadgroup:MTLSizeMake(threadgroup_size, 1, 1)];
+	[encoder dispatchThreadgroups:MTLSizeMake(threadgroups_x, threadgroups_y, 1) threadsPerThreadgroup:MTLSizeMake(threadgroup_size, 1, 1)];
+}
+
+static void dispatch(id<MTLComputeCommandEncoder> encoder, const char* name, const char* variant, unsigned int threadgroups, unsigned int threadgroup_size, unsigned int threadgroup_smem, void* params, size_t params_size, void** buffers, size_t buffer_count) {
+	dispatch2(encoder, name, variant, threadgroups, 1, threadgroup_size, threadgroup_smem, params, params_size, buffers, buffer_count);
 }
 
 void init_metal(void) {
@@ -294,8 +298,8 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		float* hb = p->n_experts ? s->he : s->hb;
 		int n_experts_ac = p->n_experts_ac ? p->n_experts_ac : 1;
 
-		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, n_experts_ac * hidden_dim, 32, 0, (int[]){dim, hidden_dim}, sizeof(int) * 2, (void*[]){hb, s->xb, s->exp, w->w1[l], w->w3[l]}, 5);
-		dispatch(encoder, "ffn2", dvar, n_experts_ac * dim, 32, 0, (int[]){hidden_dim, dim}, sizeof(int) * 2, (void*[]){x, hb, s->exp, w->w2[l]}, 4);
+		dispatch2(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, hidden_dim, n_experts_ac, 32, 0, (int[]){dim, hidden_dim}, sizeof(int) * 2, (void*[]){hb, s->xb, s->exp, w->w1[l], w->w3[l]}, 5);
+		dispatch2(encoder, "ffn2", dvar, dim, n_experts_ac, 32, 0, (int[]){hidden_dim, dim}, sizeof(int) * 2, (void*[]){x, hb, s->exp, w->w2[l]}, 4);
 	}
 
 	// classifier into logits
