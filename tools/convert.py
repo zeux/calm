@@ -78,6 +78,9 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
     if arch in ["mixtral"]:
         metadata["n_experts"] = config["num_local_experts"]
         metadata["n_experts_active"] = config["num_experts_per_tok"]
+    elif arch in ["minicpm"] and "num_experts" in config:
+        metadata["n_experts"] = config["num_experts"]
+        metadata["n_experts_active"] = config["num_experts_per_tok"]
 elif arch == "olmo":
     metadata["dim"] = config["d_model"]
     metadata["hidden_dim"] = (config["mlp_hidden_size"] or config["d_model"] * config["mlp_ratio"]) // 2
@@ -270,7 +273,12 @@ if arch == "minicpm":
 
     for l in range(config["num_hidden_layers"]):
         weights[f"model.layers.{l}.self_attn.o_proj.weight"] *= resid_scale
-        weights[f"model.layers.{l}.mlp.down_proj.weight"] *= resid_scale
+
+        if "num_experts" in config:
+            for e in range(config["num_experts"]):
+                weights[f"model.layers.{l}.mlp.experts.{e}.w2.weight"] *= resid_scale
+        else:
+            weights[f"model.layers.{l}.mlp.down_proj.weight"] *= resid_scale
 elif arch == "gemma":
     # gemma's norm weights are stored relative to 1.0
     weights["model.norm.weight"] = weights["model.norm.weight"].float() + 1
@@ -332,6 +340,12 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
             tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w1.weight"]) for e in range(config["num_local_experts"])])
             tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w2.weight"]) for e in range(config["num_local_experts"])])
             tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.block_sparse_moe.experts.{e}.w3.weight"]) for e in range(config["num_local_experts"])])
+        elif arch in ["minicpm"] and "num_experts" in config:
+            tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.mlp.gate.weight"])
+
+            tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.w1.weight"]) for e in range(config["num_experts"])])
+            tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.w2.weight"]) for e in range(config["num_experts"])])
+            tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.w3.weight"]) for e in range(config["num_experts"])])
         else:
             tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
             tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
