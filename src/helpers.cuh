@@ -106,7 +106,7 @@ __device__ inline half gf4_ff(uint32_t v, int k) {
 // gf4 decoding (2 values): 8 3-bit values + 1 fp8 scale are packed in a 32-bit word
 __device__ inline half2 gf4x2_ff(uint32_t v, int k) {
 	half us = fp8_e5m2_ff(v & 0xff); // we expect compiler to reuse this across multiple calls
-	half s = us * half(-0.25f); // we expect compiler to reuse this across multiple calls
+	half s = us * half(-0.25f);      // we expect compiler to reuse this across multiple calls
 	uint32_t p = v >> (8 + k * 3);
 	half2 q = half2(int(p & 7), int((p >> 3) & 7));
 	return __hfma2(q, half2(s, s), half2(us, us));

@@ -229,7 +229,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 			// otherwise sample the next token from the logits
 			next = sample(sampler, logits);
 			assert(next >= 0);
-		
+
 			// data-dependent terminating condition: the BOS token delimits sequences, EOS token ends the sequence
 			if (next == tokenizer->bos_id || next == tokenizer->eos_id) {
 				break;

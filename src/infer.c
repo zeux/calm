@@ -305,7 +305,7 @@ static void moe_gate(float* moe_weights, int* moe_experts, float* x, int d, int 
 }
 
 inline float clip(float x, float v) {
-	return (x < -v) ? -v : (x > v) ? v : x;
+	return x < -v ? -v : (x > v ? v : x);
 }
 
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags) {
