@@ -419,6 +419,58 @@ template [[host_name("attn_out_half")]] kernel void kernel_attn_out<half>(consta
 template [[host_name("attn_out_fp8")]] kernel void kernel_attn_out<uint8_t>(constant int&, device float*, device float*, device uint8_t*, uint);
 template [[host_name("attn_out_gf4")]] kernel void kernel_attn_out<uint32_t>(constant int&, device float*, device float*, device uint32_t*, uint);
 
+inline void moe_gate_warp(device float* moebuf, threadgroup float* weights, int experts, int active, uint id) {
+	int i = id;
+
+	// (unscaled) softmax across experts
+	float w = (i < experts) ? weights[i] : -FLT_MAX;
+	float max_val = simd_max(w);
+	w = exp(w - max_val);
+
+	// weight in top 24 bits, index in bottom 8
+	int wi = (as_type<int>(w) & 0xffffff00) | i;
+
+	// top k within warp
+	float sumw = 0.f;
+	int acti = -1;
+
+	for (int k = 0; k < active; ++k) {
+		int maxi = simd_max(wi);
+
+		sumw += as_type<float>(maxi);
+
+		// keeps top weight in thread k, clears weight for thread with max thread to avoid re-selection
+		acti = (i == k) ? maxi : acti;
+		wi = (wi == maxi) ? 0 : wi;
+	}
+
+	// write normalized weights
+	if (i < active) {
+		assert(acti >= 0);
+
+		moebuf[i * 2 + 0] = as_type<float>(acti) / sumw;
+		*(device int*)&moebuf[i * 2 + 1] = acti & 0xff;
+	}
+}
+
+template <typename T>
+kernel void kernel_moe_gate(constant int* args [[buffer(0)]], device float* moebuf [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w [[buffer(3)]], uint id [[thread_position_in_grid]]) {
+	int j = id / warpSize;
+	float v = matmul_warppar(x, w, j, args[0], id);
+
+	threadgroup float ws[32];
+	ws[j] = v;
+	threadgroup_barrier(mem_flags::mem_threadgroup);
+
+	if (id < warpSize) {
+		moe_gate_warp(moebuf, ws, args[1], args[2], id);
+	}
+}
+
+template [[host_name("moe_gate_half")]] kernel void kernel_moe_gate<half>(constant int*, device float*, device float*, device half*, uint);
+template [[host_name("moe_gate_fp8")]] kernel void kernel_moe_gate<uint8_t>(constant int*, device float*, device float*, device uint8_t*, uint);
+template [[host_name("moe_gate_gf4")]] kernel void kernel_moe_gate<uint32_t>(constant int*, device float*, device half*, device uint32_t*, uint);
+
 template <typename T, bool act_gelu>
 kernel void kernel_ffn13(constant int& n [[buffer(0)]], device Act<T>* xout [[buffer(1)]], device Act<T>* x [[buffer(2)]], device T* w1 [[buffer(3)]], device T* w3 [[buffer(4)]], uint id [[thread_position_in_grid]]) {
 	int j = id / warpSize;

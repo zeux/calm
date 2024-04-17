@@ -92,6 +92,7 @@ void prepare_metal(struct Transformer* transformer) {
 	state->he = (float*)newbuffer(config->n_experts_ac * hidden_dim * sizeof(float));
 	state->q = (float*)newbuffer(q_dim * sizeof(float));
 	state->att = (float*)newbuffer(config->n_heads * config->seq_len * sizeof(float));
+	state->exp = (float*)newbuffer(((config->n_experts_ac ? config->n_experts_ac : 1) * 2) * sizeof(float));
 
 	assert(state->kvbits == 8 || state->kvbits == 16);
 	state->key_cache = newbuffer((size_t)config->n_layers * config->seq_len * kv_dim * (state->kvbits / 8));
@@ -106,6 +107,13 @@ void prepare_metal(struct Transformer* transformer) {
 		if (weights->bqkv[l] == NULL) {
 			weights->bqkv[l] = bqkv;
 		}
+	}
+
+	if (config->n_experts == 0) {
+		// setup expert buffer to always point to the first (and only) expert
+		float* moe = [(id<MTLBuffer>)state->exp contents];
+		moe[0] = 1.0f;
+		moe[1] = 0.0f;
 	}
 
 	if (weights->dbits == 4) {
@@ -277,7 +285,10 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 			dispatch(encoder, "rmsnorm", nvar, 1, 1024, 0, &(struct NormArgs){dim, p->norm_eps, p->norm_ln}, sizeof(struct NormArgs), (void*[]){s->xb, x, w->rms_ffn_weight[l]}, 3);
 		}
 
-		assert(p->n_experts == 0); // TODO
+		// moe gate
+		if (p->n_experts) {
+			dispatch(encoder, "moe_gate", dvar, 1, p->n_experts * 32, 0, (int[]){dim, p->n_experts, p->n_experts_ac}, sizeof(int) * 3, (void*[]){s->exp, s->xb, w->moegate[l]}, 3);
+		}
 
 		// ffn
 		dispatch(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, hidden_dim, 32, 0, (int[]){dim}, sizeof(int), (void*[]){s->hb, s->xb, w->w1[l], w->w3[l]}, 4);
