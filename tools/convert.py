@@ -98,6 +98,9 @@ elif arch == "olmo":
 
     assert config["activation_type"] == "swiglu"
     metadata["act_type"] = "silu"
+
+    if config.get("clip_qkv", None):
+        metadata["qkv_clip"] = config["clip_qkv"]
 elif arch == "dbrx":
     metadata["dim"] = config["d_model"]
     metadata["hidden_dim"] = config["ffn_config"]["ffn_hidden_size"]
