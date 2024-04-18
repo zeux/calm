@@ -22,6 +22,7 @@ void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, in
 	tokenizer->vocab_size = vocab_size;
 	tokenizer->bos_id = bos_id;
 	tokenizer->eos_id = eos_id;
+	tokenizer->eot_id = -1;
 
 	// malloc space to hold the scores and the strings
 	tokenizer->vocab = (char**)malloc(vocab_size * sizeof(char*));
@@ -48,6 +49,10 @@ void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, in
 			tokenizer->byte_pieces[i][0] = (char)i;
 			tokenizer->byte_pieces[i][1] = '\0';
 		}
+	}
+
+	if (tokenizer->eot_id < 0) {
+		tokenizer->eot_id = str_lookup("<|eot_id|>", tokenizer->sorted_vocab, vocab_size);
 	}
 }
 

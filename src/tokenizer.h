@@ -13,6 +13,7 @@ struct Tokenizer {
 	int vocab_size;
 	int bos_id;
 	int eos_id;
+	int eot_id;
 	int byte_fallbacks;
 
 	char byte_pieces[256][2];
