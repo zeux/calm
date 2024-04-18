@@ -350,14 +350,15 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				char* x = fgets(user_prompt, sizeof(user_prompt), stdin);
 				(void)x;
 			}
-			// render user/system prompts into the Llama 2 Chat schema
+			// render user/system prompts into the Llama 2/3 Chat schema
+			char* system_template = tokenizer->eot_id < 0 ? "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]" : "<|start_header_id|>system<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
+			char* user_template = tokenizer->eot_id < 0 ? "[INST] %s [/INST]" : "<|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
 			if (pos == 0 && system_prompt[0] != '\0') {
-				char system_template[] = "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]";
 				sprintf(rendered_prompt, system_template, system_prompt, user_prompt);
 			} else {
-				char user_template[] = "[INST] %s [/INST]";
 				sprintf(rendered_prompt, user_template, user_prompt);
 			}
+
 			// encode the rendered prompt into tokens
 			num_prompt_tokens = tokenizer_encode(tokenizer, rendered_prompt, pos == 0 ? TF_ENCODE_BOS : 0, prompt_tokens);
 			user_idx = 0; // reset the user index
@@ -382,7 +383,7 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 		if (user_idx >= num_prompt_tokens) {
 			next = sample(sampler, logits);
 
-			if (next == tokenizer->eos_id) {
+			if (next == tokenizer->eos_id || next == tokenizer->eot_id) {
 				// EOS token ends the Assistant turn
 				printf("\n\n");
 				user_turn = 1;
