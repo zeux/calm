@@ -4,8 +4,6 @@ This is an implementation of language model inference, aiming to get maximum sin
 
 The goal of this project is experimentation and prototyping; it does not aim to be production ready or stable.
 
-If you need support for a wide range of models, computing devices or quantization methods, you're probably looking for [llama.cpp](https://github.com/ggerganov/llama.cpp) or [🤗 Transformers](https://github.com/huggingface/transformers). If you need to run inference for multiple batches, you're probably looking for [vLLM](https://github.com/vllm-project/vllm).
-
 Parts of this code are based on Andrej Karpathy's [llama2.c](https://github.com/karpathy/llama2.c).
 
 ## Running
