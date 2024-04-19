@@ -323,8 +323,8 @@ static const char* chatframe(const char* style, bool has_system) {
 		return has_system ? "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
 		                  : "\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n";
 	} else if (strcmp(style, "gemma") == 0) {
-		return has_system ? "<start_of_turn>user\nSYSTEM: %s\n%s<end_of_turn>\n<start_of_turn>model\n"
-		                  : "<start_of_turn>user\n%s<end_of_turn>\n<start_of_turn>model\n";
+		return has_system ? "<start_of_turn>user\nSYSTEM: %s\n\n%s<end_of_turn>\n<start_of_turn>model\n"
+		                  : "\n<start_of_turn>user\n%s<end_of_turn>\n<start_of_turn>model\n";
 	} else if (strcmp(style, "cohere") == 0) {
 		return has_system ? "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
 		                  : "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>";
