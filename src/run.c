@@ -315,7 +315,19 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 	       ppl, pplerr, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
 }
 
-void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* cli_prompt, char* system_prompt) {
+static const char* chatframe(const char* style, bool has_system) {
+	if (strcmp(style, "llama3") == 0) {
+		return has_system ? "<|start_header_id|>system<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+		                  : "<|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
+	} else if (strcmp(style, "qwen2") == 0) {
+		return has_system ? "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
+		                  : "\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n";
+	} else {
+		return has_system ? "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]" : "[INST] %s [/INST]";
+	}
+}
+
+void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* cli_prompt, char* system_prompt, const char* arch) {
 
 	// buffers for reading the system prompt and user prompt from stdin
 	// you'll notice they are soomewhat haphazardly and unsafely set atm
@@ -350,13 +362,12 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				char* x = fgets(user_prompt, sizeof(user_prompt), stdin);
 				(void)x;
 			}
-			// render user/system prompts into the Llama 2/3 Chat schema
-			char* system_template = tokenizer->eot_id < 0 ? "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]" : "<|start_header_id|>system<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
-			char* user_template = tokenizer->eot_id < 0 ? "[INST] %s [/INST]" : "<|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
+			// render user/system prompts into the chat schema
+			const char* style = tokenizer->eot_id >= 0 ? "llama3" : arch;
 			if (pos == 0 && system_prompt[0] != '\0') {
-				sprintf(rendered_prompt, system_template, system_prompt, user_prompt);
+				sprintf(rendered_prompt, chatframe(style, true), system_prompt, user_prompt);
 			} else {
-				sprintf(rendered_prompt, user_template, user_prompt);
+				sprintf(rendered_prompt, chatframe(style, false), user_prompt);
 			}
 
 			// encode the rendered prompt into tokens
@@ -604,7 +615,7 @@ int main(int argc, char* argv[]) {
 	if (perplexity) {
 		study(&transformer, &tokenizer, perplexity, steps);
 	} else if (system_prompt) {
-		chat(&transformer, &tokenizer, &sampler, prompt, system_prompt);
+		chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, tensors_metadata(&tensors, "arch"));
 	} else {
 		for (int s = 0; s < sequences; ++s) {
 			generate(&transformer, &tokenizer, &sampler, prompt, steps, pos_offset);
