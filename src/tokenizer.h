@@ -31,3 +31,5 @@ int tokenizer_bound(int bytes);
 
 char* tokenizer_decode(struct Tokenizer* tokenizer, int prev_token, int token);
 int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, int* tokens);
+
+int tokenizer_find(struct Tokenizer* tokenizer, char* token);

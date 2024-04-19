@@ -315,25 +315,30 @@ void study(struct Transformer* transformer, struct Tokenizer* tokenizer, const c
 	       ppl, pplerr, (double)(end - mid) / 1000, (double)(n_tokens - 1) / (double)(end - mid) * 1000);
 }
 
-static const char* chatframe(const char* style, bool has_system) {
-	if (strcmp(style, "llama3") == 0) {
+static const char* chatframe(struct Tokenizer* tokenizer, bool has_system) {
+	if (tokenizer_find(tokenizer, "<|eot_id|>") >= 0) {
+		// llama3
 		return has_system ? "<|start_header_id|>system<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
 		                  : "<|start_header_id|>user<|end_header_id|>\n\n%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n";
-	} else if (strcmp(style, "qwen2") == 0) {
+	} else if (tokenizer_find(tokenizer, "<|im_start|>") >= 0) {
+		// chatml
 		return has_system ? "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
 		                  : "\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n";
-	} else if (strcmp(style, "gemma") == 0) {
+	} else if (tokenizer_find(tokenizer, "<start_of_turn>") >= 0) {
+		// gemma
 		return has_system ? "<start_of_turn>user\nSYSTEM: %s\n\n%s<end_of_turn>\n<start_of_turn>model\n"
 		                  : "\n<start_of_turn>user\n%s<end_of_turn>\n<start_of_turn>model\n";
-	} else if (strcmp(style, "cohere") == 0) {
+	} else if (tokenizer_find(tokenizer, "<|START_OF_TURN_TOKEN|>") >= 0) {
+		// cohere
 		return has_system ? "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
 		                  : "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>";
 	} else {
+		// llama
 		return has_system ? "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]" : "[INST] %s [/INST]";
 	}
 }
 
-void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* cli_prompt, char* system_prompt, const char* arch) {
+void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* cli_prompt, char* system_prompt) {
 	char user_prompt[512];
 	char rendered_prompt[sizeof(user_prompt) * 2];
 	int prompt_tokens[sizeof(rendered_prompt) + 4];
@@ -365,18 +370,17 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 				(void)x;
 			}
 			// render user/system prompts into the chat schema
-			const char* style = tokenizer->eot_id >= 0 ? "llama3" : arch;
 			if (pos == 0 && system_prompt[0] != '\0') {
-				snprintf(rendered_prompt, sizeof(rendered_prompt), chatframe(style, true), system_prompt, user_prompt);
+				snprintf(rendered_prompt, sizeof(rendered_prompt), chatframe(tokenizer, true), system_prompt, user_prompt);
 			} else {
-				snprintf(rendered_prompt, sizeof(rendered_prompt), chatframe(style, false), user_prompt);
+				snprintf(rendered_prompt, sizeof(rendered_prompt), chatframe(tokenizer, false), user_prompt);
 			}
 
 			// encode the rendered prompt into tokens
 			num_prompt_tokens = tokenizer_encode(tokenizer, rendered_prompt, pos == 0 ? TF_ENCODE_BOS : 0, prompt_tokens);
 			user_idx = 0; // reset the user index
 			user_turn = 0;
-			printf("\n\033[33mAssistant:\033[00m");
+			printf("\n\033[33mAssistant:\033[00m ");
 		}
 
 		// determine the token to pass into the transformer next
@@ -615,7 +619,7 @@ int main(int argc, char* argv[]) {
 	if (perplexity) {
 		study(&transformer, &tokenizer, perplexity, steps);
 	} else if (system_prompt) {
-		chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, tensors_metadata(&tensors, "arch"));
+		chat(&transformer, &tokenizer, &sampler, prompt, system_prompt);
 	} else {
 		for (int s = 0; s < sequences; ++s) {
 			generate(&transformer, &tokenizer, &sampler, prompt, steps, pos_offset);

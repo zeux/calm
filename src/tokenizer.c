@@ -264,3 +264,7 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 	assert(n_tokens <= tokenizer_bound(strlen(text)));
 	return n_tokens;
 }
+
+int tokenizer_find(struct Tokenizer* tokenizer, char* token) {
+	return str_lookup(token, tokenizer->sorted_vocab, tokenizer->vocab_size);
+}
