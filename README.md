@@ -75,6 +75,9 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 
 | Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
 | ----------- | ----------- | ----------- |
+| Llama3 8B (4096), fp16 | 61 tok/s (923 GB/s) | 59 tok/s (919 GB/s) |
+| Llama3 8B (4096), fp8 | 120 tok/s (903 GB/s) | 110 tok/s (889 GB/s) |
+| Llama3 8B (4096), gf4 | 225 tok/s (846 GB/s) | 194 tok/s (830 GB/s) |
 | Llama2 7B (4096), fp16 | 69 tok/s (919 GB/s) | 60 tok/s (921 GB/s) |
 | Llama2 7B (4096), fp8 | 135 tok/s (893 GB/s) | 103 tok/s (899 GB/s) |
 | Llama2 7B (4096), gf4 | 246 tok/s (815 GB/s) | 158 tok/s (857 GB/s) |
