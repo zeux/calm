@@ -67,9 +67,19 @@ Model weights support `fp16`, `fp8` and `gf4` formats; the weight type is specif
 
 KV cache is using `fp16` by default; when using longer contexts (> 4096), CUDA implementation automatically switches to `fp8` to improve memory/performance. This comes at a small perplexity cost.
 
+## Model files
+
+calm uses [🤗 Safetensors](https://huggingface.co/docs/safetensors/index) to store model files. Note that the models require conversion (see below), because calm stores model hyperparameters in .safetensors metadata and may expect a particular set of tensor names or weight order within tensors that is not always compatible with the source. Tokenizer data is stored as tensors inside the model file as well.
+
 ## Performance
 
 Auto-regressive prediction for a single sequence needs to read the entire model and the entire KV cache (until current token) for every token. As such, given an optimal implementation we'd expect the process to be bandwidth bound. Note that the cost of token generation at the beginning of the sequence should be smaller than the cost at the end of the sequence due to the need to read data from KV cache.
+
+Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
+
+With smaller weights on small models, getting closer to bandwidth limit becomes more difficult. Future optimizations may increase the gap here for small models, although smaller weights are most valuable to be able to infer larger models.
+
+### NVidia
 
 When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts, 4000 for 4096 contexts and 16000 for 16384 contexts):
 
@@ -90,17 +100,10 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Mixtral 8x7B (16384), gf4 | 137 tok/s (879 GB/s) | 105 tok/s (781 GB/s) |
 | Yi 34B (4096), gf4 | 52 tok/s (884 GB/s) | 47 tok/s (851 GB/s) |
 
-Currently prompts are processed serially, one token at a time; in the future, prompt processing will need to be parallelized to avoid the bandwidth bottleneck.
-
-With smaller weights on small models, getting closer to bandwidth limit becomes more difficult. Future optimizations may increase the gap here for small models, although smaller weights are most valuable to be able to infer larger models.
 
 RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3].
 
 `calm` can run on A100/H100 accelerators (but is mostly tuned for H100 `fp8` weights). When using Mixtral 8x7B (fp8) on 1xH100 SXM, it runs at ~200 tok/s (2550 GB/s) for 256-token outputs.
-
-## Model files
-
-calm uses [🤗 Safetensors](https://huggingface.co/docs/safetensors/index) to store model files. Note that the models require conversion (see below), because calm stores model hyperparameters in .safetensors metadata and may expect a particular set of tensor names or weight order within tensors that is not always compatible with the source. Tokenizer data is stored as tensors inside the model file as well.
 
 [^1]: CUDA runtime and compiler is used for GPU acceleration, but no CUDA or C libraries are used. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
 [^2]: Linux is the main supported OS at the moment; calm also works on macOS (on CPU) and has experimental Metal support.
