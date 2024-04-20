@@ -83,7 +83,7 @@ With smaller weights on small models, getting closer to bandwidth limit becomes 
 
 When using NVidia GeForce RTX 4090, `calm` gets the following performance on a few models; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts, 4000 for 4096 contexts and 16000 for 16384 contexts):
 
-| Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
+| Model (context) | Performance (first 32) | Performance (last 32) |
 | ----------- | ----------- | ----------- |
 | Llama3 8B (4096), fp16 | 61 tok/s (923 GB/s) | 59 tok/s (919 GB/s) |
 | Llama3 8B (4096), fp8 | 120 tok/s (903 GB/s) | 110 tok/s (889 GB/s) |
@@ -108,7 +108,7 @@ RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak high
 
 When using Apple Silicon (Metal), `calm` gets the following performance; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts, 4000 for 4096 contexts and 16000 for 16384 contexts):
 
-| Chip | Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
+| Chip | Model (context) | Performance (first 32) | Performance (last 32) |
 | ----- | ----------- | ----------- | ----------- |
 | M2 (100 GB/s) | Llama3 8B (4096), fp8 | 12 tok/s (90 GB/s) | 11 tok/s (89 GB/s) |
 | M2 (100 GB/s) | Llama3 8B (4096), gf4 | 23 tok/s (89 GB/s) | 20 tok/s (85 GB/s) |
