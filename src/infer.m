@@ -86,7 +86,7 @@ void prepare_metal(struct Transformer* transformer) {
 	struct RunState* state = &transformer->state;
 
 	assert(device);
-	printf("# Metal: %s\n", device.name.UTF8String);
+	printf("# Metal: %s, %.1f GiB\n", device.name.UTF8String, (double)device.recommendedMaxWorkingSetSize / (1024 * 1024 * 1024));
 
 	int dim = config->dim;
 	int hidden_dim = config->hidden_dim;
