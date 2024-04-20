@@ -68,13 +68,16 @@ void init_metal(void) {
 }
 
 void* upload_metal(void* host, size_t size) {
-	assert(device);
 	id<MTLBuffer> buffer = [device newBufferWithBytes:host length:size options:MTLResourceStorageModeShared];
+	assert(buffer);
 	return buffer;
 }
 
 static void* newbuffer(size_t size) {
-	return size == 0 ? nil : [device newBufferWithLength:size options:MTLResourceStorageModeShared];
+	if (size == 0) return nil;
+	id<MTLBuffer> buffer = [device newBufferWithLength:size options:MTLResourceStorageModeShared];
+	assert(buffer);
+	return buffer;
 }
 
 void prepare_metal(struct Transformer* transformer) {
@@ -313,6 +316,12 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	[encoder endEncoding];
 	[commands commit];
 	[commands waitUntilCompleted];
+
+	if (commands.status != MTLCommandBufferStatusCompleted) {
+		NSError* error = commands.error;
+		fprintf(stderr, "Metal error %ld during command execution: %s\n", error.code, error.localizedDescription.UTF8String);
+		abort();
+	}
 
 	if (capture) {
 		[capture stopCapture];
