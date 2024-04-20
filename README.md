@@ -100,10 +100,18 @@ When using NVidia GeForce RTX 4090, `calm` gets the following performance on a f
 | Mixtral 8x7B (16384), gf4 | 137 tok/s (879 GB/s) | 105 tok/s (781 GB/s) |
 | Yi 34B (4096), gf4 | 52 tok/s (884 GB/s) | 47 tok/s (851 GB/s) |
 
-
 RTX 4090 has a peak bandwidth of ~1008 GB/s, however it's unclear if a peak higher than ~950 GB/s is attainable in practice[^3].
 
 `calm` can run on A100/H100 accelerators (but is mostly tuned for H100 `fp8` weights). When using Mixtral 8x7B (fp8) on 1xH100 SXM, it runs at ~200 tok/s (2550 GB/s) for 256-token outputs.
+
+### Apple
+
+When using Apple Silicon (Metal), `calm` gets the following performance; each model is measured with `fp16`, `fp8` and `gf4` weights at the beginning of the context window (first 32 tokens) and at the end (last 32 tokens with an offset 2000 for 2048 contexts, 4000 for 4096 contexts and 16000 for 16384 contexts):
+
+| Chip | Model (context) | Performance (first 32 tokens) | Performance (last 32 tokens) |
+| ----- | ----------- | ----------- | ----------- |
+| M2 (100 GB/s) | Llama3 8B (4096), fp8 | 12 tok/s (90 GB/s) | 11 tok/s (89 GB/s) |
+| M2 (100 GB/s) | Llama3 8B (4096), gf4 | 23 tok/s (89 GB/s) | 20 tok/s (85 GB/s) |
 
 [^1]: CUDA runtime and compiler is used for GPU acceleration, but no CUDA or C libraries are used. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
 [^2]: Linux is the main supported OS at the moment; calm also works on macOS (on CPU) and has experimental Metal support.
