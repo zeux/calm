@@ -116,6 +116,11 @@ void prepare_metal(struct Transformer* transformer) {
 		}
 	}
 
+	if (device.currentAllocatedSize > device.recommendedMaxWorkingSetSize) {
+		fprintf(stderr, "# Warning: allocated size %.0f MB exceeds recommended maximum %.0f MB; try running `sudo sysctl iogpu.wired_limit_mb=<mb>`\n",
+			device.currentAllocatedSize / 1024.f / 1024.f, device.recommendedMaxWorkingSetSize / 1024.f / 1024.f);
+	}
+
 	if (config->n_experts == 0) {
 		// setup expert buffer to always point to the first (and only) expert
 		float* moe = [(id<MTLBuffer>)state->exp contents];
