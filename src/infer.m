@@ -256,6 +256,8 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 
+	const int matmul_par = 1;
+
 	// begin command recording
 	id<MTLCommandBuffer> commands = [queue commandBufferWithUnretainedReferences];
 	id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
@@ -277,7 +279,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		dispatch(encoder, "rmsnorm", nvar, 1, 1024, 0, &(struct NormArgs){dim, p->norm_eps, p->norm_ln}, sizeof(struct NormArgs), (void*[]){s->xb, x, w->rms_att_weight[l]}, 3);
 
 		// qkv
-		dispatch(encoder, "qkv", dkvar, (q_dim + kv_dim * 2) / 2, 32, 0, &(struct QkvArgs){dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta)}, sizeof(struct QkvArgs), (void*[]){s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l]}, 8);
+		dispatch(encoder, "qkv", dkvar, (q_dim + kv_dim * 2) / 2 / matmul_par, 32 * matmul_par, 0, &(struct QkvArgs){dim, q_dim, kv_dim, p->head_dim, p->rotary_dim, pos, kv_pos, p->seq_len, loff, p->qkv_clip, log2(p->rope_theta)}, sizeof(struct QkvArgs), (void*[]){s->xb, s->q, s->key_cache, s->value_cache, w->wq[l], w->wk[l], w->wv[l], w->bqkv[l]}, 8);
 
 		// attn score
 		int kv_lent = (kv_len + 7) / 8;
@@ -291,7 +293,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		dispatch(encoder, "attn_mix", kmvar, q_dim, 32, 0, &(struct AttnArgs){p->seq_len, kv_len, p->head_dim, kv_mul, p->n_heads, loff}, sizeof(struct AttnArgs), (void*[]){s->q, s->att, s->value_cache}, 3);
 
 		// attn out
-		dispatch(encoder, "attn_out", dvar, dim, 32, 0, (int[]){q_dim}, sizeof(int), (void*[]){x, s->q, w->wo[l]}, 3);
+		dispatch(encoder, "attn_out", dvar, dim / matmul_par, 32 * matmul_par, 0, (int[]){q_dim}, sizeof(int), (void*[]){x, s->q, w->wo[l]}, 3);
 
 		if (!p->norm_par) {
 			// post-attention rmsnorm
@@ -307,14 +309,14 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 		float* hb = p->n_experts ? s->he : s->hb;
 		int n_experts_ac = p->n_experts_ac ? p->n_experts_ac : 1;
 
-		dispatch2(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, hidden_dim, n_experts_ac, 32, 0, (int[]){dim, hidden_dim}, sizeof(int) * 2, (void*[]){hb, s->xb, s->exp, w->w1[l], w->w3[l]}, 5);
-		dispatch2(encoder, "ffn2", dvar, dim, n_experts_ac, 32, 0, (int[]){hidden_dim, dim}, sizeof(int) * 2, (void*[]){x, hb, s->exp, w->w2[l]}, 4);
+		dispatch2(encoder, p->act_gelu ? "ffn13_gelu" : "ffn13_silu", dvar, hidden_dim / matmul_par, n_experts_ac, 32 * matmul_par, 0, (int[]){dim, hidden_dim}, sizeof(int) * 2, (void*[]){hb, s->xb, s->exp, w->w1[l], w->w3[l]}, 5);
+		dispatch2(encoder, "ffn2", dvar, dim / matmul_par, n_experts_ac, 32 * matmul_par, 0, (int[]){hidden_dim, dim}, sizeof(int) * 2, (void*[]){x, hb, s->exp, w->w2[l]}, 4);
 	}
 
 	// classifier into logits
 	if ((flags & FF_UPDATE_KV_ONLY) == 0) {
 		dispatch(encoder, "rmsnorm", nvar, 1, 1024, 0, &(struct NormArgs){dim, p->norm_eps, p->norm_ln}, sizeof(struct NormArgs), (void*[]){s->xb, x, w->rms_final_weight}, 3);
-		dispatch(encoder, "output", dvar, p->vocab_size, 32, 0, (int[]){dim}, sizeof(int), (void*[]){s->logits, s->xb, w->wcls}, 3);
+		dispatch(encoder, "output", dvar, p->vocab_size / matmul_par, 32 * matmul_par, 0, (int[]){dim}, sizeof(int), (void*[]){s->logits, s->xb, w->wcls}, 3);
 	}
 
 	// submit commands and wait
