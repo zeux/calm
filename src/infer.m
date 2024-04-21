@@ -60,7 +60,10 @@ void init_metal(void) {
 	NSArray<NSString*>* functions = library.functionNames;
 	for (size_t i = 0; i < functions.count; i++) {
 		id<MTLFunction> function = [library newFunctionWithName:functions[i]];
-		id<MTLComputePipelineState> state = [device newComputePipelineStateWithFunction:function error:&error];
+		MTLComputePipelineDescriptor* desc = [[MTLComputePipelineDescriptor alloc] init];
+		desc.computeFunction = function;
+		desc.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
+		id<MTLComputePipelineState> state = [device newComputePipelineStateWithDescriptor:desc options:MTLPipelineOptionNone reflection:nil error:&error];
 		assert(state);
 		kernels[i] = state;
 		kernel_names[i] = [functions[i] UTF8String];
