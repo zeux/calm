@@ -418,10 +418,6 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 	}
 }
 
-// ----------------------------------------------------------------------------
-// CLI, include only if not testing
-#ifndef TESTING
-
 void error_usage() {
 	fprintf(stderr, "Usage:   run <checkpoint> [options]\n");
 	fprintf(stderr, "Example: run model.bin -n 256 -i \"Once upon a time\"\n");
@@ -642,4 +638,3 @@ int main(int argc, char* argv[]) {
 	tensors_close(&tensors);
 	return 0;
 }
-#endif
