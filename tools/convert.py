@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse", "Phi3ForCausalLM": "phi3"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse", "phi3"]:
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -445,6 +445,36 @@ elif arch == "dbrx":
         tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"transformer.blocks.{l}.ffn.experts.mlp.v1"].view(n_experts, hidden_dim, dim))
 
     tensors["model.norm.weight"] = weights["transformer.norm_f.weight"].float()
+    tensors["model.output.weight"] = conv(weights["lm_head.weight"])
+elif arch == "phi3":
+    tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
+
+    for l in range(config["num_hidden_layers"]):
+        tensors[f"model.layers.{l}.attn.norm.weight"] = weights[f"model.layers.{l}.input_layernorm.weight"].float()
+
+        head_dim = config["hidden_size"] // config["num_attention_heads"]
+        n_heads = config["num_attention_heads"]
+        n_kv_heads = config.get("num_key_value_heads", n_heads)
+
+        wqkv = weights[f"model.layers.{l}.self_attn.qkv_proj.weight"]
+
+        tensors[f"model.layers.{l}.attn.wq.weight"] = conv(permute_reverse(wqkv[:n_heads*head_dim], n_heads, head_dim))
+        tensors[f"model.layers.{l}.attn.wk.weight"] = conv(permute_reverse(wqkv[n_heads*head_dim:(n_heads+n_kv_heads)*head_dim], n_kv_heads, head_dim))
+
+        tensors[f"model.layers.{l}.attn.wv.weight"] = conv(wqkv[(n_heads+n_kv_heads)*head_dim:])
+        tensors[f"model.layers.{l}.attn.wo.weight"] = conv(weights[f"model.layers.{l}.self_attn.o_proj.weight"])
+
+        tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
+
+        hidden_dim = config["intermediate_size"]
+
+        mlp_proj = weights[f"model.layers.{l}.mlp.gate_up_proj.weight"]
+
+        tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(mlp_proj[:hidden_dim])
+        tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
+        tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(mlp_proj[hidden_dim:])
+
+    tensors["model.norm.weight"] = weights["model.norm.weight"].float()
     tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 
 # add tokenizer tensors at the end (to maximize the chance of model tensor alignment)
