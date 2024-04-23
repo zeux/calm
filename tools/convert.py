@@ -63,7 +63,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
     metadata["n_heads"] = config["num_attention_heads"]
     metadata["n_kv_heads"] = config.get("num_key_value_heads", config["num_attention_heads"])
     metadata["vocab_size"] = config["vocab_size"]
-    metadata["max_seq_len"] = config["max_position_embeddings"]
+    metadata["max_seq_len"] = 2048 if arch == "phi3" else config["max_position_embeddings"]
     metadata["bos_token_id"] = -1 if arch in ["qwen2"] else config["bos_token_id"]
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
