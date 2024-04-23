@@ -54,6 +54,9 @@ void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, in
 	if (tokenizer->eot_id < 0) {
 		tokenizer->eot_id = str_lookup("<|eot_id|>", tokenizer->sorted_vocab, vocab_size);
 	}
+	if (tokenizer->eot_id < 0) {
+		tokenizer->eot_id = str_lookup("<|end|>", tokenizer->sorted_vocab, vocab_size);
+	}
 }
 
 void tokenizer_free(struct Tokenizer* tokenizer) {

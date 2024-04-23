@@ -332,6 +332,10 @@ static const char* chatframe(struct Tokenizer* tokenizer, bool has_system) {
 		// cohere
 		return has_system ? "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
 		                  : "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>%s<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>";
+	} else if (tokenizer_find(tokenizer, "<|assistant|>") >= 0) {
+		// phi3
+		return has_system ? "<|system|>\n%s<|end|>\n<|user|>\n%s<|end|>\n<|assistant|>\n"
+		                  : "\n<|user|>\n%s<|end|>\n<|assistant|>\n";
 	} else {
 		// llama
 		return has_system ? "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]" : "[INST] %s [/INST]";
