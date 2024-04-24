@@ -51,14 +51,17 @@ inline float matmul_warppar(device AT* x, device uint8_t* w, int i, int n, uint 
 
 	int lane = id % warpSize;
 	float val = 0.0f;
-	for (int j = lane * 4; j < n; j += warpSize * 4) {
-		uint32_t ww = *(device uint32_t*)&w[i * n + j];
-		uint32_t wwh = ww >> 16;
-		AT4 xx = *(device AT4*)&x[j];
-		val += as_type<half>(uint16_t(ww << 8)) * xx.x;
-		val += as_type<half>(uint16_t(ww & 0xff00)) * xx.y;
-		val += as_type<half>(uint16_t(wwh << 8)) * xx.z;
-		val += as_type<half>(uint16_t(wwh & 0xff00)) * xx.w;
+	for (int j = lane * 8; j < n; j += warpSize * 8) {
+		uint2 wwp = *(device uint2*)&w[i * n + j];
+		AT4 xxp[2] = {*(device AT4*)&x[j], *(device AT4*)&x[j + 4]};
+		for (int k = 0; k < 2; ++k) {
+			half2 wwe = as_type<half2>(wwp[k] & 0xff00ff00);
+			half2 wwo = as_type<half2>((wwp[k] << 8) & 0xff00ff00);
+			val += wwo.x * xxp[k].x;
+			val += wwe.x * xxp[k].y;
+			val += wwo.y * xxp[k].z;
+			val += wwe.y * xxp[k].w;
+		}
 	}
 	return simd_sum(val);
 }
