@@ -259,7 +259,7 @@ float* forward_metal(struct Transformer* transformer, int token, int pos, unsign
 	// ensure all dimensions are warp-aligned
 	assert(dim % 32 == 0 && kv_dim % 32 == 0 && hidden_dim % 32 == 0);
 
-	const int matmul_par = 1;
+	const int matmul_par = 4;
 
 	// begin command recording
 	id<MTLCommandBuffer> commands = [queue commandBufferWithUnretainedReferences];
