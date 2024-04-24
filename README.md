@@ -113,6 +113,8 @@ When using Apple Silicon (Metal), `calm` gets the following performance; each mo
 | ----- | ----------- | ----------- | ----------- |
 | M2 (100 GB/s) | Llama3 8B (4096), fp8 | 12 tok/s (90 GB/s) | 11 tok/s (89 GB/s) |
 | M2 (100 GB/s) | Llama3 8B (4096), gf4 | 23 tok/s (89 GB/s) | 20 tok/s (85 GB/s) |
+| M2 Pro (200 GB/s) | Llama3 8B (4096), fp8 | 23 tok/s (175 GB/s) | 21 tok/s (167 GB/s) |
+| M2 Pro (200 GB/s) | Llama3 8B (4096), gf4 | 42 tok/s (158 GB/s) | 34 tok/s (148 GB/s) |
 
 [^1]: CUDA runtime and compiler is used for GPU acceleration, but no CUDA or C libraries are used. Python conversion scripts use safetensors and torch, see `tools/requirements.txt`.
 [^2]: Linux is the main supported OS at the moment; calm also works on macOS (on CPU) and has experimental Metal support.
