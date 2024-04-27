@@ -18,27 +18,30 @@ static int str_lookup(char* str, struct TokenIndex* sorted_vocab, int vocab_size
 	return res != NULL ? res->id : -1;
 }
 
-void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, int bos_id, int eos_id, int vocab_size) {
+void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, int bos_id, int eos_id, int vocab_size, int total_length) {
 	tokenizer->vocab_size = vocab_size;
 	tokenizer->bos_id = bos_id;
 	tokenizer->eos_id = eos_id;
 	tokenizer->eot_id = -1;
 
-	// malloc space to hold the scores and the strings
 	tokenizer->vocab = (char**)malloc(vocab_size * sizeof(char*));
 	tokenizer->sorted_vocab = (struct TokenIndex*)malloc(vocab_size * sizeof(struct TokenIndex));
+	tokenizer->vocab_scores = scores;
 
-	// TODO: validate tokens are null terminated
+	assert(tokens[total_length - 1] == '\0');
+	int token_offset = 0;
+
 	for (int i = 0; i < vocab_size; ++i) {
-		tokenizer->vocab[i] = tokens;
-		tokenizer->sorted_vocab[i].str = tokens;
+		tokenizer->vocab[i] = tokens + token_offset;
+		tokenizer->sorted_vocab[i].str = tokens + token_offset;
 		tokenizer->sorted_vocab[i].id = i;
 
-		assert(strlen(tokens) <= MAX_TOKEN_LENGTH);
-		tokens += strlen(tokens) + 1;
+		int token_length = strlen(tokens + token_offset);
+		assert(token_length <= MAX_TOKEN_LENGTH && token_offset + token_length + 1 <= total_length);
+		token_offset += token_length + 1;
 	}
 
-	tokenizer->vocab_scores = scores;
+	assert(token_offset == total_length);
 
 	qsort(tokenizer->sorted_vocab, vocab_size, sizeof(struct TokenIndex), compare_tokens);
 

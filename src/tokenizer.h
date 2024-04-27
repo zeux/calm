@@ -24,7 +24,7 @@ enum TokenizerFlags {
 	TF_ENCODE_EOS = 1 << 1,
 };
 
-void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, int bos_id, int eos_id, int vocab_size);
+void tokenizer_init(struct Tokenizer* tokenizer, char* tokens, float* scores, int bos_id, int eos_id, int vocab_size, int total_length);
 void tokenizer_free(struct Tokenizer* tokenizer);
 
 int tokenizer_bound(int bytes);

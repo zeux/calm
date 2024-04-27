@@ -131,7 +131,7 @@ void build_tokenizer(struct Tokenizer* t, struct Tensors* tensors, int vocab_siz
 	int bos_id = atoi(tensors_metadata(tensors, "bos_token_id"));
 	int eos_id = atoi(tensors_metadata(tensors, "eos_token_id"));
 
-	tokenizer_init(t, tokens, scores, bos_id, eos_id, vocab_size);
+	tokenizer_init(t, tokens, scores, bos_id, eos_id, vocab_size, tensor->shape[0]);
 }
 
 size_t count_bytes(struct Tensors* tensors, const char* prefix, const char* filter, size_t* out_params) {
