@@ -202,12 +202,6 @@ int tokenizer_encode(struct Tokenizer* tokenizer, char* text, unsigned flags, in
 		tokens[n_tokens++] = tokenizer->bos_id;
 	}
 
-	// assuming add_dummy_prefix is true, prepend a dummy prefix token to the input string, but only if text != ""
-	if (text[0] != '\0' && tokenizer->bos_id >= 0) {
-		int dummy_prefix = str_lookup(" ", tokenizer->sorted_vocab, tokenizer->vocab_size);
-		tokens[n_tokens++] = dummy_prefix;
-	}
-
 	// process the raw (UTF-8) byte sequence of the input string
 	for (char* c = text; *c != '\0';) {
 		char codepoint[5] = {};
