@@ -55,7 +55,7 @@ It has been tested on following models:
 | Cohere | [Command-R](https://huggingface.co/CohereForAI/c4ai-command-r-v01) |
 | InternLM | [InternLM2-1.8B](https://huggingface.co/internlm/internlm2-1_8b), [InternLM2-7B](https://huggingface.co/internlm/internlm2-7b), [InternLM2-20B](https://huggingface.co/internlm/internlm2-20b) |
 | DBRX | [DBRX 132B](https://huggingface.co/databricks/dbrx-instruct) |
-| Phi3 | [Phi3 Mini 3.8B](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/) [Phi3 Medium 14B](https://huggingface.co/microsoft/Phi-3-medium-4k-instruct) |
+| Phi3 | [Phi3 Mini 3.8B](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/), [Phi3 Medium 14B](https://huggingface.co/microsoft/Phi-3-medium-4k-instruct) |
 
 ## Supported formats
 
