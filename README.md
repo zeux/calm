@@ -52,7 +52,7 @@ It has been tested on following models:
 | OLMo    | [OLMo 1B](https://huggingface.co/allenai/OLMo-1B), [OLMo 7B](https://huggingface.co/allenai/OLMo-7B), [OLMo 1.7 7B](https://huggingface.co/allenai/OLMo-1.7-7B) |
 | Gemma   | [Gemma 2B](https://huggingface.co/google/gemma-2b-it), [Gemma 7B](https://huggingface.co/google/gemma-7b-it) (*note: 7B version has issues with fp8 quantization*)  |
 | MiniCPM | [MiniCPM 2B](https://huggingface.co/openbmb/MiniCPM-2B-dpo-bf16), [MiniCPM 2B 128K](https://huggingface.co/openbmb/MiniCPM-2B-128k), [MiniCPM MoE 8x2B](https://huggingface.co/openbmb/MiniCPM-MoE-8x2B) |
-| Cohere | [Command-R](https://huggingface.co/CohereForAI/c4ai-command-r-v01) |
+| Cohere | [Command-R](https://huggingface.co/CohereForAI/c4ai-command-r-v01), [Aya 23 8B](https://huggingface.co/CohereForAI/aya-23-8B), [Aya 23 35B] (https://huggingface.co/CohereForAI/aya-23-35B) |
 | InternLM | [InternLM2-1.8B](https://huggingface.co/internlm/internlm2-1_8b), [InternLM2-7B](https://huggingface.co/internlm/internlm2-7b), [InternLM2-20B](https://huggingface.co/internlm/internlm2-20b) |
 | DBRX | [DBRX 132B](https://huggingface.co/databricks/dbrx-instruct) |
 | Phi3 | [Phi3 Mini 3.8B](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/), [Phi3 Medium 14B](https://huggingface.co/microsoft/Phi-3-medium-4k-instruct) |
