@@ -336,6 +336,10 @@ static const char* chatframe(struct Tokenizer* tokenizer, bool has_system) {
 		// phi3
 		return has_system ? "<|system|>\n%s<|end|>\n<|user|>\n%s<|end|>\n<|assistant|>\n"
 		                  : "\n<|user|>\n%s<|end|>\n<|assistant|>\n";
+	} else if (tokenizer_find(tokenizer, "<|beginofsystem|>") >= 0) {
+		// k2
+		return has_system ? "<|beginofsystem|>%s<|endofsystemprompt|><|beginofuser|>%s<|beginofsystem|>"
+		                  : "<|beginofuser|>%s<|beginofsystem|>";
 	} else {
 		// llama
 		return has_system ? "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]" : "[INST] %s [/INST]";
@@ -354,7 +358,6 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 	int token = 0;     // stores the current token to feed into the transformer
 	int pos = 0;       // position in the sequence
 	for (;;) {
-
 		// when it is the user's turn to contribute tokens to the dialog...
 		if (user_turn) {
 			// get the user prompt
