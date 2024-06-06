@@ -355,7 +355,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
             tensors[f"model.layers.{l}.mlp.w3.weight"] = conv(weights[f"model.layers.{l}.mlp.up_proj.weight"])
 
     tensors["model.norm.weight"] = weights["model.norm.weight"].float()
-    if arch not in ["gemma", "minicpm", "cohere"] or config.get("tie_word_embeddings", None) == False:
+    if arch not in ["gemma", "minicpm", "cohere", "qwen2"] or config.get("tie_word_embeddings", None) == False:
         tensors["model.output.weight"] = conv(weights["lm_head.weight"])
 elif arch == "internlm2":
     tensors["model.embed.weight"] = conv(weights["model.tok_embeddings.weight"])
