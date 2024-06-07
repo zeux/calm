@@ -483,6 +483,7 @@ __global__ __launch_bounds__(1024, 1) static void kernel_forward(const __grid_co
 			}
 		}
 
+		__syncthreads(); // TODO: unclear why this is needed for determinism
 		syncgrid();
 		coopstage(args.perfstats, 0);
 
