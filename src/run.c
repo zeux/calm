@@ -248,13 +248,16 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	}
 	printf("\n");
 
+	long end = time_in_ms();
+
 	// fold last token's logits into a hash for validation
 	unsigned logits_hash = 0;
-	for (int k = 0; k < transformer->config.vocab_size; ++k) {
-		logits_hash = logits_hash * 5 + *(unsigned*)(&logits_last[k]);
+	if (logits_last) {
+		for (int k = 0; k < transformer->config.vocab_size; ++k) {
+			logits_hash = logits_hash * 5 + *(unsigned*)(&logits_last[k]);
+		}
 	}
 
-	long end = time_in_ms();
 	fprintf(stderr, "# %d tokens: throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s; total %.3f sec; #%08x\n",
 	        pos,
 	        pos / (double)(end - start) * 1000, (double)(end - start) / pos,
