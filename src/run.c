@@ -213,6 +213,8 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 		fflush(stdout);
 	}
 
+	float* logits_last = NULL;
+
 	while (pos < steps || steps < 0) {
 		// forward the transformer to get logits for the next token
 		unsigned flags = pos < num_prompt_tokens - 1 ? FF_UPDATE_KV_ONLY : 0;
@@ -220,6 +222,7 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 
 		read_bytes += transformer->n_bandwidth;
 		read_bytes += kvcache_bandwidth(&transformer->config, transformer->state.kvbits, pos + pos_offset);
+		logits_last = logits;
 
 		// advance the state machine
 		if (pos < num_prompt_tokens - 1) {
@@ -245,12 +248,18 @@ void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, stru
 	}
 	printf("\n");
 
+	// fold last token's logits into a hash for validation
+	unsigned logits_hash = 0;
+	for (int k = 0; k < transformer->config.vocab_size; ++k) {
+		logits_hash = logits_hash * 5 + *(unsigned*)(&logits_last[k]);
+	}
+
 	long end = time_in_ms();
-	fprintf(stderr, "# %d tokens: throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s; total %.3f sec\n",
+	fprintf(stderr, "# %d tokens: throughput: %.2f tok/s; latency: %.2f ms/tok; bandwidth: %.2f GB/s; total %.3f sec; #%08x\n",
 	        pos,
 	        pos / (double)(end - start) * 1000, (double)(end - start) / pos,
 	        ((double)read_bytes / 1e9) / ((double)(end - start) / 1000),
-	        (double)(end - start) / 1000);
+	        (double)(end - start) / 1000, logits_hash);
 
 	free(prompt_tokens);
 }
