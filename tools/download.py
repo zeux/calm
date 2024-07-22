@@ -12,4 +12,4 @@ args = argp.parse_args()
 
 # download model folder from HuggingFace, excluding .bin files (assume the model contains safetensors)
 ignore_patterns = ["*.bin", "*.pth", "*.pt", "*.gguf", "consolidated.safetensors"] if not args.all else []
-huggingface_hub.snapshot_download(repo_id=args.repo, local_dir=args.output, local_dir_use_symlinks=False, resume_download=True, ignore_patterns=ignore_patterns)
+huggingface_hub.snapshot_download(repo_id=args.repo, local_dir=args.output, ignore_patterns=ignore_patterns)
