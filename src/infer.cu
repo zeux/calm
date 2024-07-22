@@ -683,18 +683,18 @@ static float* forward(struct Transformer* transformer, int token, int pos, unsig
 	size_t kvbw = p->n_kv_heads * p->head_dim * kv_len * sizeof(KVT) + p->n_heads * kv_len * sizeof(float);
 
 	uint64_t bw = 0;
-	bw += (dim + kv_dim * 2) * dim * dbits / 8; // QKV
+	bw += p->head_dim * (p->n_heads + p->n_kv_heads * 2) * dim * dbits / 8; // QKV
 	bw += kvbw * 2; // attn scoring and mixing
-	bw += dim * dim * dbits / 8; // attn output
+	bw += p->head_dim * p->n_heads * dim * dbits / 8; // attn output
 	bw += 3 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1); // MLP
 	bw *= p->n_layers;
 
 	coopruns++;
-	coopperfbw[0] += (size_t)p->n_layers * ((dim + kv_dim * 2) * dim * dbits / 8); // QKV
+	coopperfbw[0] += (size_t)p->n_layers * (p->head_dim * (p->n_heads + p->n_kv_heads * 2) * dim * dbits / 8); // QKV
 	coopperfbw[1] += (size_t)p->n_layers * kvbw; // attn scoring
 	coopperfbw[2] += 0; // attn softmax
 	coopperfbw[3] += (size_t)p->n_layers * kvbw; // attn mixing
-	coopperfbw[4] += (size_t)p->n_layers * (dim * dim * dbits / 8); // attn output
+	coopperfbw[4] += (size_t)p->n_layers * (p->head_dim * p->n_heads * dim * dbits / 8); // attn output
 	coopperfbw[5] += (size_t)p->n_layers * (2 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
 	coopperfbw[6] += (size_t)p->n_layers * (1 * (hidden_dim * dim * dbits / 8) * max(p->n_experts_ac, 1)); // MLP
 
