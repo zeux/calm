@@ -2,7 +2,6 @@
 // Based on llama2.c by Andrej Karpathy
 
 #include <assert.h>
-#include <ctype.h>
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
@@ -16,9 +15,6 @@
 #include "sampler.h"
 #include "tensors.h"
 #include "tokenizer.h"
-
-// ----------------------------------------------------------------------------
-// Transformer model
 
 void prepare(struct Transformer* transformer);
 float* forward(struct Transformer* transformer, int token, int pos, unsigned flags);
@@ -157,9 +153,6 @@ size_t count_bytes(struct Tensors* tensors, const char* prefix, const char* filt
 	return bytes;
 }
 
-// ----------------------------------------------------------------------------
-// utilities: time
-
 long time_in_ms() {
 	// return time in milliseconds, for benchmarking the model speed
 	struct timespec time;
@@ -172,9 +165,6 @@ size_t kvcache_bandwidth(struct Config* config, int kvbits, int pos) {
 	int kv_len = pos >= config->seq_len ? config->seq_len : pos + 1;
 	return 2 * (size_t)(kvbits / 8) * config->n_layers * kv_dim * kv_len;
 }
-
-// ----------------------------------------------------------------------------
-// generation loop
 
 void generate(struct Transformer* transformer, struct Tokenizer* tokenizer, struct Sampler* sampler, char* prompt, int steps, int pos_offset) {
 	char* empty_prompt = "";
@@ -402,12 +392,10 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 			printf("\n\033[33mAssistant:\033[00m ");
 		}
 
-		// determine the token to pass into the transformer next
+		// if we are still processing the input prompt, force the next prompt token, otherwise use the next token sampled from previous turn
 		if (user_idx < num_prompt_tokens) {
-			// if we are still processing the input prompt, force the next prompt token
 			token = prompt_tokens[user_idx++];
 		} else {
-			// otherwise use the next token sampled from previous turn
 			token = next;
 		}
 
@@ -419,12 +407,11 @@ void chat(struct Transformer* transformer, struct Tokenizer* tokenizer, struct S
 		if (user_idx >= num_prompt_tokens) {
 			next = sample(sampler, logits);
 
+			// EOS token ends the Assistant turn
 			if (next == tokenizer->eos_id || next == tokenizer->eot_id) {
-				// EOS token ends the Assistant turn
 				printf("\n\n");
 				user_turn = 1;
 			} else {
-				// the Assistant is responding, so print its output
 				char* piece = tokenizer_decode(tokenizer, token, next);
 				printf("%s", piece);
 				fflush(stdout);
