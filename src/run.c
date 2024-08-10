@@ -36,9 +36,7 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->n_heads = atoi(tensors_metadata(tensors, "n_heads"));
 	config->n_kv_heads = atoi(tensors_metadata(tensors, "n_kv_heads"));
 	config->vocab_size = atoi(tensors_metadata(tensors, "vocab_size"));
-
-	const char* head_dim = tensors_metadata_find(tensors, "head_dim");
-	config->head_dim = head_dim ? atoi(head_dim) : config->dim / config->n_heads;
+	config->head_dim = atoi(tensors_metadata(tensors, "head_dim"));
 
 	// for now limit seq_len to 4096 to avoid KV cache OOM for models like Mistral since window size isn't correctly specified
 	const char* max_seq_len = tensors_metadata_find(tensors, "max_seq_len");
