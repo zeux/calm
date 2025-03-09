@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse", "Phi3ForCausalLM": "phi3"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse", "Phi3ForCausalLM": "phi3", "OlmoeForCausalLM": "olmoe"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse", "phi3"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse", "phi3", "olmoe"]:
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -64,7 +64,7 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
     metadata["n_kv_heads"] = config.get("num_key_value_heads", config["num_attention_heads"])
     metadata["vocab_size"] = config["vocab_size"]
     metadata["max_seq_len"] = 2048 if arch == "phi3" else config["max_position_embeddings"]
-    metadata["bos_token_id"] = -1 if arch in ["qwen2"] else config["bos_token_id"]
+    metadata["bos_token_id"] = -1 if arch in ["qwen2", "olmoe"] else config["bos_token_id"]
     metadata["eos_token_id"] = config["eos_token_id"]
     metadata["rope_theta"] = config.get("rope_theta", 10000.0)
     metadata["rotary_dim"] = int(metadata["head_dim"] * config.get("partial_rotary_factor", 1))
@@ -79,6 +79,9 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
         metadata["n_experts"] = config["num_local_experts"]
         metadata["n_experts_active"] = config["num_experts_per_tok"]
     elif arch in ["minicpm"] and "num_experts" in config:
+        metadata["n_experts"] = config["num_experts"]
+        metadata["n_experts_active"] = config["num_experts_per_tok"]
+    elif arch in ["olmoe"]:
         metadata["n_experts"] = config["num_experts"]
         metadata["n_experts_active"] = config["num_experts_per_tok"]
 elif arch == "olmo":
@@ -159,7 +162,7 @@ if ext == ".json":
 
     # compute score as negative merge index so that earlier merges get selected first
     for i, m in enumerate(tokenizer["model"]["merges"]):
-        t1, t2 = m.split(" ")
+        t1, t2 = m[0], m[1] if isinstance(m, list) else m.split(" ")
         ti = vocab[t1 + t2]
         if scores[ti] == 0:
             scores[ti] = -(1 + i)
@@ -307,7 +310,10 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "xverse"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "xverse", "olmoe"]:
+    if arch == "olmoe":
+        print("Warning: Olmoe uses QK norm which we do not support")
+
     tensors["model.embed.weight"] = conv(weights["model.embed_tokens.weight"])
 
     for l in range(config["num_hidden_layers"]):
@@ -349,6 +355,12 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
             tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.w1.weight"]) for e in range(config["num_experts"])])
             tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.w2.weight"]) for e in range(config["num_experts"])])
             tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.w3.weight"]) for e in range(config["num_experts"])])
+        elif arch in ["olmoe"]:
+            tensors[f"model.layers.{l}.moegate.weight"] = conv(weights[f"model.layers.{l}.mlp.gate.weight"])
+
+            tensors[f"model.layers.{l}.mlp.w1.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.gate_proj.weight"]) for e in range(config["num_experts"])])
+            tensors[f"model.layers.{l}.mlp.w2.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.down_proj.weight"]) for e in range(config["num_experts"])])
+            tensors[f"model.layers.{l}.mlp.w3.weight"] = torch.stack([conv(weights[f"model.layers.{l}.mlp.experts.{e}.up_proj.weight"]) for e in range(config["num_experts"])])
         else:
             tensors[f"model.layers.{l}.mlp.w1.weight"] = conv(weights[f"model.layers.{l}.mlp.gate_proj.weight"])
             tensors[f"model.layers.{l}.mlp.w2.weight"] = conv(weights[f"model.layers.{l}.mlp.down_proj.weight"])
