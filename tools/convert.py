@@ -162,7 +162,7 @@ if ext == ".json":
 
     # compute score as negative merge index so that earlier merges get selected first
     for i, m in enumerate(tokenizer["model"]["merges"]):
-        t1, t2 = m[0], m[1] if isinstance(m, list) else m.split(" ")
+        t1, t2 = (m[0], m[1]) if isinstance(m, list) else m.split(" ", 2)
         ti = vocab[t1 + t2]
         if scores[ti] == 0:
             scores[ti] = -(1 + i)
