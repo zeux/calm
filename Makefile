@@ -47,7 +47,7 @@ CUFLAGS+=-g -O2 -lineinfo
 CUFLAGS+=-allow-unsupported-compiler # for recent CUDA versions
 
 ifeq ($(CUARCH),)
-  CUFLAGS+=-gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90 --threads 2
+  CUFLAGS+=-gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=compute_90 --threads 2
 else
   CUFLAGS+=-arch=$(CUARCH)
 endif
