@@ -112,6 +112,8 @@ When using Apple Silicon (Metal), `calm` gets the following performance; each mo
 
 | Chip | Model (context) | Performance (first 32) | Performance (last 32) |
 | ----- | ----------- | ----------- | ----------- |
+| M4 (120 GB/s) | Llama3 8B (4096), fp8 | 13 tok/s (101 GB/s) | 13 tok/s (102 GB/s) |
+| M4 (120 GB/s) | Llama3 8B (4096), gf4 | 26 tok/s (99 GB/s) | 24 tok/s (99 GB/s) |
 | M2 (100 GB/s) | Llama3 8B (4096), fp8 | 12 tok/s (90 GB/s) | 11 tok/s (89 GB/s) |
 | M2 (100 GB/s) | Llama3 8B (4096), gf4 | 23 tok/s (89 GB/s) | 20 tok/s (85 GB/s) |
 | M2 Pro (200 GB/s) | Llama3 8B (4096), fp8 | 24 tok/s (180 GB/s) | 21 tok/s (172 GB/s) |
