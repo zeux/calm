@@ -48,14 +48,14 @@ metadata = {}
 tensors = {}
 
 arch = config["architectures"][0]
-arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse", "Phi3ForCausalLM": "phi3", "OlmoeForCausalLM": "olmoe"}
+arch_remap = {"LlamaForCausalLM": "llama", "MistralForCausalLM": "mistral", "MixtralForCausalLM": "mixtral", "Qwen2ForCausalLM": "qwen2", "OLMoForCausalLM": "olmo", "GemmaForCausalLM": "gemma", "MiniCPMForCausalLM": "minicpm", "CohereForCausalLM": "cohere", "InternLM2ForCausalLM": "internlm2", "DbrxForCausalLM": "dbrx", "XverseForCausalLM": "xverse", "Phi3ForCausalLM": "phi3", "OlmoeForCausalLM": "olmoe", "Qwen3ForCausalLM": "qwen3"}
 assert arch in arch_remap, "Unsupported architecture: {}; must be one of: {}".format(arch, list(arch_remap.keys()))
 arch = arch_remap[arch]
 
 metadata["arch"] = arch
 metadata["dtype"] = args.dtype
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse", "phi3", "olmoe"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "internlm2", "xverse", "phi3", "olmoe", "qwen3"]:
     metadata["dim"] = config["hidden_size"]
     metadata["hidden_dim"] = config["intermediate_size"]
     metadata["head_dim"] = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
@@ -73,6 +73,9 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
 
     assert config["hidden_act"] in ["gelu", "silu"]
     metadata["act_type"] = config["hidden_act"]
+
+    if arch in ["qwen3"]:
+        metadata["qk_norm"] = 1
 
     # moe
     if arch in ["mixtral"]:
@@ -310,7 +313,7 @@ def conv(t):
     print(f"\rConverting tensor {progress}: {t.shape}", end="", flush=True)
     return gf4(t) if dtype == torch.uint8 else t.to(dtype)
 
-if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "xverse", "olmoe"]:
+if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere", "xverse", "olmoe", "qwen3"]:
     if arch == "olmoe":
         print("Warning: Olmoe uses QK norm which we do not support")
 
@@ -339,6 +342,10 @@ if arch in ["llama", "mistral", "mixtral", "qwen2", "gemma", "minicpm", "cohere"
                 permute_reverse(weights[f"model.layers.{l}.self_attn.k_proj.bias"], n_kv_heads, rotary_dim).float(),
                 weights[f"model.layers.{l}.self_attn.v_proj.bias"].float()
             ])
+        if arch in ["qwen3"]:
+            # note: same norm vectors for each head
+            tensors[f"model.layers.{l}.attn.qnorm.weight"] = permute_reverse(weights[f"model.layers.{l}.self_attn.q_norm.weight"], 1, rotary_dim).float()
+            tensors[f"model.layers.{l}.attn.knorm.weight"] = permute_reverse(weights[f"model.layers.{l}.self_attn.k_norm.weight"], 1, rotary_dim).float()
 
         if arch != "cohere":
             tensors[f"model.layers.{l}.mlp.norm.weight"] = weights[f"model.layers.{l}.post_attention_layernorm.weight"].float()
