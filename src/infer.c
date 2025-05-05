@@ -361,6 +361,16 @@ float* forward(struct Transformer* transformer, int token, int pos, unsigned fla
 		matmul(s->k, s->xb, w->wk[l], w->bqkv[l] ? w->bqkv[l] + q_dim : NULL, dim, kv_dim, dotprod);
 		matmul(s->v, s->xb, w->wv[l], w->bqkv[l] ? w->bqkv[l] + q_dim + kv_dim : NULL, dim, kv_dim, dotprod);
 
+		// some models apply rmsnorm to qk values
+		if (p->qk_norm) {
+			for (int i = 0; i < p->n_heads; ++i) {
+				rmsnorm(s->q + i * p->head_dim, s->q + i * p->head_dim, w->qnorm_weight[l], p->head_dim, p->norm_eps, false);
+			}
+			for (int i = 0; i < p->n_kv_heads; ++i) {
+				rmsnorm(s->k + i * p->head_dim, s->k + i * p->head_dim, w->knorm_weight[l], p->head_dim, p->norm_eps, false);
+			}
+		}
+
 		// some models require clipping qkv values
 		for (int i = 0; i < q_dim; i++) {
 			s->q[i] = clip(s->q[i], p->qkv_clip);

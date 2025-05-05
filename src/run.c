@@ -64,6 +64,9 @@ void get_config(struct Config* config, struct Tensors* tensors, int context) {
 	config->norm_ln = norm_type && strncmp(norm_type, "layernorm", 9) == 0;  // note: we currently don't support layernorm bias
 	config->norm_par = norm_type && strcmp(norm_type, "layernorm_par") == 0; // note: we currently don't support layernorm bias
 
+	const char* qk_norm = tensors_metadata_find(tensors, "qk_norm");
+	config->qk_norm = qk_norm && atoi(qk_norm);
+
 	const char* qkv_clip = tensors_metadata_find(tensors, "qkv_clip");
 	config->qkv_clip = qkv_clip ? atof(qkv_clip) : FLT_MAX;
 }
@@ -89,6 +92,11 @@ void get_weights(struct Config* config, struct Weights* weights, struct Tensors*
 		weights->wk[l] = tensors_get(tensors, "model.layers.%d.attn.wk.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
 		weights->wv[l] = tensors_get(tensors, "model.layers.%d.attn.wv.weight", l, wtype, (int[]){config->n_kv_heads * config->head_dim, config->dim / gsize, 0, 0});
 		weights->wo[l] = tensors_get(tensors, "model.layers.%d.attn.wo.weight", l, wtype, (int[]){config->dim, config->n_heads * config->head_dim / gsize, 0, 0});
+
+		if (config->qk_norm) {
+			weights->qnorm_weight[l] = tensors_get(tensors, "model.layers.%d.attn.qnorm.weight", l, dt_f32, (int[]){config->head_dim, 0, 0, 0});
+			weights->knorm_weight[l] = tensors_get(tensors, "model.layers.%d.attn.knorm.weight", l, dt_f32, (int[]){config->head_dim, 0, 0, 0});
+		}
 
 		if (tensors_find(tensors, "model.layers.%d.attn.wqkv.bias", l)) {
 			weights->bqkv[l] = (float*)tensors_get(tensors, "model.layers.%d.attn.wqkv.bias", l, dt_f32, (int[]){(config->n_heads + config->n_kv_heads * 2) * config->head_dim, 0, 0, 0});

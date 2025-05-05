@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #define MAX_LAYERS 128
 #define MAX_EXPERTS 64
@@ -10,23 +10,24 @@
 #define KV_SINKS 2
 
 struct Config {
-	int dim;           // transformer dimension
-	int hidden_dim;    // for ffn layers
-	int head_dim;      // for attention heads; usually dim / n_heads
-	int n_layers;      // number of layers
-	int n_heads;       // number of query heads
-	int n_kv_heads;    // number of key/value heads (can be < query heads because of multiquery)
-	int vocab_size;    // vocabulary size, usually 256 (byte-level)
-	int seq_len;       // max sequence length
-	float rope_theta;  // RoPE theta
-	int rotary_dim;    // RoPE rotary dimension (elements after that don't get rotated)
-	int n_experts;     // number of experts for MoE models
-	int n_experts_ac;  // number of active experts for MoE models
-	float norm_eps;    // epsilon for layer normalization
-	bool act_gelu;     // use GELU activation function
-	bool norm_ln;      // use full LN normalization
-	bool norm_par;     // use parallel MLP/attention by omitting intermediate normalization
-	float qkv_clip;    // clip qkv values to [-clip, clip]
+	int dim;          // transformer dimension
+	int hidden_dim;   // for ffn layers
+	int head_dim;     // for attention heads; usually dim / n_heads
+	int n_layers;     // number of layers
+	int n_heads;      // number of query heads
+	int n_kv_heads;   // number of key/value heads (can be < query heads because of multiquery)
+	int vocab_size;   // vocabulary size, usually 256 (byte-level)
+	int seq_len;      // max sequence length
+	float rope_theta; // RoPE theta
+	int rotary_dim;   // RoPE rotary dimension (elements after that don't get rotated)
+	int n_experts;    // number of experts for MoE models
+	int n_experts_ac; // number of active experts for MoE models
+	float norm_eps;   // epsilon for layer normalization
+	bool act_gelu;    // use GELU activation function
+	bool norm_ln;     // use full LN normalization
+	bool norm_par;    // use parallel MLP/attention by omitting intermediate normalization
+	bool qk_norm;     // use qk normalization
+	float qkv_clip;   // clip qkv values to [-clip, clip]
 };
 
 struct Weights {
@@ -37,6 +38,8 @@ struct Weights {
 	// weights for norms
 	float* rms_att_weight[MAX_LAYERS]; // (dim) rmsnorm weights
 	float* rms_ffn_weight[MAX_LAYERS]; // (dim)
+	float* qnorm_weight[MAX_LAYERS];   // (head_dim)
+	float* knorm_weight[MAX_LAYERS];   // (head_dim)
 	// weights for matmuls
 	void* wq[MAX_LAYERS]; // (n_heads * head_dim, dim)
 	void* wk[MAX_LAYERS]; // (n_kv_heads * head_dim, dim)
